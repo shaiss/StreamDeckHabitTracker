@@ -1,0 +1,10 @@
+{
+  "name": "streamdeck-habit-tracker",
+  "version": "1.0.0",
+  "description": "Tap a Stream Deck key -> a timestamped row lands in your Google Sheet.",
+  "type": "module",
+  "scripts": {
+    "generate": "node tools/generate.mjs"
+  },
+  "license": "MIT"
+}

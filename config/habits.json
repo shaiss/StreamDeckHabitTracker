@@ -1,0 +1,12 @@
+{
+  "//": "Edit this list to change your buttons, then re-run the generator.",
+  "//name": "'name' is what gets logged to the sheet (keep it one word, or the generator will URL-encode spaces).",
+  "//label": "'label' + 'emoji' are only what shows on the Stream Deck key.",
+  "habits": [
+    { "emoji": "🚽", "label": "Pee",      "name": "Pee" },
+    { "emoji": "💩", "label": "Poop",     "name": "Poop" },
+    { "emoji": "🍽",  "label": "Eat",      "name": "Eat" },
+    { "emoji": "💧", "label": "Drink",    "name": "Drink" },
+    { "emoji": "🏃", "label": "Exercise", "name": "Exercise" }
+  ]
+}

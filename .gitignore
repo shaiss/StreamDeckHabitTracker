@@ -1,0 +1,5 @@
+# Generated output contains your personal web-app URL — keep it local.
+dist/
+node_modules/
+.clasp.json
+.DS_Store
