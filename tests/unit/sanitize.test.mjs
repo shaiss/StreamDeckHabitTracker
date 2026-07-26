@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitize } from '../../lib/coach.js';
+import { sanitize } from '../../lib/coach-shape.js';
 
 // sanitize() is the slot-output firewall: every coach pass runs model output
 // through it before committing. It is pure, so it needs no mocking. These

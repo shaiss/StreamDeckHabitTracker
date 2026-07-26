@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROMPTS } from '../../lib/coach.js';
+import { PROMPTS } from '../../lib/coach-shape.js';
 
 // PROMPTS.* are pure (context) -> string. They are the per-flow instructions
 // the experiment runner replays byte-identically (issue #11), and they carry
