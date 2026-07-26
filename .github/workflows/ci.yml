@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [claude/stream-deck-developers-tqy1gj, main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Unit tests are zero-dependency by design — no npm install needed.
+      - run: npm test
+      - name: Syntax-check all source
+        run: |
+          set -e
+          for f in $(git ls-files '*.js' '*.mjs'); do
+            node --check "$f"
+          done
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm i playwright-core --no-save
+      - name: Install Chromium
+        run: npx playwright-core install --with-deps chromium
+      - run: npm run test:e2e

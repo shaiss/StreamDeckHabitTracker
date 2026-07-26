@@ -105,9 +105,17 @@
           <button class="btn ghost promote" data-habit="${esc(c.habit)}" data-emoji="${esc(c.emoji)}" data-label="${esc(c.label)}">⬆ Promote</button>
         </div>`).join('');
       document.querySelectorAll('.promote').forEach(b => b.addEventListener('click', () => {
+        const name = b.dataset.habit.toLowerCase();
+        const exists = [...rowsEl.querySelectorAll('.hrow .name')].some(i => i.value.trim().toLowerCase() === name);
+        if (exists) {
+          b.disabled = true; b.textContent = '✓ Added';
+          statusEl.textContent = `${b.dataset.label} is already in the list above.`;
+          return;
+        }
         rowsEl.insertAdjacentHTML('beforeend', rowHtml({ name: b.dataset.habit, emoji: b.dataset.emoji, label: b.dataset.label, origin: 'coach' }, true));
         wireRow(rowsEl.lastElementChild);
         rowsEl.lastElementChild.dataset.origin = 'coach';
+        b.disabled = true; b.textContent = '✓ Added';
         statusEl.textContent = `${b.dataset.label} added as a coach-origin key — hit Save to make it permanent.`;
         rowsEl.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }));
@@ -117,11 +125,14 @@
       el.querySelector('.del').addEventListener('click', () => el.remove());
     }
 
-    fetch('/api/habits').then(r=>r.json()).then(j => {
-      rowsEl.innerHTML = (j.habits||[]).map(h => rowHtml(h, false)).join('');
-      rowsEl.querySelectorAll('.hrow').forEach(wireRow);
-      renderCoach(j.coachHabits);
-    }).catch(() => { statusEl.textContent = 'Couldn’t load habits.'; });
+    function load() {
+      return fetch('/api/habits').then(r=>r.json()).then(j => {
+        rowsEl.innerHTML = (j.habits||[]).map(h => rowHtml(h, false)).join('');
+        rowsEl.querySelectorAll('.hrow').forEach(wireRow);
+        renderCoach(j.coachHabits);
+      }).catch(() => { statusEl.textContent = 'Couldn’t load habits.'; });
+    }
+    load();
 
     document.getElementById('addBtn').addEventListener('click', () => {
       rowsEl.insertAdjacentHTML('beforeend', rowHtml({}, true));
@@ -136,13 +147,26 @@
         name: el.querySelector('.name').value.trim(),
         origin: el.dataset.origin === 'coach' ? 'coach' : 'human'
       }));
+      const seen = new Set();
+      for (const h of habits) {
+        const k = h.name.toLowerCase();
+        if (seen.has(k)) {
+          statusEl.className = 'status err';
+          statusEl.textContent = `"${h.name}" appears twice — remove one row before saving.`;
+          return;
+        }
+        seen.add(k);
+      }
       statusEl.className = 'status'; statusEl.textContent = 'Saving…';
       fetch('/api/habits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ habits })
       }).then(r=>r.json()).then(j => {
-        if (j.ok) { statusEl.textContent = 'Saved — dashboard, coach, and virtual deck are updated.'; }
+        if (j.ok) {
+          statusEl.textContent = 'Saved — dashboard, coach, and virtual deck are updated.';
+          load(); // re-render both sections so promoted habits leave the coach list
+        }
         else { statusEl.className = 'status err'; statusEl.textContent = j.error || 'Save failed.'; }
       }).catch(e => { statusEl.className = 'status err'; statusEl.textContent = 'Save failed: ' + e.message; });
     });

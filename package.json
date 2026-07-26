@@ -4,7 +4,9 @@
   "description": "Tap a Stream Deck key -> a timestamped row lands in your Google Sheet.",
   "type": "module",
   "scripts": {
-    "generate": "node tools/generate.mjs"
+    "generate": "node tools/generate.mjs",
+    "test": "node --test \"tests/unit/*.test.mjs\"",
+    "test:e2e": "node --test \"tests/e2e/*.e2e.mjs\""
   },
   "license": "MIT",
   "dependencies": {
