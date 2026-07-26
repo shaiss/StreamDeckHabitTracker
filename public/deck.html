@@ -91,6 +91,7 @@
     .facecss .lb { font-size: calc(var(--key) * .13); font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6); letter-spacing: .02em; }
     .facecss .badge { position: absolute; top: 6px; right: 8px; font-size: calc(var(--key) * .085); font-weight: 700; color: rgba(255,255,255,.85); }
     .slotface { background: radial-gradient(circle at 50% 33%, #8b5cf6, #5b21b6); }
+    .habitface { background: radial-gradient(circle at 50% 33%, #6b7280, #374151); }
     .emptyface { background: radial-gradient(circle at 50% 33%, #3a3f47, #17191d); }
     .emptyface .em, .emptyface .lb { opacity: .55; }
 
@@ -138,11 +139,19 @@
     function build() {
       face.innerHTML = '';
       habits.forEach((h) => {
-        face.appendChild(keyEl({
+        const el = keyEl({
           img: '/icons/animated/' + h.name + '.gif',
           title: h.emoji + ' ' + h.label,
-          onTap: (el) => tap(el, '/api/log?habit=' + encodeURIComponent(h.name))
-        }));
+          onTap: (e2) => tap(e2, '/api/log?habit=' + encodeURIComponent(h.name))
+        });
+        // New habits (added via the manager) have no baked icon yet — draw a
+        // CSS face with the emoji + label instead of a broken image.
+        el.querySelector('img')?.addEventListener('error', () => {
+          el.innerHTML = '<span class="facecss habitface"><span class="em">' + h.emoji +
+            '</span><span class="lb">' + esc(h.label) + '</span></span>' +
+            '<span class="glass"></span><span class="flash"></span>';
+        });
+        face.appendChild(el);
       });
       face.appendChild(keyEl({
         img: '/icons/animated/_dashboard.gif',

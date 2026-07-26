@@ -10,6 +10,7 @@
   const ITEMS = [
     { href: '/', icon: '📊', label: 'Dashboard' },
     { href: '/deck.html', icon: '🎛', label: 'Deck' },
+    { href: '/habits.html', icon: '✅', label: 'Habits' },
     { href: '/mind.html', icon: '✨', label: 'Mind' },
     { href: '/?settings=1', icon: '⚙️', label: 'Settings', settings: true }
   ];
