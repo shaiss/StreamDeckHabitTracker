@@ -3,6 +3,12 @@
   "outputDirectory": "public",
   "functions": {
     "api/suggest.js": { "maxDuration": 60 },
-    "api/log.js": { "maxDuration": 60 }
-  }
+    "api/log.js": { "maxDuration": 60 },
+    "api/cron/morning.js": { "maxDuration": 60 },
+    "api/cron/daily.js": { "maxDuration": 60 }
+  },
+  "crons": [
+    { "path": "/api/cron/morning", "schedule": "0 10 * * *" },
+    { "path": "/api/cron/daily", "schedule": "0 3 * * *" }
+  ]
 }

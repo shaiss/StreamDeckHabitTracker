@@ -169,8 +169,21 @@ after each tap so the physical faces catch the change almost immediately. The
 - Slot keys call `/api/log?slot=N`; the server resolves the slot to whatever
   habit is assigned *right now* and logs that name + emoji, so swaps never
   corrupt history.
-- The Habit Tracker AI plugin polls `/api/slots` every 20 s and repaints slot
+- The Habit Tracker AI plugin polls `/api/slots` every 15 s and repaints slot
   key faces when assignments change.
+- **Runs on Mastra**: the coach is a Mastra agent (`lib/agent.js`) with an
+  `update_hypotheses` tool — it keeps persistent notes about what it's
+  learning; a plain z.ai call is the automatic fallback.
+- **Scheduled passes** (Vercel Cron, production only): a **morning pass**
+  (10:00 UTC) sets the day's keys, and a **daily digest** (03:00 UTC) writes
+  the coach's end-of-day note, shown on the dashboard. Trigger manually with
+  `/api/cron/morning?run=1` / `/api/cron/daily?run=1`. Optionally set
+  `CRON_SECRET` to lock the cron routes.
+- **Timezone**: set `HOME_TZ` (IANA name; default `America/New_York`) so the
+  coach reads your day in your clock, not the server's UTC.
+- Reactive feedback keys expire automatically (default 2 h; the model can set
+  `ttlMinutes` 15–720 per key), so a "was that meal good?" key doesn't squat
+  a slot all day.
 
 ## Endpoints
 - `GET /api/log?habit=NAME[&note=...][&key=SECRET]` → logs a tap, returns text.
