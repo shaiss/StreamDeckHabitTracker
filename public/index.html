@@ -183,18 +183,25 @@
       </div>`;
     }
 
-    Promise.all([
-      fetch('/api/data').then(r=>r.json()),
-      fetch('/api/slots').then(r=>r.json()).catch(()=>null)
-    ]).then(([d, s]) => {
-      slotState = s;
-      document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
-      if (d.configured === false) return renderSetup();
-      lastEntries = d.entries || [];
-      render(lastEntries);
-    }).catch(() => {
-      app.innerHTML = '<div class="empty">Couldn&rsquo;t load data. Refresh to retry.</div>';
-    });
+    let firstLoad = true;
+    function refresh() {
+      Promise.all([
+        fetch('/api/data').then(r=>r.json()),
+        fetch('/api/slots').then(r=>r.json()).catch(()=>null)
+      ]).then(([d, s]) => {
+        slotState = s;
+        document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
+        if (d.configured === false) return renderSetup();
+        lastEntries = d.entries || [];
+        render(lastEntries);
+        firstLoad = false;
+      }).catch(() => {
+        if (firstLoad) app.innerHTML = '<div class="empty">Couldn&rsquo;t load data. Refresh to retry.</div>';
+      });
+    }
+    refresh();
+    // The coach repaints its keys in near real time — keep the page live too.
+    setInterval(refresh, 20000);
   </script>
 </body>
 </html>

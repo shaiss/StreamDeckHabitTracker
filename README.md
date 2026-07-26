@@ -152,8 +152,15 @@ For a personal tracker it's fine to skip this.
 
 One env var enables it: in Vercel → project → **Settings → Environment
 Variables** add `ZAI_API_KEY` (from [z.ai](https://z.ai)), then redeploy.
-Optional: `ZAI_MODEL` (default `glm-4.7-flash`, which is free-tier; try
-`glm-4.7` for stronger suggestions) and `ZAI_BASE_URL`.
+Optional: `ZAI_MODEL` (default `glm-5.2`, auto-falling back to the free
+`glm-4.7-flash` if the preferred model rejects a call) and `ZAI_BASE_URL`.
+
+**The coach is reactive, not periodic.** Every tap triggers a background pass
+(45 s cooldown) where the model sees what you just tapped, today's taps, and
+its current keys — and decides whether to repaint its slots *right now*. Tap
+🍽 Eat and it may swap in 👍/👎 food-feedback keys; the plugin re-polls ~9 s
+after each tap so the physical faces catch the change almost immediately. The
+✨ Suggest button remains as the manual "re-think everything" trigger.
 
 - **✨ Suggest** on the dashboard → `POST /api/suggest` → GLM sees the fixed
   habits plus a 14-day summary of your taps (counts, active days, top hours)

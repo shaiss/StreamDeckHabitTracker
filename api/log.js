@@ -3,8 +3,10 @@
 //   the AI currently has assigned to slot N (1-4); the habit name and emoji
 //   are captured at tap time so history stays truthful after a swap.
 // Returns plain text (handy when testing in a browser).
+import { waitUntil } from '@vercel/functions';
 import { append, getSlots, isConfigured } from '../lib/store.js';
-import { BASE_HABITS } from '../lib/ai.js';
+import { BASE_HABITS, zaiKey } from '../lib/ai.js';
+import { reactTo } from '../lib/coach.js';
 
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -55,6 +57,13 @@ export default async function handler(req, res) {
     if (slotField) entry.slot = slotField;
     await append(entry);
     res.status(200).send('Logged: ' + habit);
+
+    // The coach reacts to the tap in the background (after the response), so
+    // the key's OK flash is instant while the AI decides whether to repaint
+    // its slot keys. Cooldown lives inside reactTo.
+    if (zaiKey()) {
+      waitUntil(reactTo(entry).catch(() => {}));
+    }
   } catch (err) {
     res.status(500).send('Error: ' + (err && err.message ? err.message : err));
   }
