@@ -29,7 +29,7 @@
  */
 'use strict';
 
-var VERSION = '1.6.0';    // reported to the server so the dashboard can show
+var VERSION = '1.6.1';    // reported to the server so the dashboard can show
                           // which plugin build a physical deck is running
 
 var ws = null;
@@ -181,20 +181,37 @@ function useTicker(w, onFail) {
   w.postMessage({ every: TICK_MS });
 }
 
+// ⚠️ Stream Deck 7.x runs legacy HTML plugins under QtWebEngine, and creating
+// a Worker from its custom page scheme KILLS THE RENDERER PROCESS — not a JS
+// error, a process death no try/catch can intercept. The app restarts the
+// plugin every 10s, it dies again, and after ~7 rounds Stream Deck disables it
+// ("Plugin is unstable and was disabled", exit "status 1 and code 18" in
+// StreamDeck.log — that's what a dead plugin's keys' yellow triangle means).
+// So under QtWebEngine we never construct a Worker at all: Elgato controls
+// that embedder and its plugin pages keep ordinary timers serviceable, and the
+// wall-clock deadlines converge even if a tick fires late. The worker stays
+// for classic CEF (SD 5/6), where hidden-page throttling is the enemy.
+function isQtWebEngine() {
+  try { return /QtWebEngine/i.test(navigator.userAgent); } catch (e) { return false; }
+}
+
 function startClock() {
   if (clockStarted) return;
   clockStarted = true;
   // Layer 1: off-thread beat. Sibling script first (debuggable, cached), blob
   // second. If both fail, layers 3 and 4 still carry the sync.
-  try {
-    useTicker(new Worker('ticker.js'), function () {
-      try { useTicker(blobTicker(), null); } catch (e) { ticker = null; }
-    });
-  } catch (e) {
-    try { useTicker(blobTicker(), null); } catch (e2) { ticker = null; }
+  if (!isQtWebEngine() && typeof Worker !== 'undefined') {
+    try {
+      useTicker(new Worker('ticker.js'), function () {
+        try { useTicker(blobTicker(), null); } catch (e) { ticker = null; }
+      });
+    } catch (e) {
+      try { useTicker(blobTicker(), null); } catch (e2) { ticker = null; }
+    }
   }
-  // Layer 4: page timer backstop. Throttled when hidden — which is the whole
-  // reason the worker exists — but free, and it covers a Worker that never ran.
+  // Layer 4: page timer backstop. On QtWebEngine this IS the clock; on a
+  // hidden CEF page it's throttled — which is the whole reason the worker
+  // exists — but free, and it covers a Worker that never ran.
   setInterval(function () { pump(); }, TICK_MS);
 }
 
