@@ -1,11 +1,16 @@
-// GET /api/slots -> { configured, aiReady, model, suggestedAt, slots: [def|null x4] }
+// GET /api/slots -> { configured, aiReady, model, suggestedAt, slots: [def|null x4], today, track?, deck? }
 // def = { habit, emoji, label, reason, assignedAt }
+// today = { [habitName]: { count, goal, doneToday, streak, ringFill } } (living key faces, #32)
+// Query: ?tz=<minutes> (viewer getTimezoneOffset; default 0=UTC) sets the day
+// boundary for `today`; ?track=1 adds the behavioral scorecard + hardware
+// heartbeat; ?deck=<pluginVersion> records the physical deck's own poll.
 // Read by the dashboard and by the Stream Deck plugin (CORS open, read-only).
 import { waitUntil } from '@vercel/functions';
 import { getSlots, isConfigured, getSlotHistory, all, getDeckState, setDeckState } from '../lib/store.js';
 import { zaiKey, zaiModel } from '../lib/ai.js';
 import { getHabits } from '../lib/habits.js';
 import { scoreSuggestions } from '../lib/scorer.js';
+import { computeToday } from '../lib/today.js';
 import { nudgePass } from '../lib/coach.js';
 
 export default async function handler(req, res) {
@@ -26,14 +31,21 @@ export default async function handler(req, res) {
     }
     const q = req.query || {};
     const doc = await getSlots();
-    const out = { ...base, suggestedAt: doc.suggestedAt, slots: doc.slots };
+    // Living key faces (#32): per-habit today state for the deck. tz is the
+    // viewer's getTimezoneOffset() in minutes (UTC-5 → 300); default UTC. We
+    // fetch entries once and reuse them for ?track=1 below (no extra round-trip).
+    const wantTrack = (req.query || {}).track === '1';
+    const tzMin = parseInt((req.query || {}).tz, 10);
+    const tzOffsetMs = (Number.isFinite(tzMin) ? tzMin : 0) * 60_000;
+    const entries = await all();
+    const today = computeToday(base.habits, entries, Date.now(), tzOffsetMs);
+    const out = { ...base, suggestedAt: doc.suggestedAt, slots: doc.slots, today };
     // ?track=1 (dashboard only — keeps the plugin's poll light): behavioral
     // scorecard of past suggestions vs actual taps, plus the hardware
     // heartbeat so the dashboard can report whether a physical deck is live.
-    if (q.track === '1') {
-      const [history, entries, deck] = await Promise.all([
+    if (wantTrack) {
+      const [history, deck] = await Promise.all([
         getSlotHistory(),
-        all(),
         getDeckState().catch(() => null)
       ]);
       out.track = scoreSuggestions(history, entries);
