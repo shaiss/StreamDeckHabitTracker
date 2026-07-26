@@ -2,14 +2,21 @@
 // def = { habit, emoji, label, reason, assignedAt }
 // Read by the dashboard and by the Stream Deck plugin (CORS open, read-only).
 import { getSlots, isConfigured, getSlotHistory, all } from '../lib/store.js';
-import { zaiKey, zaiModel } from '../lib/ai.js';
+import { BASE_HABITS, zaiKey, zaiModel } from '../lib/ai.js';
 import { scoreSuggestions } from '../lib/scorer.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store');
   try {
-    const base = { configured: isConfigured(), aiReady: Boolean(zaiKey()), model: zaiModel() };
+    // habits: the fixed key set, so clients (virtual deck) stay in sync with
+    // config/habits.json without a separate endpoint.
+    const base = {
+      configured: isConfigured(),
+      aiReady: Boolean(zaiKey()),
+      model: zaiModel(),
+      habits: BASE_HABITS.map((h) => ({ name: h.name, emoji: h.emoji, label: h.label }))
+    };
     if (!base.configured) {
       res.status(200).json({ ...base, suggestedAt: 0, slots: [null, null, null, null] });
       return;

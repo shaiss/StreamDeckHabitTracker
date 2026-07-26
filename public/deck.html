@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Virtual Stream Deck — Habit Tracker</title>
+  <style>
+    :root {
+      --key: 118px; --gap: 14px; --pad: 26px;
+      --body1: #2a2c30; --body2: #131417; --bezel: #0b0c0e;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: radial-gradient(120% 100% at 50% 0%, #23262b 0%, #101216 55%, #0a0b0d 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #9aa0a6; padding: 24px 12px; min-height: 100vh;
+    }
+    .top { margin-bottom: 18px; text-align: center; }
+    .top h1 { margin: 0; font-size: 16px; font-weight: 600; color: #cfd3d8; letter-spacing: .02em; }
+    .top a { color: #6ea8ff; font-size: 13px; text-decoration: none; }
+    .top .sub { font-size: 12.5px; margin-top: 3px; }
+
+    /* ---- the device ---- */
+    .device {
+      position: relative;
+      background: linear-gradient(160deg, var(--body1), var(--body2) 70%);
+      border-radius: 30px;
+      padding: var(--pad);
+      box-shadow:
+        0 2px 3px rgba(255,255,255,.06) inset,
+        0 -3px 8px rgba(0,0,0,.55) inset,
+        0 24px 50px rgba(0,0,0,.65),
+        0 6px 16px rgba(0,0,0,.5);
+    }
+    /* faceplate bezel around keys, slightly recessed like the hardware */
+    .face {
+      background: linear-gradient(180deg, var(--bezel), #0e0f12);
+      border-radius: 18px;
+      padding: calc(var(--gap) + 4px);
+      box-shadow: 0 1px 0 rgba(255,255,255,.04), 0 4px 14px rgba(0,0,0,.7) inset;
+      display: grid;
+      grid-template-columns: repeat(5, var(--key));
+      grid-auto-rows: var(--key);
+      gap: var(--gap);
+    }
+    .stand {
+      width: 68%; height: 26px; margin: -4px auto 0;
+      background: linear-gradient(180deg, #17181b, #060708);
+      border-radius: 0 0 18px 18px;
+      transform: perspective(300px) rotateX(38deg);
+      transform-origin: top center;
+      box-shadow: 0 18px 26px rgba(0,0,0,.6);
+    }
+
+    /* ---- keys ---- */
+    .k {
+      position: relative; width: var(--key); height: var(--key);
+      border: 0; padding: 0; cursor: pointer; border-radius: 16px;
+      background: #000; overflow: hidden; outline-offset: 3px;
+      box-shadow:
+        0 0 0 3px #050506,
+        0 1px 0 rgba(255,255,255,.07),
+        0 5px 10px rgba(0,0,0,.75);
+      transition: transform .06s ease, filter .06s ease, box-shadow .06s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .k img { width: 100%; height: 100%; display: block; object-fit: cover; pointer-events: none; }
+    /* LCD glass: subtle top sheen over every lit key */
+    .k .glass {
+      position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+      background: linear-gradient(165deg, rgba(255,255,255,.16) 0%, rgba(255,255,255,.05) 22%, rgba(255,255,255,0) 46%);
+    }
+    .k:active, .k.pressed {
+      transform: translateY(2px) scale(.965);
+      filter: brightness(.82);
+      box-shadow: 0 0 0 3px #050506, 0 1px 3px rgba(0,0,0,.8);
+    }
+    .k.off { cursor: default; background: radial-gradient(circle at 50% 38%, #0c0d10, #050607 75%); }
+    .k.off .glass { opacity: .5; }
+    .k:focus-visible { outline: 2px solid #6ea8ff; }
+
+    /* CSS-rendered faces (AI slots + fallbacks) — mirrors the plugin's canvas */
+    .facecss {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 2px; padding-bottom: 10px;
+      color: #fff; text-align: center;
+    }
+    .facecss .em { font-size: calc(var(--key) * .40); line-height: 1.15; filter: drop-shadow(0 3px 4px rgba(0,0,0,.4)); }
+    .facecss .lb { font-size: calc(var(--key) * .13); font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6); letter-spacing: .02em; }
+    .facecss .badge { position: absolute; top: 6px; right: 8px; font-size: calc(var(--key) * .085); font-weight: 700; color: rgba(255,255,255,.85); }
+    .slotface { background: radial-gradient(circle at 50% 33%, #8b5cf6, #5b21b6); }
+    .emptyface { background: radial-gradient(circle at 50% 33%, #3a3f47, #17191d); }
+    .emptyface .em, .emptyface .lb { opacity: .55; }
+
+    /* Stream Deck style OK / alert overlay flash */
+    .flash {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,.55); border-radius: inherit; pointer-events: none;
+      font-size: calc(var(--key) * .5); opacity: 0; transition: opacity .15s;
+    }
+    .flash.show { opacity: 1; }
+
+    .hint { margin-top: 22px; font-size: 12.5px; text-align: center; max-width: 560px; line-height: 1.5; }
+    .hint b { color: #cfd3d8; font-weight: 600; }
+
+    /* phone: shrink the whole device */
+    @media (max-width: 760px) { :root { --key: 62px; --gap: 8px; --pad: 14px; } .device { border-radius: 20px; } }
+    @media (min-width: 761px) and (max-width: 1000px) { :root { --key: 92px; --gap: 11px; --pad: 20px; } }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <h1>Virtual Stream Deck</h1>
+    <div class="sub">Same keys as the hardware — taps log for real. <a href="/">← dashboard</a></div>
+  </div>
+
+  <div>
+    <div class="device"><div class="face" id="face"></div></div>
+    <div class="stand"></div>
+  </div>
+
+  <div class="hint" id="hint">Loading keys…</div>
+
+  <script>
+    const KEY = new URLSearchParams(location.search).get('key') || '';
+    const withKey = (u) => KEY ? u + '&key=' + encodeURIComponent(KEY) : u;
+    const face = document.getElementById('face');
+    const hint = document.getElementById('hint');
+    let slots = [null, null, null, null];
+    let habits = [];
+    let built = false;
+
+    // 5x3 grid mirroring the generated MK.2 profile:
+    // row 0: habits; row 1: Stats + AI slots 1-4; row 2: unlit.
+    function build() {
+      face.innerHTML = '';
+      habits.forEach((h) => {
+        face.appendChild(keyEl({
+          img: '/icons/animated/' + h.name + '.gif',
+          title: h.emoji + ' ' + h.label,
+          onTap: (el) => tap(el, '/api/log?habit=' + encodeURIComponent(h.name))
+        }));
+      });
+      face.appendChild(keyEl({
+        img: '/icons/animated/_dashboard.gif',
+        title: '📊 Stats — open dashboard',
+        onTap: () => { window.open('/', '_blank'); }
+      }));
+      for (let n = 1; n <= 4; n++) {
+        const el = keyEl({
+          title: 'AI slot ' + n,
+          onTap: (e2) => tap(e2, '/api/log?slot=' + n)
+        });
+        el.dataset.slot = n;
+        face.appendChild(el);
+      }
+      for (let i = 0; i < 5; i++) {
+        const off = document.createElement('button');
+        off.className = 'k off'; off.disabled = true; off.tabIndex = -1;
+        off.innerHTML = '<span class="glass"></span>';
+        face.appendChild(off);
+      }
+      built = true;
+      paintSlots();
+    }
+
+    function keyEl({ img, title, onTap }) {
+      const b = document.createElement('button');
+      b.className = 'k'; b.title = title || '';
+      if (img) b.innerHTML = '<img src="' + img + '" alt="">';
+      b.innerHTML += '<span class="glass"></span><span class="flash"></span>';
+      b.addEventListener('click', () => onTap && onTap(b));
+      return b;
+    }
+
+    function slotFaceHtml(def, n) {
+      if (def) {
+        return '<span class="facecss slotface"><span class="badge">AI ' + n + '</span>' +
+          '<span class="em">' + def.emoji + '</span><span class="lb">' + esc(def.label || def.habit) + '</span></span>' +
+          '<span class="glass"></span><span class="flash"></span>';
+      }
+      return '<span class="facecss emptyface"><span class="badge">AI</span>' +
+        '<span class="em">✨</span><span class="lb">Slot ' + n + '</span></span>' +
+        '<span class="glass"></span><span class="flash"></span>';
+    }
+    const esc = (s) => String(s).replace(/</g, '&lt;');
+
+    function paintSlots() {
+      if (!built) return;
+      document.querySelectorAll('.k[data-slot]').forEach((el) => {
+        const n = +el.dataset.slot;
+        const def = slots[n - 1];
+        el.innerHTML = slotFaceHtml(def, n);
+        el.title = def ? (def.emoji + ' ' + def.label + ' — ' + (def.reason || '')) : ('AI slot ' + n + ' — empty');
+      });
+    }
+
+    function flash(el, ok) {
+      const f = el.querySelector('.flash');
+      if (!f) return;
+      f.textContent = ok ? '✅' : '⚠️';
+      f.classList.add('show');
+      setTimeout(() => f.classList.remove('show'), 900);
+    }
+
+    function tap(el, url) {
+      el.classList.add('pressed');
+      setTimeout(() => el.classList.remove('pressed'), 120);
+      fetch(withKey(url))
+        .then((r) => {
+          flash(el, r.ok);
+          if (r.ok) {
+            refresh();               // immediate
+            setTimeout(refresh, 9000); // catch the coach's reactive repaint
+          }
+          return r.text();
+        })
+        .then((t) => { hint.innerHTML = '<b>' + esc(t) + '</b>'; })
+        .catch(() => flash(el, false));
+    }
+
+    function refresh() {
+      fetch('/api/slots').then((r) => r.json()).then((j) => {
+        habits = j.habits || habits;
+        slots = j.slots || slots;
+        if (!built && habits.length) build();
+        paintSlots();
+        if (hint.textContent === 'Loading keys…') {
+          hint.innerHTML = 'Tap a key — it logs exactly like the hardware. The <b>✨ AI keys</b> repaint themselves when the coach changes its mind.';
+        }
+      }).catch(() => { if (!built) hint.textContent = 'Couldn’t reach the API — refresh to retry.'; });
+    }
+
+    refresh();
+    setInterval(refresh, 15000); // same poll cadence as the hardware plugin
+  </script>
+</body>
+</html>
