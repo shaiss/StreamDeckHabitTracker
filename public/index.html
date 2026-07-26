@@ -78,6 +78,7 @@
     const app = document.getElementById('app');
     let slotState = null;   // latest /api/slots payload
     let lastEntries = [];   // latest /api/data entries
+    let lastInsight = null; // latest coach daily digest
 
     const dayKey = (d) => { const x = new Date(d); return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); };
     const todayKey = dayKey(Date.now());
@@ -151,8 +152,11 @@
       const note = s && !s.aiReady
         ? `<div class="ai-note">To enable: Vercel → project → Settings → Environment Variables → add <code>ZAI_API_KEY</code> (get one at z.ai) → redeploy.</div>`
         : `<div class="ai-note">The AI picks up to 4 extra habits it wants tracked, based on your taps. Slot keys on the Stream Deck log whatever is assigned here — and swap automatically when suggestions change.</div>`;
+      const insight = lastInsight?.text
+        ? `<div class="slot" style="margin-bottom:12px"><div class="top"><span class="em">📝</span><span class="nm">Coach's note · ${lastInsight.date||''}</span></div><div class="why">${String(lastInsight.text).replace(/</g,'&lt;')}</div></div>`
+        : '';
       el.innerHTML = `<div class="ai-head"><h2>AI Coach${s?.model ? ` <span class="muted" style="text-transform:none;letter-spacing:0">· ${s.model}</span>` : ''}</h2>${btn}</div>
-        <div class="slot-grid">${cards}</div>${note}<div class="ai-err" id="aiErr"></div>`;
+        ${insight}<div class="slot-grid">${cards}</div>${note}<div class="ai-err" id="aiErr"></div>`;
       document.getElementById('suggestBtn')?.addEventListener('click', suggest);
     }
 
@@ -190,6 +194,7 @@
         fetch('/api/slots').then(r=>r.json()).catch(()=>null)
       ]).then(([d, s]) => {
         slotState = s;
+        lastInsight = d.insight || null;
         document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
         if (d.configured === false) return renderSetup();
         lastEntries = d.entries || [];
