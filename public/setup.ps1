@@ -28,9 +28,9 @@ if (-not $sd) {
 }
 if ($sd) { Start-Process $sd; Start-Sleep -Seconds 5 }
 
-# 2) Which deck?
-$choice = Read-Host '[2/4] Which Stream Deck? 1 = 15-key (Original/MK.2), 2 = 8-key Neo  [default 1]'
-$profileFile = if ($choice -eq '2') { 'HabitTracker-Neo.streamDeckProfile' } else { 'HabitTracker-MK2.streamDeckProfile' }
+# 2) Deck model: 15-key by default; set $env:DECK='neo' before running for the 8-key Neo.
+$profileFile = if ($env:DECK -eq 'neo') { 'HabitTracker-Neo.streamDeckProfile' } else { 'HabitTracker-MK2.streamDeckProfile' }
+Write-Host "[2/4] Using profile: $profileFile" -ForegroundColor Green
 
 # 3) Plugin (own plugin: habit keys + AI slot keys with live faces)
 Write-Host '[3/4] Downloading + installing the Habit Tracker AI plugin...' -ForegroundColor Yellow
