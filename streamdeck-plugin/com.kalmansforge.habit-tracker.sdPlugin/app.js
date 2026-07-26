@@ -15,7 +15,9 @@ var keys = {};            // context -> { action, settings }
 var slotCache = null;     // latest slots array from the server
 var slotCacheAt = 0;
 var pollTimer = null;
-var POLL_MS = 20000;
+var POLL_MS = 15000;
+var REACT_RECHECK_MS = 9000; // the coach reacts to taps in the background;
+                             // re-poll shortly after a tap to catch the swap
 
 var SLOT_COLORS = ['#8b5cf6', '#5b21b6'];   // violet — the AI's color
 var SETUP_COLORS = ['#6b7280', '#374151'];
@@ -71,8 +73,11 @@ function tap(context) {
     (s.key ? '&key=' + encodeURIComponent(s.key) : '');
   fetch(url)
     .then(function (r) {
-      if (r.ok) { showOk(context); refreshSlots(true); }
-      else { showAlert(context); }
+      if (r.ok) {
+        showOk(context);
+        refreshSlots(true);
+        setTimeout(function () { refreshSlots(true); }, REACT_RECHECK_MS);
+      } else { showAlert(context); }
     })
     .catch(function () { showAlert(context); });
 }
