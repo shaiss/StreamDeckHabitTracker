@@ -20,8 +20,10 @@ to this repo — **every push to the default branch deploys production**).
 
 ```bash
 # One-time per machine (tool deps are intentionally NOT in package.json —
-# only @vercel/functions is a runtime dep; keep it that way so Vercel's
-# build stays trivial):
+# runtime deps are kept lean on purpose so Vercel's build stays trivial, but
+# they are NOT just @vercel/functions: the coach runs on a Mastra agent, so
+# @vercel/functions, @mastra/core, @ai-sdk/openai-compatible, and zod are all
+# load-bearing runtime deps and belong in package.json; do not prune them):
 npm i playwright-core pngjs gifenc --no-save
 
 # Regenerate still icons (icons/) and animated GIFs (icons/animated/):
@@ -76,14 +78,34 @@ Vercel MCP `web_fetch_vercel_url` tool to probe the live site.
 - `lib/store.js` — Redis-over-REST (Upstash/KV env vars auto-detected). Two
   keys: `habits:log` (RPUSH list of `{h,t,note,e?,slot?}`) and `habits:slots`
   (`{slots:[def|null x4], suggestedAt, reactedAt, model}`).
-- `lib/ai.js` — z.ai OpenAI-compatible client. Model = `ZAI_MODEL` env or
-  `glm-5.2`, with automatic fallback to `glm-4.7-flash` on model-level errors.
-  Key from `ZAI_API_KEY` (also accepts `Z_AI_API_KEY`/`GLM_API_KEY`/`ZHIPU_API_KEY`).
-- `lib/coach.js` — the AI coach. `fullSuggest()` (manual refresh) and
-  `reactTo(entry)` (per-tap background pass via `waitUntil` from
+- `lib/ai.js` — z.ai OpenAI-compatible client used directly only by
+  `/api/experiment` (byte-identical model-vs-model comparison). Model =
+  `ZAI_MODEL` env or `glm-5.2`, with automatic fallback to `glm-4.7-flash` on
+  model-level errors. Key from `ZAI_API_KEY` (also accepts
+  `Z_AI_API_KEY`/`GLM_API_KEY`/`ZHIPU_API_KEY`). Also home to `extractJson`,
+  the fenced/wrapped-JSON parser every coach pass runs its reply through.
+- `lib/agent.js` — the coach as a Mastra `Agent`. z.ai plugs in via the AI
+  SDK's OpenAI-compatible provider, but through a **custom `zaiFetch` that
+  injects `thinking:{type:'disabled'}`** into every `/chat/completions` body —
+  GLM-5.x are hybrid reasoning models and burn the whole token budget thinking
+  otherwise (PR #2). Never wire the agent up without that fetch; it is the only
+  guardrail. Hypothesis memory is a two-tool loop: `recall_hypotheses` (reads
+  prior notes at the start of a pass) and `update_hypotheses` (rewrites them
+  when the model's understanding changes). Both are Mastra-mediated; the bytes
+  persist in the `habits:coach:memory` Redis key via `lib/store.js` (survives
+  cold starts — Mastra's in-process memory would not, and we deliberately do
+  not add a full storage adapter).
+- `lib/coach.js` — the AI coach, **purely Mastra-routed** (no raw-z.ai
+  fallback). Six entry points: `fullSuggest()` (manual refresh), `morningPass()`
+  (cron), `reactTo(entry)` (per-tap background pass via `waitUntil` from
   `@vercel/functions`, 45s cooldown claimed in Redis *before* the model call to
-  prevent double-fire). Both sanitize model output hard (`sanitize()`) and
-  replace all 4 slots atomically.
+  prevent double-fire), `nudgePass()` (proactive single-slot repaint, driven by
+  the deck's `/api/slots` poll), `rosterPass()` (self-managing roster), and
+  `dailyDigest()` (cron insight). A coach failure no longer silently rescues —
+  it surfaces as a clean error: `reactTo`/`nudgePass` no-op (already inside
+  `waitUntil(...catch)`), `fullSuggest`/`morningPass`/`dailyDigest` return null
+  → a 502 at the API, `rosterPass` queues nothing. All slot output is sanitized
+  hard (`sanitize()`) and replaces all 4 slots atomically.
 - `lib/roster.js` — the **self-managing roster**: the coach proposes changes to
   the *fixed* habit list (`rosterPass()` in coach.js, run by the morning cron
   after the keys pass and never allowed to fail it). Proposals only ever queue;
