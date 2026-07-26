@@ -189,6 +189,11 @@ after each tap so the physical faces catch the change almost immediately. The
   assignment is kept in history, and each pass shows the coach its track
   record — which suggested keys you actually tapped vs ignored — so it drops
   asks that don't land. The dashboard shows the current hit rate.
+- **Datasets & experiments**: every coach pass captures its exact context +
+  output (rule-scored for quality) into a dataset. `GET
+  /api/experiment?run=1&models=glm-5.2,glm-4.7-flash&n=3` replays those real
+  contexts against each model and compares scores — run it (or the *Coach
+  experiment* GitHub Action) before shipping prompt/model changes.
 - Reactive feedback keys expire automatically (default 2 h; the model can set
   `ttlMinutes` 15–720 per key), so a "was that meal good?" key doesn't squat
   a slot all day.

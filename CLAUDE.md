@@ -53,6 +53,9 @@ There are no unit tests; the loop is deploy-and-probe. After pushing, check:
 - `GET /api/slots` — current AI slot assignments
 - `GET /api/log?habit=Test` — writes a real row (`?slot=N` for slot keys)
 - `GET /api/suggest?run=1` (or POST) — full AI refresh; 30s cooldown
+- `GET /api/experiment?run=1&models=a,b&n=3` — replay captured coach contexts
+  against multiple models, rule-scored (lib/quality.js); CI wrapper in
+  .github/workflows/coach-experiment.yml
 
 Direct egress to `*.vercel.app` is blocked from this sandbox's proxy; use the
 Vercel MCP `web_fetch_vercel_url` tool to probe the live site.
