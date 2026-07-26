@@ -5,6 +5,9 @@ shows up on a live dashboard. No always-on PC needed — the endpoint runs on
 Vercel, so it works even when your machine is asleep.
 
 **Live app:** https://stream-deck-habit-tracker.vercel.app
+**Virtual deck:** https://stream-deck-habit-tracker.vercel.app/deck.html — a browser
+twin of the 15-key deck (same faces, live AI slot keys, real logging) for when
+you're away from the hardware or don't own one. Add `?key=...` if `HABIT_KEY` is set.
 **Log endpoint:** `https://stream-deck-habit-tracker.vercel.app/api/log?habit=NAME`
 
 Each Stream Deck key sends a tiny web request to `/api/log`, which appends a row
