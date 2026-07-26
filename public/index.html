@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Habit Tracker</title>
+  <style>
+    :root {
+      --bg: #0b0c10; --card: #16181d; --line: #24272e; --fg: #e8eaed;
+      --muted: #9aa0a6; --accent: #4f8cff; --good: #37c978;
+    }
+    @media (prefers-color-scheme: light) {
+      :root { --bg:#f6f7f9; --card:#fff; --line:#e6e8eb; --fg:#1a1c1f; --muted:#6b7280; --accent:#2563eb; --good:#159a5a; }
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 28px 20px 64px; }
+    header { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:22px; }
+    h1 { font-size: 22px; margin:0; letter-spacing:-.01em; }
+    .sub { color:var(--muted); font-size:13px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; }
+    .card .emoji { font-size:26px; line-height:1; }
+    .card .name { color:var(--muted); font-size:13px; margin-top:8px; }
+    .card .big { font-size:30px; font-weight:650; letter-spacing:-.02em; margin-top:2px; }
+    .card .today { color:var(--good); font-size:12px; margin-top:4px; }
+    section { margin-top:30px; }
+    h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 12px; }
+    .chart { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 16px 10px; }
+    .bars { display:flex; align-items:flex-end; gap:10px; height:150px; }
+    .bar-col { flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; height:100%; justify-content:flex-end; }
+    .bar { width:100%; max-width:34px; background:var(--accent); border-radius:6px 6px 3px 3px; min-height:2px; transition:height .3s; }
+    .bar-lbl { font-size:11px; color:var(--muted); }
+    .bar-val { font-size:11px; color:var(--fg); }
+    .recent { background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+    .row { display:flex; justify-content:space-between; padding:10px 16px; border-top:1px solid var(--line); font-size:14px; }
+    .row:first-child { border-top:0; }
+    .row .when { color:var(--muted); font-size:13px; }
+    .setup { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
+    .setup code { background:rgba(127,127,127,.16); padding:1px 6px; border-radius:6px; font-size:13px; }
+    .setup ol { margin:10px 0 0; padding-left:20px; } .setup li { margin:6px 0; }
+    .muted { color:var(--muted); } .empty { color:var(--muted); padding:24px 16px; text-align:center; }
+    a { color:var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Habit Tracker</h1>
+        <div class="sub">Tap a Stream Deck key &rarr; it lands here. <span id="total" class="muted"></span></div>
+      </div>
+      <div class="sub" id="updated"></div>
+    </header>
+    <div id="app"><div class="empty">Loading&hellip;</div></div>
+  </div>
+
+  <script>
+    const EMOJI = { Pee:"🚽", Poop:"💩", Eat:"🍽", Drink:"💧", Exercise:"🏃" };
+    const emojiFor = (h) => EMOJI[h] || "•";
+    const app = document.getElementById('app');
+
+    const dayKey = (d) => { const x = new Date(d); return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); };
+    const todayKey = dayKey(Date.now());
+    const fmtTime = (t) => new Date(t).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+
+    function render(entries) {
+      if (!entries.length) {
+        app.innerHTML = '<div class="empty">No taps yet. Tap a habit key on your Stream Deck &mdash; it&rsquo;ll show up here.</div>';
+        document.getElementById('total').textContent = '';
+        return;
+      }
+      // per-habit totals + today
+      const totals = {}, today = {};
+      for (const e of entries) {
+        totals[e.h] = (totals[e.h]||0)+1;
+        if (dayKey(e.t) === todayKey) today[e.h] = (today[e.h]||0)+1;
+      }
+      const habits = Object.keys(totals).sort((a,b)=>totals[b]-totals[a]);
+
+      // last 7 days total volume
+      const days = [];
+      for (let i=6;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); days.push(dayKey(d)); }
+      const perDay = Object.fromEntries(days.map(d=>[d,0]));
+      for (const e of entries){ const k=dayKey(e.t); if(k in perDay) perDay[k]++; }
+      const maxDay = Math.max(1, ...Object.values(perDay));
+
+      const cards = habits.map(h => `
+        <div class="card">
+          <div class="emoji">${emojiFor(h)}</div>
+          <div class="big">${totals[h]}</div>
+          <div class="name">${h}</div>
+          ${today[h] ? `<div class="today">+${today[h]} today</div>` : `<div class="today muted">&mdash;</div>`}
+        </div>`).join('');
+
+      const bars = days.map(d => {
+        const v = perDay[d];
+        const dow = new Date(d+'T00:00').toLocaleDateString([], { weekday:'short' });
+        return `<div class="bar-col">
+          <div class="bar-val">${v||''}</div>
+          <div class="bar" style="height:${Math.round((v/maxDay)*100)}%"></div>
+          <div class="bar-lbl">${dow}</div>
+        </div>`;
+      }).join('');
+
+      const recent = entries.slice(-12).reverse().map(e => `
+        <div class="row"><span>${emojiFor(e.h)} ${e.h}${e.note?` <span class="muted">(${e.note})</span>`:''}</span><span class="when">${fmtTime(e.t)}</span></div>`).join('');
+
+      app.innerHTML = `
+        <div class="grid">${cards}</div>
+        <section><h2>Last 7 days</h2><div class="chart"><div class="bars">${bars}</div></div></section>
+        <section><h2>Recent</h2><div class="recent">${recent}</div></section>`;
+      document.getElementById('total').textContent = `${entries.length} total taps`;
+    }
+
+    function renderSetup() {
+      app.innerHTML = `<div class="setup">
+        <strong>Almost there &mdash; storage isn&rsquo;t connected yet.</strong>
+        <ol>
+          <li>In Vercel, open this project &rarr; <strong>Storage</strong> tab.</li>
+          <li>Create a database: <strong>Upstash for Redis</strong> (or <strong>KV</strong>), free tier is fine.</li>
+          <li>Connect it to <code>stream-deck-habit-tracker</code>. Vercel adds the credentials automatically and redeploys.</li>
+        </ol>
+        <p class="muted">Once connected, taps to <code>/api/log?habit=Name</code> will appear here.</p>
+      </div>`;
+    }
+
+    fetch('/api/data').then(r=>r.json()).then(d => {
+      document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
+      if (d.configured === false) return renderSetup();
+      render(d.entries || []);
+    }).catch(() => {
+      app.innerHTML = '<div class="empty">Couldn&rsquo;t load data. Refresh to retry.</div>';
+    });
+  </script>
+</body>
+</html>
