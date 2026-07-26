@@ -2,9 +2,8 @@
 name: rebuild-artifacts
 description: >
   Regenerate every Stream Deck asset this repo distributes — still icons,
-  animated GIF key faces, the .streamDeckProfile files (MK2/Neo × plugin/
-  Web-Requests flavors), and the packaged .streamDeckPlugin — then stage the
-  results. Use this whenever config/habits.json changes, icon colors/motions
+  animated GIF key faces, the 15-key .streamDeckProfile, and the packaged
+  .streamDeckPlugin — then stage the results. Use this whenever config/habits.json changes, icon colors/motions
   change, anything under streamdeck-plugin/ changes, or tools/generate.mjs
   gains new output — the hosted files in public/downloads/ are committed
   artifacts and NEVER rebuild themselves, so skipping this ships stale
@@ -47,12 +46,9 @@ cp icons/animated/*.gif public/icons/animated/
 # 4) Plugin package (renders manifest images, zips the .sdPlugin folder)
 node tools/build-plugin.mjs
 
-# 5) Hosted profiles — all four variants
+# 5) Hosted profile (single-user build: 15-key, plugin flavor only)
 BASE="https://stream-deck-habit-tracker.vercel.app/api/log"
 node tools/generate.mjs "$BASE" --plugin --static --outfile=public/downloads/HabitTracker-MK2.streamDeckProfile --name="Habit Tracker AI"
-node tools/generate.mjs "$BASE" --model=neo --plugin --static --outfile=public/downloads/HabitTracker-Neo.streamDeckProfile --name="Habit Tracker AI"
-node tools/generate.mjs "$BASE" --outfile=public/downloads/HabitTracker-MK2-WebRequests.streamDeckProfile
-node tools/generate.mjs "$BASE" --model=neo --outfile=public/downloads/HabitTracker-Neo-WebRequests.streamDeckProfile
 ```
 
 If `HABIT_KEY` is ever set in Vercel, add `--key=<value>` to every generate call
@@ -60,8 +56,8 @@ If `HABIT_KEY` is ever set in Vercel, add `--key=<value>` to every generate call
 
 ## Verify before committing
 
-- `unzip -l public/downloads/com.kalmansforge.habit-tracker.streamDeckPlugin`
-  — expect the `com.kalmansforge.habit-tracker.sdPlugin/` prefix on all files.
+- `unzip -l public/downloads/com.shaiss.habit-tracker.streamDeckPlugin`
+  — expect the `com.shaiss.habit-tracker.sdPlugin/` prefix on all files.
 - `unzip -p "public/downloads/HabitTracker-MK2.streamDeckProfile" "*/Profiles/*/manifest.json" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const m=JSON.parse(s);console.log(Object.keys(m.Actions))})"`
   — expect habit keys, the Stats key, and AI slot keys at the right cells.
 - Visually spot-check a rendered icon (Read one PNG / a probe frame) if icon

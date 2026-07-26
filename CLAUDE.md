@@ -31,11 +31,8 @@ node tools/make-animations.mjs
 # Rebuild the Stream Deck plugin package into public/downloads/:
 node tools/build-plugin.mjs
 
-# Regenerate hosted profiles (both flavors x MK2/Neo) into public/downloads/:
+# Regenerate the hosted profile (single-user build: 15-key, plugin flavor only):
 node tools/generate.mjs "https://stream-deck-habit-tracker.vercel.app/api/log" --plugin --static --outfile=public/downloads/HabitTracker-MK2.streamDeckProfile --name="Habit Tracker AI"
-node tools/generate.mjs "https://stream-deck-habit-tracker.vercel.app/api/log" --model=neo --plugin --static --outfile=public/downloads/HabitTracker-Neo.streamDeckProfile --name="Habit Tracker AI"
-node tools/generate.mjs "https://stream-deck-habit-tracker.vercel.app/api/log" --outfile=public/downloads/HabitTracker-MK2-WebRequests.streamDeckProfile
-node tools/generate.mjs "https://stream-deck-habit-tracker.vercel.app/api/log" --model=neo --outfile=public/downloads/HabitTracker-Neo-WebRequests.streamDeckProfile
 
 # Sanity: node --check every touched .js/.mjs file. There is no test suite;
 # verification is against the live deployment (see below).
@@ -83,15 +80,15 @@ Vercel MCP `web_fetch_vercel_url` tool to probe the live site.
 **Frontend** (`public/index.html`) — single static file, no framework, no build
 step. Dashboard + AI Coach section; polls every 20s.
 
-**Stream Deck plugin** (`streamdeck-plugin/com.kalmansforge.habit-tracker.sdPlugin/`)
+**Stream Deck plugin** (`streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/`)
 — classic SDKVersion-2 JS plugin (WebSocket, `connectElgatoStreamDeckSocket`
-global). Two actions: `…habit` (static face from settings) and `…slot` (face
-canvas-rendered from `/api/slots`, polled 15s + ~9s after each tap). All
-per-key config (base URL, habit, colors, slot number) is **baked into profile
-Settings by the generator** — the plugin has no property inspector and no
-hardcoded server. Untested on physical hardware as of writing; the
-`-WebRequests` profile flavor (third-party `gg.datagram.web-requests` plugin)
-is the guaranteed-working fallback.
+global). Two actions, both live: `…habit` ({base, index} — resolves the habit
+at that position from `/api/slots`) and `…slot` ({base, slot}); faces are
+canvas-rendered from one `/api/slots` poll (15s + ~9s after each tap), so
+habit-manager edits and coach swaps repaint physical keys. Taps resolve
+server-side (`?hkey=`/`?slot=`). No property inspector, no hardcoded server —
+per-key Settings come from the generator. Untested on physical hardware as of
+writing.
 
 **Asset pipeline** (`tools/`): `config/habits.json` is the single source for
 habits (name = logged id + URL param; label/emoji = display). Icons and

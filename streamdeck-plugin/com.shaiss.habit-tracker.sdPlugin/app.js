@@ -1,12 +1,13 @@
 /* Habit Tracker AI — Stream Deck plugin.
  *
  * Two actions:
- *  - ...habit  settings: { base, habit, emoji, label, c1, c2, key? }
+ *  - ...habit  settings: { base, index (0-based position), key? }
  *  - ...slot   settings: { base, slot (1-4), key? }
  *
- * Habit keys render a static face from their settings. Slot keys poll
- * <base>/api/slots and repaint whenever the AI coach swaps assignments.
- * keyDown fires <base>/api/log and flashes the built-in OK/alert overlay.
+ * Everything renders from live server state: one poll of <base>/api/slots
+ * carries both the habit list and the AI slot assignments, so habit-manager
+ * edits and coach swaps repaint physical keys within one poll. Taps resolve
+ * server-side (?hkey= / ?slot=) so history records what the key showed.
  */
 'use strict';
 
@@ -79,10 +80,9 @@ function tap(context) {
   var k = keys[context];
   if (!k || !k.settings.base) { showAlert(context); return; }
   var s = k.settings;
-  var q;
-  if (isSlot(k)) q = 'slot=' + encodeURIComponent(s.slot || 1);
-  else if (s.index !== undefined && s.index !== null) q = 'hkey=' + encodeURIComponent((+s.index) + 1);
-  else q = 'habit=' + encodeURIComponent(s.habit || ''); // legacy profiles
+  var q = isSlot(k)
+    ? 'slot=' + encodeURIComponent(s.slot || 1)
+    : 'hkey=' + encodeURIComponent((+s.index || 0) + 1);
   var url = s.base.replace(/\/+$/, '') + '/api/log?' + q +
     (s.key ? '&key=' + encodeURIComponent(s.key) : '');
   fetch(url)
@@ -136,21 +136,11 @@ function render(context) {
   var s = k.settings;
   if (!s.base) { setImage(context, face('⚙️', 'setup', SETUP_COLORS, '')); return; }
   if (isHabit(k)) {
-    // Live habit list wins (habit manager edits repaint within one poll);
-    // baked settings are the offline/first-render fallback.
-    var idx = (s.index !== undefined && s.index !== null) ? +s.index : -1;
-    var def = habitCache && idx >= 0 ? habitCache[idx] : null;
-    if (def) {
-      setImage(context, face(def.emoji || '•', def.label || def.habit, colorFor(def.name), ''));
-    } else if (habitCache && idx >= 0) {
-      setImage(context, face('·', 'empty', SETUP_COLORS, '')); // habit removed
-    } else {
-      setImage(context, face(s.emoji || '•', s.label || s.habit || '?', [s.c1 || '#6b7280', s.c2 || '#374151'], ''));
-    }
-    return;
-  }
-  if (!isSlot(k)) {
-    setImage(context, face(s.emoji || '•', s.label || s.habit || '?', [s.c1 || '#6b7280', s.c2 || '#374151'], ''));
+    var idx = +s.index || 0;
+    var def = habitCache ? habitCache[idx] : null;
+    if (def) setImage(context, face(def.emoji || '•', def.label || def.habit, colorFor(def.name), ''));
+    else if (habitCache) setImage(context, face('·', 'empty', SETUP_COLORS, '')); // habit removed in manager
+    else setImage(context, face('⏳', '…', SETUP_COLORS, '')); // first poll pending
     return;
   }
   var n = parseInt(s.slot, 10) || 1;

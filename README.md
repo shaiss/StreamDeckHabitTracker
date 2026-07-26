@@ -38,13 +38,11 @@ Hosted artifacts (also linked from the dashboard):
 | File | What |
 |---|---|
 | [`setup.ps1`](https://stream-deck-habit-tracker.vercel.app/setup.ps1) | the bootstrap above |
-| [`com.kalmansforge.habit-tracker.streamDeckPlugin`](https://stream-deck-habit-tracker.vercel.app/downloads/com.kalmansforge.habit-tracker.streamDeckPlugin) | our plugin (habit keys + live AI slot keys) |
-| [`HabitTracker-MK2.streamDeckProfile`](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-MK2.streamDeckProfile) | 15-key layout: 5 habits + Stats + 4 AI slots |
-| [`HabitTracker-Neo.streamDeckProfile`](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-Neo.streamDeckProfile) | 8-key Neo layout: 5 habits + Stats + 2 AI slots |
-| `…-WebRequests.streamDeckProfile` ([MK2](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-MK2-WebRequests.streamDeckProfile), [Neo](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-Neo-WebRequests.streamDeckProfile)) | fallback flavor using the third-party Web Requests plugin (animated icons, but slot faces don't self-update) |
+| [`com.shaiss.habit-tracker.streamDeckPlugin`](https://stream-deck-habit-tracker.vercel.app/downloads/com.shaiss.habit-tracker.streamDeckPlugin) | the plugin (live habit keys + live AI slot keys) |
+| [`HabitTracker-MK2.streamDeckProfile`](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-MK2.streamDeckProfile) | 15-key layout: 5 habit keys + Stats + 4 AI slots |
 
-> The Neo has 8 LCD keys plus 2 touch points; the touch points are fixed
-> page-navigation sensors and can't run actions, so 8 keys is the real budget.
+Single-user build: one deck (15-key), one plugin, no fallback flavors. Other
+layouts can be regenerated any time with `tools/generate.mjs --model=…`.
 
 ---
 
@@ -90,21 +88,11 @@ Until step 1 is done, the dashboard shows a "connect storage" note and
    in a browser — you should see `Logged: Test`, and it appears on the
    [dashboard](https://stream-deck-habit-tracker.vercel.app).
 
-### Step 2 — Generate your buttons (~10 sec)
-With [Node](https://nodejs.org) installed, from this folder:
-
-```bash
-node tools/generate.mjs "https://stream-deck-habit-tracker.vercel.app/api/log"
-```
-
-This writes into `dist/`:
-- **`urls.txt`** — the exact URL for every button (the reliable path).
-- **`Habit Tracker.streamDeckProfile`** — a double-click-to-import profile with
-  the custom icons baked in and a 6th **📊 Stats** key that opens the dashboard.
-
-Flags: `--key=yourword` if you set a secret (below), `--model=xl|mini|original`
-to match your hardware (default `mk2`, the standard 15-key Stream Deck),
-`--no-dashboard` to drop the Stats key, `--dashboard=URL` to point it elsewhere.
+### Step 2 — Install plugin + profile
+Run the one-liner above, or double-click the two hosted files (plugin first,
+then profile). Habit keys and AI slot keys all render from live server state —
+edits on the [Habits page](https://stream-deck-habit-tracker.vercel.app/habits.html)
+repaint physical keys within ~15 s.
 
 **Icons:** two sets, both committed:
 - [`icons/animated/`](icons/animated/) — looping GIFs (24 frames, 1.92 s), embedded
@@ -123,25 +111,16 @@ To re-render after editing habits:
 `npm i playwright-core pngjs gifenc --no-save`, then `node tools/make-icons.mjs`
 (stills) and `node tools/make-animations.mjs` (GIFs).
 
-### Step 3 — Put them on the Stream Deck (~1 min)
-1. In the Stream Deck app, open the **Marketplace** and install **"Web
-   Requests"** by *data-enabler*. (This fires the request silently; the built-in
-   "Website" action would pop a browser tab every tap.)
-2. Either **import** `dist/Habit Tracker.streamDeckProfile`, or add buttons
-   manually from `dist/urls.txt`: drag **Web Request → HTTP Request** onto each
-   key, set **Method: GET**, paste the **URL**, set the **Title**.
-
-### Step 4 — Plug in the Stream Deck and tap
+### Step 3 — Plug in the Stream Deck and tap
 Each tap logs instantly and shows on the
 [dashboard](https://stream-deck-habit-tracker.vercel.app).
 
 ---
 
 ## Customizing your habits
-Edit [`config/habits.json`](config/habits.json) — each entry is
-`{ "emoji", "label", "name" }` where `name` is what gets logged — then re-run
-Step 2. (To show new emojis on the dashboard too, add them to the `EMOJI` map
-in [`public/index.html`](public/index.html).)
+Use the [Habits page](https://stream-deck-habit-tracker.vercel.app/habits.html)
+— changes go live everywhere, including physical keys, within ~15 s.
+(`config/habits.json` only seeds icons/profile generation.)
 
 ## Optional: require a secret
 To stop anyone who guesses your URL from writing rows:

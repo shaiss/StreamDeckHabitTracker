@@ -45,16 +45,6 @@ const deviceModel = MODELS[modelArg] ?? MODELS.mk2;
 const cols = COLS[modelArg] ?? COLS.mk2;
 const rows = ROWS[modelArg] ?? ROWS.mk2;
 
-// Per-habit key colors (mirrors tools/make-icons.mjs; baked into plugin settings).
-const HABIT_COLORS = {
-  Pee: ['#f6c445', '#d68a06'],
-  Poop: ['#a9764e', '#5e3a20'],
-  Eat: ['#ff7a59', '#e03a2f'],
-  Drink: ['#5aa0ff', '#2160e6'],
-  Exercise: ['#4fd98a', '#12915a'],
-  _default: ['#6b7280', '#374151']
-};
-
 if (!base || !/^https?:\/\//.test(base)) {
   console.error(
     'Usage: node tools/generate.mjs "https://script.google.com/macros/s/XXXX/exec" [--key=SECRET] [--model=mk2|xl|mini|original|any]'
@@ -74,8 +64,8 @@ if (!dashboardUrl && !noDashboard) {
 // --plugin: emit keys for our own "Habit Tracker AI" plugin (live-updating AI
 // slot faces) instead of the third-party Web Requests plugin.
 const usePlugin = args.includes('--plugin');
-const PLUGIN_HABIT = 'com.kalmansforge.habit-tracker.habit';
-const PLUGIN_SLOT = 'com.kalmansforge.habit-tracker.slot';
+const PLUGIN_HABIT = 'com.shaiss.habit-tracker.habit';
+const PLUGIN_SLOT = 'com.shaiss.habit-tracker.slot';
 const siteOrigin = (() => { try { return new URL(execBase).origin; } catch { return ''; } })();
 
 // AI slot keys: fill whatever key cells remain after habits + Stats, up to 4.
@@ -175,7 +165,6 @@ const states = (img, title) => [
 // Habit keys.
 habits.forEach((h, i) => {
   const img = iconDataUri(h.name);
-  const [c1, c2] = HABIT_COLORS[h.name] || HABIT_COLORS._default;
   place(
     usePlugin
       ? {
@@ -183,8 +172,7 @@ habits.forEach((h, i) => {
           Name: 'Habit Key',
           // index = position: the plugin resolves the CURRENT habit at this
           // position from /api/slots, so habit-manager edits repaint the key.
-          // The rest is an offline/first-render fallback.
-          Settings: { base: siteOrigin, index: i, habit: h.name, emoji: h.emoji, label: h.label, c1, c2, ...(key ? { key } : {}) },
+          Settings: { base: siteOrigin, index: i, ...(key ? { key } : {}) },
           State: 0,
           States: states(img, `${h.emoji} ${h.label}`),
           UUID: PLUGIN_HABIT
