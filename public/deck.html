@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Virtual Stream Deck — Habit Tracker</title>
+  <link rel="stylesheet" href="/theme.css" />
   <style>
     :root {
       --key: 118px; --gap: 14px; --pad: 26px;
@@ -90,9 +91,15 @@
     .facecss .em { font-size: calc(var(--key) * .40); line-height: 1.15; filter: drop-shadow(0 3px 4px rgba(0,0,0,.4)); }
     .facecss .lb { font-size: calc(var(--key) * .13); font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6); letter-spacing: .02em; }
     .facecss .badge { position: absolute; top: 6px; right: 8px; font-size: calc(var(--key) * .085); font-weight: 700; color: rgba(255,255,255,.85); }
-    .slotface { background: radial-gradient(circle at 50% 33%, #8b5cf6, #5b21b6); }
-    .habitface { background: radial-gradient(circle at 50% 33%, #6b7280, #374151); }
-    .emptyface { background: radial-gradient(circle at 50% 33%, #3a3f47, #17191d); }
+    .slotface { background:
+      radial-gradient(circle at 50% 36%, hsla(262,72%,58%,.62) 0%, hsla(262,72%,45%,.18) 42%, transparent 68%),
+      linear-gradient(180deg,#141827,#0a0c13); }
+    .habitface { background:
+      radial-gradient(circle at 50% 36%, hsla(var(--hue,222),72%,58%,.62) 0%, transparent 68%),
+      linear-gradient(180deg,#141827,#0a0c13); }
+    .emptyface { background:
+      radial-gradient(circle at 50% 36%, hsla(222,20%,55%,.35) 0%, transparent 66%),
+      linear-gradient(180deg,#12151f,#0a0c13); }
     .emptyface .em, .emptyface .lb { opacity: .55; }
 
     /* Stream Deck style OK / alert overlay flash */
@@ -147,7 +154,10 @@
         // New habits (added via the manager) have no baked icon yet — draw a
         // CSS face with the emoji + label instead of a broken image.
         el.querySelector('img')?.addEventListener('error', () => {
-          el.innerHTML = '<span class="facecss habitface"><span class="em">' + h.emoji +
+          let hh = 2166136261;
+          for (let c = 0; c < h.name.length; c++) { hh ^= h.name.charCodeAt(c); hh = Math.imul(hh, 16777619) >>> 0; }
+          let hue = hh % 320; if (hue >= 245) hue += 40;
+          el.innerHTML = '<span class="facecss habitface" style="--hue:' + hue + '"><span class="em">' + h.emoji +
             '</span><span class="lb">' + esc(h.label) + '</span></span>' +
             '<span class="glass"></span><span class="flash"></span>';
         });

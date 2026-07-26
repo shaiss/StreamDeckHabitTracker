@@ -12,6 +12,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { chromium } from 'playwright-core';
+import { hueFor, nocturneFace } from './make-icons.mjs';
 import { PNG } from 'pngjs';
 import gifenc from 'gifenc';
 const { GIFEncoder, quantize, applyPalette } = gifenc;
@@ -28,15 +29,6 @@ const FPS = 12.5;      // 24 / 12.5 = 1.92s loop
 const DUR_MS = (FRAMES / FPS) * 1000;
 const DELAY_MS = 1000 / FPS; // per-frame GIF delay
 
-const COLORS = {
-  Pee: ['#f6c445', '#d68a06'],
-  Poop: ['#a9764e', '#5e3a20'],
-  Eat: ['#ff7a59', '#e03a2f'],
-  Drink: ['#5aa0ff', '#2160e6'],
-  Exercise: ['#4fd98a', '#12915a'],
-  _dashboard: ['#9aa0aa', '#3a3f47'],
-  _default: ['#6b7280', '#374151']
-};
 
 // Per-habit motion. Every @keyframes must start and end on the same pose so
 // the loop is seamless. All animations run with duration DUR_MS, infinite.
@@ -68,29 +60,24 @@ const MOTIONS = {
              @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}`
 };
 
-function habitHtml(emoji, label, [c1, c2], motionCss) {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
-    *{margin:0;padding:0;box-sizing:border-box}
-    html,body{width:${SIZE}px;height:${SIZE}px;overflow:hidden;
-      background:radial-gradient(circle at 50% 33%, ${c1}, ${c2})}
-    .k{position:absolute;inset:0;display:flex;flex-direction:column;
-       align-items:center;justify-content:center;gap:2px;padding-bottom:20px;
-       font-family:'DejaVu Sans','Liberation Sans',sans-serif}
-    .e{font-size:150px;line-height:1;filter:drop-shadow(0 5px 7px rgba(0,0,0,.35));z-index:2}
-    .l{font-size:${label.length > 7 ? 34 : 46}px;font-weight:700;color:#fff;
-       letter-spacing:.5px;text-shadow:0 2px 6px rgba(0,0,0,.55);z-index:2}
-    ${motionCss}
-  </style></head><body><div class="k"><div class="fx"></div><div class="e">${emoji}</div><div class="l">${label}</div></div></body></html>`;
+// Nocturne base (shared with make-icons) + a motion layer and an .fx hook.
+function habitHtml(emoji, label, hue, motionCss) {
+  const base = nocturneFace(emoji, label, hue);
+  return base
+    .replace('</style>', `.e,.l{z-index:2} ${motionCss}</style>`)
+    .replace('<div class="k">', '<div class="k"><div class="fx"></div>');
 }
 
 // Stats key: real CSS bars that grow in a staggered loop (no emoji needed).
-function statsHtml([c1, c2]) {
+function statsHtml() {
   const bar = (x, h, color, delayFrac) =>
     `.b${x}{left:${x}px;background:${color};--h:${h}px;animation-delay:${Math.round(-DUR_MS * delayFrac)}ms}`;
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     *{margin:0;padding:0;box-sizing:border-box}
     html,body{width:${SIZE}px;height:${SIZE}px;overflow:hidden;
-      background:radial-gradient(circle at 50% 33%, ${c1}, ${c2})}
+      background:linear-gradient(180deg,#141827 0%,#0a0c13 100%)}
+    .halo{position:absolute;inset:0;background:radial-gradient(circle at 50% 36%, hsla(222,26%,58%,.5) 0%, transparent 66%)}
+    .frame{position:absolute;inset:12px;border:2px solid hsla(222,26%,65%,.28);border-radius:34px}
     .k{position:absolute;inset:0;font-family:'DejaVu Sans','Liberation Sans',sans-serif}
     .bar{position:absolute;bottom:104px;width:44px;border-radius:8px 8px 3px 3px;
          height:var(--h);transform-origin:50% 100%;
@@ -105,7 +92,7 @@ function statsHtml([c1, c2]) {
     .l{position:absolute;left:0;right:0;bottom:26px;text-align:center;
        font-size:46px;font-weight:700;color:#fff;letter-spacing:.5px;
        text-shadow:0 2px 6px rgba(0,0,0,.55)}
-  </style></head><body><div class="k">
+  </style></head><body><div class="halo"></div><div class="frame"></div><div class="k">
     <div class="bar b62"></div><div class="bar b122"></div><div class="bar b182"></div>
     <div class="base"></div><div class="l">Stats</div>
   </div></body></html>`;
@@ -148,12 +135,11 @@ const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbo
 const page = await browser.newPage({ viewport: { width: SIZE, height: SIZE }, deviceScaleFactor: 1 });
 
 for (const h of habits) {
-  const colors = COLORS[h.name] || COLORS._default;
   const motion = MOTIONS[h.name] || MOTIONS._default;
-  await captureGif(page, habitHtml(h.emoji, h.label, colors, motion), join(OUT, `${h.name}.gif`), probeDir);
+  await captureGif(page, habitHtml(h.emoji, h.label, hueFor(h.name), motion), join(OUT, `${h.name}.gif`), probeDir);
   console.log(`  wrote icons/animated/${h.name}.gif`);
 }
-await captureGif(page, statsHtml(COLORS._dashboard), join(OUT, '_dashboard.gif'), probeDir);
+await captureGif(page, statsHtml(), join(OUT, '_dashboard.gif'), probeDir);
 console.log('  wrote icons/animated/_dashboard.gif');
 
 await browser.close();

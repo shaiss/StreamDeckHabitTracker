@@ -1,0 +1,85 @@
+/* Nocturne Ritual — design tokens (see design/PHILOSOPHY.md).
+   One source of truth for every page + nav. Tokens live on <body> so
+   body[data-nav="dark"] can commit a page to night deliberately
+   (deck, mind) while other pages follow the system theme. */
+
+body {
+  /* night (default) */
+  --bg: #0b0d14;
+  --bg2: #090b10;
+  --card: #121521;
+  --card2: #171b2a;
+  --line: #232838;
+  --fg: #eceef2;
+  --ink2: #b9c0cc;
+  --muted: #8f97a6;
+  --accent: #7fa9ff;        /* links & focus */
+  --violet: #8b5cf6;        /* reserved: the coach speaking */
+  --violet-deep: #5b21b6;
+  --series: #3987e5;        /* data — validated vs --card (dark) */
+  --good: #37c978;
+  --bad: #e05252;
+
+  --r-lg: 16px;   /* niches: cards, tiles */
+  --r-md: 10px;   /* controls */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 var(--font);
+}
+
+@media (prefers-color-scheme: light) {
+  body:not([data-nav="dark"]) {
+    --bg: #f4f5f8;
+    --bg2: #eceef3;
+    --card: #ffffff;
+    --card2: #f7f8fb;
+    --line: #e3e6ec;
+    --fg: #191c22;
+    --ink2: #3c4250;
+    --muted: #6a7280;
+    --accent: #2563eb;
+    --series: #2a78d6;      /* data — validated vs --card (light) */
+    --good: #159a5a;
+  }
+}
+
+/* ---- shared vocabulary ---------------------------------------------- */
+
+.card, .niche {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+}
+
+.section-h {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted);
+  margin: 0 0 var(--s3);
+}
+
+.btn {
+  border: 0;
+  border-radius: var(--r-md);
+  padding: 9px 16px;
+  font: 600 13px/1 var(--font);
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--violet), var(--violet-deep));
+  color: #fff;
+}
+.btn:disabled { opacity: .55; cursor: default; }
+.btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+
+.linklike {
+  border: 0; background: transparent; color: var(--accent);
+  font: 500 12.5px/1 var(--font); cursor: pointer; padding: 4px 6px;
+}
+
+a { color: var(--accent); }

@@ -4,16 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Habit Tracker</title>
+  <link rel="stylesheet" href="/theme.css" />
   <style>
-    :root {
-      --bg: #0b0c10; --card: #16181d; --line: #24272e; --fg: #e8eaed;
-      --muted: #9aa0a6; --accent: #4f8cff; --good: #37c978;
-    }
-    @media (prefers-color-scheme: light) {
-      :root { --bg:#f6f7f9; --card:#fff; --line:#e6e8eb; --fg:#1a1c1f; --muted:#6b7280; --accent:#2563eb; --good:#159a5a; }
-    }
     * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
     .hnav { margin-bottom: 4px; }
     .wrap { max-width: 860px; margin: 0 auto; padding: 28px 20px 64px; }
     header { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:22px; }
@@ -27,12 +20,29 @@
     .card .today { color:var(--good); font-size:12px; margin-top:4px; }
     section { margin-top:30px; }
     h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 12px; }
-    .chart { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 16px 10px; }
-    .bars { display:flex; align-items:flex-end; gap:10px; height:150px; }
-    .bar-col { flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; height:100%; justify-content:flex-end; }
-    .bar { width:100%; max-width:34px; background:var(--accent); border-radius:6px 6px 3px 3px; min-height:2px; transition:height .3s; }
-    .bar-lbl { font-size:11px; color:var(--muted); }
-    .bar-val { font-size:11px; color:var(--fg); }
+    .chart { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg); padding:18px 18px 12px; }
+    .plot { position:relative; height:168px; margin:6px 6px 0 30px; }
+    .gline { position:absolute; left:0; right:0; border-top:1px solid var(--line); }
+    .gline .tick { position:absolute; left:-30px; top:-7px; width:24px; text-align:right;
+                  font-size:10.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+    .cols { position:absolute; inset:0; display:flex; align-items:flex-end; gap:10px; }
+    .bar-col { flex:1; height:100%; display:flex; align-items:flex-end; justify-content:center;
+               cursor:pointer; position:relative; border-radius:6px; }
+    .bar { width:100%; max-width:24px; background:var(--series); border-radius:4px 4px 0 0; min-height:2px; }
+    .bar-col:hover .bar, .bar-col:focus-visible .bar { filter:brightness(1.18); }
+    .bar-col:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+    .cap { position:absolute; width:100%; text-align:center; font-size:11px; color:var(--fg);
+           transform:translateY(-14px); font-variant-numeric:tabular-nums; }
+    .dows { display:flex; gap:10px; margin:6px 6px 0 30px; }
+    .dows span { flex:1; text-align:center; font-size:11px; color:var(--muted); }
+    .viz-tip { position:fixed; z-index:99; pointer-events:none; background:var(--card2);
+               border:1px solid var(--line); border-radius:10px; padding:7px 11px; font-size:12.5px;
+               box-shadow:0 6px 18px rgba(0,0,0,.25); display:none; }
+    .viz-tip b { font-size:14px; font-variant-numeric:tabular-nums; }
+    .tap-table { width:100%; border-collapse:collapse; font-size:13.5px; }
+    .tap-table td, .tap-table th { padding:7px 12px; border-top:1px solid var(--line); text-align:left; }
+    .tap-table th { color:var(--muted); font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; border-top:0; }
+    .tap-table td:last-child, .tap-table th:last-child { text-align:right; font-variant-numeric:tabular-nums; }
     .recent { background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
     .row { display:flex; justify-content:space-between; padding:10px 16px; border-top:1px solid var(--line); font-size:14px; }
     .row:first-child { border-top:0; }
@@ -41,12 +51,8 @@
     .setup code { background:rgba(127,127,127,.16); padding:1px 6px; border-radius:6px; font-size:13px; }
     .setup ol { margin:10px 0 0; padding-left:20px; } .setup li { margin:6px 0; }
     .muted { color:var(--muted); } .empty { color:var(--muted); padding:24px 16px; text-align:center; }
-    a { color:var(--accent); }
     .ai-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
     .ai-head h2 { margin:0; }
-    .btn { border:0; border-radius:10px; padding:8px 14px; font:600 13px/1 inherit; cursor:pointer;
-           background:linear-gradient(135deg,#8b5cf6,#6d28d9); color:#fff; }
-    .btn:disabled { opacity:.55; cursor:default; }
     .slot-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:12px; }
     .slot { border-radius:14px; padding:14px; border:1px solid var(--line);
             background:linear-gradient(160deg, rgba(139,92,246,.14), var(--card) 55%); }
@@ -131,7 +137,9 @@
       for (let i=6;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); days.push(dayKey(d)); }
       const perDay = Object.fromEntries(days.map(d=>[d,0]));
       for (const e of entries){ const k=dayKey(e.t); if(k in perDay) perDay[k]++; }
-      const maxDay = Math.max(1, ...Object.values(perDay));
+      const rawMax = Math.max(...Object.values(perDay));
+      const maxDay = Math.max(2, rawMax);            // headroom so 0/1 days still draw sanely
+      const midTick = Math.ceil(maxDay/2);
 
       const cards = habits.map(h => `
         <div class="card">
@@ -141,26 +149,71 @@
           ${today[h] ? `<div class="today">+${today[h]} today</div>` : `<div class="today muted">&mdash;</div>`}
         </div>`).join('');
 
-      const bars = days.map(d => {
+      // marks: ≤24px bars, 4px rounded caps, hairline grid, selective labels
+      // (peak day + today only — the tooltip and table carry the rest)
+      const peak = days.reduce((a,d)=>perDay[d]>perDay[a]?d:a, days[0]);
+      const cols = days.map(d => {
         const v = perDay[d];
-        const dow = new Date(d+'T00:00').toLocaleDateString([], { weekday:'short' });
-        return `<div class="bar-col">
-          <div class="bar-val">${v||''}</div>
-          <div class="bar" style="height:${Math.round((v/maxDay)*100)}%"></div>
-          <div class="bar-lbl">${dow}</div>
+        const h = Math.round((v/maxDay)*100);
+        const showCap = v>0 && (d===peak || d===todayKey);
+        return `<div class="bar-col" tabindex="0" data-day="${d}" data-v="${v}">
+          ${showCap?`<span class="cap" style="bottom:${h}%">${v}</span>`:''}
+          <div class="bar" style="height:${h}%"></div>
         </div>`;
       }).join('');
+      const grid = [[0,'0'],[Math.round(100*midTick/maxDay),String(midTick)],[100,String(maxDay)]]
+        .map(([pct,lab])=>`<div class="gline" style="bottom:${pct}%"><span class="tick">${lab}</span></div>`).join('');
+      const dows = days.map(d=>`<span>${new Date(d+'T00:00').toLocaleDateString([], { weekday:'short' })}</span>`).join('');
+      const tableRows = days.map(d=>`<tr><td>${new Date(d+'T00:00').toLocaleDateString([], { weekday:'long', month:'short', day:'numeric' })}</td><td>${perDay[d]}</td></tr>`).join('');
 
       const recent = entries.slice(-12).reverse().map(e => `
         <div class="row"><span>${emojiFor(e.h, e.e)} ${e.h}${e.slot?` <span class="tag">AI</span>`:''}${e.note?` <span class="muted">(${e.note})</span>`:''}</span><span class="when">${fmtTime(e.t)}</span></div>`).join('');
 
       app.innerHTML = `
         <div class="grid">${cards}</div>
-        <section><h2>Last 7 days</h2><div class="chart"><div class="bars">${bars}</div></div></section>
+        <section>
+          <div class="ai-head"><h2>Taps per day · last 7 days</h2><button class="linklike" id="tblBtn">table</button></div>
+          <div class="chart" id="chartCard">
+            <div class="plot">${grid}<div class="cols">${cols}</div></div>
+            <div class="dows">${dows}</div>
+            <table class="tap-table" id="tapTable" hidden><tr><th>Day</th><th>Taps</th></tr>${tableRows}</table>
+          </div>
+        </section>
         <section id="ai"></section>
         <section><h2>Recent</h2><div class="recent">${recent}</div></section>`;
       document.getElementById('total').textContent = `${entries.length} total taps`;
+      wireChart();
       renderAi();
+    }
+
+    let tip = null;
+    function wireChart() {
+      if (!tip) { tip = document.createElement('div'); tip.className = 'viz-tip'; document.body.appendChild(tip); }
+      const plot = document.querySelector('.plot'), table = document.getElementById('tapTable');
+      document.getElementById('tblBtn')?.addEventListener('click', (e) => {
+        const show = table.hidden; table.hidden = !show; plot.parentElement.querySelector('.plot').style.display = show?'none':'';
+        plot.parentElement.querySelector('.dows').style.display = show?'none':'';
+        e.target.textContent = show ? 'chart' : 'table';
+      });
+      document.querySelectorAll('.bar-col').forEach(col => {
+        const show = () => {
+          const d = col.dataset.day, v = col.dataset.v;
+          tip.innerHTML = '';
+          const b = document.createElement('b'); b.textContent = v;
+          tip.appendChild(b);
+          tip.appendChild(document.createTextNode(` tap${v==='1'?'':'s'} · ` +
+            new Date(d+'T00:00').toLocaleDateString([], { weekday:'short', month:'short', day:'numeric' })));
+          const r = col.getBoundingClientRect();
+          tip.style.display = 'block';
+          tip.style.left = Math.min(window.innerWidth-150, Math.max(6, r.left + r.width/2 - 60)) + 'px';
+          tip.style.top = (r.top - 44) + 'px';
+        };
+        const hide = () => { tip.style.display = 'none'; };
+        col.addEventListener('pointerenter', show);
+        col.addEventListener('pointerleave', hide);
+        col.addEventListener('focus', show);
+        col.addEventListener('blur', hide);
+      });
     }
 
     function renderAi() {
