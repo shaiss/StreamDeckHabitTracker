@@ -176,7 +176,8 @@
         el.dataset.slot = n;
         face.appendChild(el);
       }
-      for (let i = 0; i < 5; i++) {
+      const used = habits.length + 1 + 4; // habits + stats + AI slots
+      for (let i = 0; i < Math.max(0, 15 - used); i++) {
         const off = document.createElement('button');
         off.className = 'k off'; off.disabled = true; off.tabIndex = -1;
         off.innerHTML = '<span class="glass"></span>';
