@@ -5,7 +5,8 @@
 // Returns plain text (handy when testing in a browser).
 import { waitUntil } from '@vercel/functions';
 import { append, getSlots, isConfigured } from '../lib/store.js';
-import { BASE_HABITS, zaiKey } from '../lib/ai.js';
+import { zaiKey } from '../lib/ai.js';
+import { getHabits } from '../lib/habits.js';
 import { reactTo } from '../lib/coach.js';
 
 export default async function handler(req, res) {
@@ -44,7 +45,7 @@ export default async function handler(req, res) {
       emoji = def.emoji || '';
       slotField = slotNum;
     } else if (habit) {
-      emoji = BASE_HABITS.find((h) => h.name === habit)?.emoji || '';
+      emoji = (await getHabits()).find((h) => h.name === habit)?.emoji || '';
     }
 
     if (!habit) {

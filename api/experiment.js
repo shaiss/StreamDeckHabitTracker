@@ -11,6 +11,7 @@ import { chat, extractJson, zaiKey, zaiModel } from '../lib/ai.js';
 import { PROMPTS } from '../lib/coach.js';
 import { scoreOutput } from '../lib/quality.js';
 import { listItems, storeExperiment, getExperiment } from '../lib/dataset.js';
+import { getHabits } from '../lib/habits.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -37,6 +38,7 @@ export default async function handler(req, res) {
       .split(',').map((s) => s.trim()).filter(Boolean).slice(0, 3);
     const n = Math.max(1, Math.min(parseInt(q.n, 10) || 3, 5));
     const items = (await listItems(n)).filter((it) => PROMPTS[it.input?.kind]);
+    const fixedNames = (await getHabits()).map((h) => h.name);
     if (!items.length) {
       res.status(409).json({ error: 'Dataset is empty — run a coach pass first (e.g. /api/suggest?run=1).' });
       return;
@@ -57,11 +59,11 @@ export default async function handler(req, res) {
             } catch {
               parseOk = false;
             }
-            return { model, kind: it.input.kind, itemAt: it.at, quality: scoreOutput(raw, { parseOk }), error: null };
+            return { model, kind: it.input.kind, itemAt: it.at, quality: scoreOutput(raw, { parseOk, fixedNames }), error: null };
           } catch (err) {
             return {
               model, kind: it.input.kind, itemAt: it.at,
-              quality: scoreOutput(null, { parseOk: false }),
+              quality: scoreOutput(null, { parseOk: false, fixedNames }),
               error: String(err?.message || err).slice(0, 160)
             };
           }
