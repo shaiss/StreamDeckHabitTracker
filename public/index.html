@@ -63,6 +63,9 @@
     .slot .top .nm { font-weight:650; }
     .slot .why { font-size:12.5px; color:var(--muted); margin-top:8px; line-height:1.45; }
     .slot .tag { font-size:11px; color:#8b5cf6; font-weight:700; letter-spacing:.05em; margin-top:8px; }
+    .slot.nudge { border-color:rgba(245,158,11,.55);
+                  background:linear-gradient(160deg, rgba(245,158,11,.18), var(--card) 55%); }
+    .slot.nudge .tag { color:#f59e0b; }
     .ai-note { font-size:13px; color:var(--muted); margin-top:10px; }
     .ai-err { font-size:13px; color:#e05252; margin-top:10px; white-space:pre-wrap; }
     .gear { border:0; background:transparent; color:var(--muted); font-size:18px; cursor:pointer; padding:4px 6px; }
@@ -226,10 +229,10 @@
       const s = slotState;
       const btn = `<button class="btn" id="suggestBtn" ${s && !s.aiReady ? 'disabled' : ''}>✨ Suggest</button>`;
       const cards = (s?.slots || [null,null,null,null]).map((d, i) => d ? `
-        <div class="slot">
+        <div class="slot${d.nudge ? ' nudge' : ''}">
           <div class="top"><span class="em">${d.emoji}</span><span class="nm">${d.label}</span></div>
           <div class="why">${(d.reason||'').replace(/</g,'&lt;')}</div>
-          <div class="tag">SLOT ${i+1} · logs as ${d.habit}</div>
+          <div class="tag">${d.nudge ? '❗ NUDGE' : 'SLOT ' + (i+1)} · logs as ${d.habit}</div>
         </div>` : `
         <div class="slot empty">Slot ${i+1} — empty</div>`).join('');
       const note = s && !s.aiReady

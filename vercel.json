@@ -4,6 +4,8 @@
   "functions": {
     "api/suggest.js": { "maxDuration": 60 },
     "api/log.js": { "maxDuration": 60 },
+    "api/slots.js": { "maxDuration": 60 },
+    "api/nudge.js": { "maxDuration": 60 },
     "api/cron/morning.js": { "maxDuration": 60 },
     "api/cron/daily.js": { "maxDuration": 60 }
   },

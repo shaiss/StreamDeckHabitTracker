@@ -94,6 +94,10 @@
     .slotface { background:
       radial-gradient(circle at 50% 36%, hsla(262,72%,58%,.62) 0%, hsla(262,72%,45%,.18) 42%, transparent 68%),
       linear-gradient(180deg,#141827,#0a0c13); }
+    /* the coach speaking louder: a proactive nudge burns amber, not violet */
+    .nudgeface { background:
+      radial-gradient(circle at 50% 36%, hsla(38,90%,58%,.66) 0%, hsla(38,90%,45%,.20) 42%, transparent 68%),
+      linear-gradient(180deg,#141827,#0a0c13); }
     .habitface { background:
       radial-gradient(circle at 50% 36%, hsla(var(--hue,222),72%,58%,.62) 0%, transparent 68%),
       linear-gradient(180deg,#141827,#0a0c13); }
@@ -198,7 +202,9 @@
 
     function slotFaceHtml(def, n) {
       if (def) {
-        return '<span class="facecss slotface"><span class="badge">AI ' + n + '</span>' +
+        const cls = def.nudge ? 'nudgeface' : 'slotface';
+        const badge = def.nudge ? '❗ ' + n : 'AI ' + n;
+        return '<span class="facecss ' + cls + '"><span class="badge">' + badge + '</span>' +
           '<span class="em">' + def.emoji + '</span><span class="lb">' + esc(def.label || def.habit) + '</span></span>' +
           '<span class="glass"></span><span class="flash"></span>';
       }
