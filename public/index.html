@@ -235,7 +235,11 @@
       const ago = Math.max(0, Date.now() - deck.at);
       const live = ago < 45000;
       const when = ago < 60000 ? `${Math.round(ago/1000)}s ago` : `${Math.round(ago/60000)}m ago`;
-      return `<div class="ai-note deckline" id="deckline" data-live="${live ? 1 : 0}">Physical deck: <b>${live ? 'live' : 'stale'}</b> · last poll ${when} · plugin ${deck.plugin || '?'} · ${deck.keys || 0} keys</div>`;
+      // plugin/keys originate in a query string, so they're attacker-shaped
+      // until proven otherwise: esc() the string, coerce the count to a number.
+      const plugin = deck.plugin ? esc(deck.plugin) : '?';
+      const nkeys = Number(deck.keys) || 0;
+      return `<div class="ai-note deckline" id="deckline" data-live="${live ? 1 : 0}">Physical deck: <b>${live ? 'live' : 'stale'}</b> · last poll ${when} · plugin ${plugin} · ${nkeys} keys</div>`;
     }
 
     function renderAi() {

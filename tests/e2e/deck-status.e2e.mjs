@@ -86,3 +86,23 @@ test('a deck that stopped polling reads as stale, not live', async () => {
   assert.match(text, /last poll 7m ago/);
   assert.equal(live, '0');
 });
+
+// `plugin` reaches Redis from a query string, so it must be treated as hostile
+// at render time regardless of what the write path allows through. The payload
+// below is exactly 20 chars — it fits the server's truncation, so the length cap
+// is not a defense.
+test('a markup payload in plugin renders as text, never as an element', async () => {
+  deck = { at: Date.now() - 2000, plugin: '<svg onload=alert()>', keys: 1 };
+  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('#deckline');
+  assert.equal(await page.$$eval('#deckline svg', (els) => els.length), 0, 'markup must not become a node');
+  assert.match(await page.$eval('#deckline', (e) => e.textContent), /<svg onload=alert\(\)>/);
+});
+
+test('a non-numeric key count is coerced, not interpolated', async () => {
+  deck = { at: Date.now() - 2000, plugin: '1.6.0', keys: '<b>oops</b>' };
+  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('#deckline');
+  assert.equal(await page.$$eval('#deckline b', (els) => els.length), 1, 'only the live/stale <b> belongs here');
+  assert.match(await page.$eval('#deckline', (e) => e.textContent), /·\s*0 keys/);
+});

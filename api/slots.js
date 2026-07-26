@@ -43,11 +43,18 @@ export default async function handler(req, res) {
 
     // ?deck=<pluginVersion> marks the physical deck's own poll. Recording it
     // after the response keeps the plugin's poll as cheap as it was.
-    if (q.deck) {
+    //
+    // This is the one WRITE on an otherwise read-only, open-CORS endpoint, so it
+    // honors the same HABIT_KEY gate as /api/log: without it, any anonymous
+    // caller could forge "the hardware is live" (the plugin sends ?key= too when
+    // the env var is set). `plugin` is still attacker-shaped when HABIT_KEY is
+    // unset — it's stripped of markup here and escaped again at render.
+    const secret = process.env.HABIT_KEY;
+    if (q.deck && (!secret || q.key === secret)) {
       waitUntil(
         setDeckState({
           at: Date.now(),
-          plugin: String(q.deck).slice(0, 20),
+          plugin: String(q.deck).replace(/[^\w.+-]/g, '').slice(0, 20),
           keys: Math.max(0, Math.min(64, parseInt(q.keys, 10) || 0))
         }).catch(() => {})
       );

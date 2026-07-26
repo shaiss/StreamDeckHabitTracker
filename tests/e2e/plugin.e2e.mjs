@@ -42,12 +42,17 @@ let server, browser, port;
 let slots = [SLOT_A, null, null, null];
 let pollUrls = [];
 let logUrls = [];
+let hangPolls = 0;        // hang this many upcoming /api/slots requests
+const hung = [];          // held-open responses, released on teardown
 
 before(async () => {
   server = createServer((req, res) => {
     const url = req.url.split('?')[0];
     if (url === '/api/slots') {
       pollUrls.push(req.url);
+      // Never answer: stands in for a backend that accepts the connection and
+      // then goes silent — the case that used to wedge the single-flight guard.
+      if (hangPolls > 0) { hangPolls--; hung.push(res); return; }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify({ configured: true, aiReady: true, model: 'glm-5.2', habits: HABITS, suggestedAt: 1, slots }));
       return;
@@ -71,7 +76,11 @@ before(async () => {
   browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
 });
 
-after(async () => { await browser?.close(); server?.close(); });
+after(async () => {
+  await browser?.close();
+  for (const res of hung) { try { res.destroy(); } catch { /* already gone */ } }
+  server?.close();
+});
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -147,6 +156,7 @@ async function bootAndSettle(opts) {
   slots = [SLOT_A, null, null, null];
   pollUrls = [];
   logUrls = [];
+  hangPolls = 0;
   const page = await boot(opts);
   // First poll landed and both faces painted from live state.
   await until(() => pollUrls.length >= 1, { label: 'first poll' , timeout: 15_000 });
@@ -214,6 +224,24 @@ test('the poll identifies itself so the backend can report live hardware', async
   // The first poll rides the first willAppear, so the count climbs as the deck
   // registers; once both keys are up, it must report both.
   await until(() => pollUrls.some((u) => /[?&]keys=2\b/.test(u)), { label: 'a poll reporting 2 live keys', timeout: 20_000 });
+  await page.close();
+});
+
+test('a hung poll cannot wedge the sync — the guard expires and it retries', async () => {
+  // Without a deadline on the single-flight guard, one silent request would
+  // block the worker beat, every WebSocket pump, and the backstop at once.
+  const page = await bootAndSettle({ killTimers: true });
+  const before = pollUrls.length;
+
+  hangPolls = 1;
+  // deviceDidConnect forces nextPollAt=0 and pumps, so the hung poll starts now.
+  await page.evaluate(() => window.__emit({ event: 'deviceDidConnect', device: 'dev-1' }));
+  await until(() => pollUrls.length === before + 1, { label: 'the hung poll to start', timeout: 10_000 });
+
+  // Nothing can answer it, so recovery has to come from the expiry path alone.
+  slots = [SLOT_B, null, null, null];
+  await until(() => pollUrls.length > before + 1, { label: 'a retry after the hung poll expired', timeout: 30_000 });
+  await until(async () => (await paintCount(page)) >= 3, { label: 'the swap to repaint', timeout: 20_000 });
   await page.close();
 });
 

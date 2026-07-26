@@ -147,7 +147,13 @@ interval. Four layers, and the fix depends on all of them:
 2. Wall-clock **deadlines** (`nextPollAt`, `rechecks[]`) re-evaluated on every
    wake instead of trusted to fire on time, so a throttled clock converges late
    rather than dropping work. `pump()` is the only scheduler; it's idempotent
-   and rate-limited by `nextPollAt` + the `inflight` single-flight guard.
+   and rate-limited by `nextPollAt` + the single-flight guard. That guard
+   (`inflightAt`) is itself a **deadline, not a boolean** — a silent backend
+   would otherwise wedge every layer at once, since `pump()` short-circuits
+   while a poll is in flight. `pump()` expires a stuck poll after
+   `POLL_TIMEOUT_MS`, aborts it, and bumps `pollSeq` so its late rejection
+   can't clear the guard belonging to the retry. Don't reach for `setTimeout`
+   here — page timers are the thing that doesn't fire.
 3. Every inbound Stream Deck WebSocket event calls `pump()`. That socket is a
    native push channel throttling can't touch, so any keypress/wake/device
    reconnect un-sticks a frozen page.
@@ -155,10 +161,16 @@ interval. Four layers, and the fix depends on all of them:
 
 Taps push a **chain** of rechecks (2/5/9/15/25s) because the reactive coach pass
 runs in the background after `/api/log` answers — one recheck often lands before
-the swap exists. The poll tags itself `?deck=<version>&keys=N`; `api/slots.js`
-records that as `habits:deck` so `/api/health` and the dashboard can say whether
-a *physical* deck is live (the only way to tell a dead plugin from a dead
-backend). `tests/e2e/plugin.e2e.mjs` loads the real `app.js` against a mock
+the swap exists. The poll tags itself `?deck=<version>&keys=N` (plus `?key=` when
+`HABIT_KEY` is set); `api/slots.js` records that as `habits:deck` so
+`/api/health` and the dashboard can say whether a *physical* deck is live (the
+only way to tell a dead plugin from a dead backend). That heartbeat is the **one
+write on an otherwise read-only, open-CORS endpoint**, so it honors the same
+`HABIT_KEY` gate as `/api/log` — otherwise anyone could forge "the hardware is
+live". `plugin` is query-string input all the way to the dashboard: stripped of
+non-`[\w.+-]` on write and `esc()`d again at render. Don't drop either end — the
+server's 20-char truncation is *not* a defense (`<svg onload=alert()>` is exactly
+20). `tests/e2e/plugin.e2e.mjs` loads the real `app.js` against a mock
 Stream Deck socket with page timers stubbed to no-ops — that suite is what keeps
 the throttling fix honest.
 

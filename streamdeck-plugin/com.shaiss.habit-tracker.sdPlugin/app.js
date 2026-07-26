@@ -45,11 +45,20 @@ var TICK_MS = 3000;       // heartbeat granularity; deadlines resolve on a tick
 // a single delay.
 var RECHECK_MS = [2000, 5000, 9000, 15000, 25000];
 
+// A hung fetch must not be able to wedge the sync: `inflight` is a wall-clock
+// DEADLINE, not a boolean, so pump() can expire and retry a stuck poll. Driving
+// this from setTimeout (as is idiomatic) would be self-defeating — page timers
+// are the thing that doesn't fire here.
+var POLL_TIMEOUT_MS = 10000;
+
 var ticker = null;
 var clockStarted = false;
 var nextPollAt = 0;       // wall-clock deadline for the routine poll
 var rechecks = [];        // pending wall-clock deadlines from taps
-var inflight = false;     // single-flight guard for /api/slots
+var inflightAt = 0;       // when the in-flight poll started; 0 = idle
+var inflightCtrl = null;  // AbortController for that poll, when supported
+var pollSeq = 0;          // generation, so an aborted poll's late rejection
+                          // can't clear the guard belonging to its replacement
 
 var VIOLET_HUE = 262;   // reserved: the coach speaking
 var NUDGE_HUE = 38;     // the coach speaking LOUDER — proactive nudge keys
@@ -194,6 +203,15 @@ function startClock() {
 function pump() {
   if (!liveKeys()) return;
   var now = Date.now();
+  // Expire a poll that never came back, so the layers below can retry. Without
+  // this the single-flight guard would outlive the request and stall every one
+  // of them — the exact staleness this file exists to prevent.
+  if (inflightAt && now - inflightAt > POLL_TIMEOUT_MS) {
+    if (inflightCtrl) { try { inflightCtrl.abort(); } catch (e) { /* best effort */ } }
+    inflightAt = 0;
+    inflightCtrl = null;
+    pollSeq++;            // orphan the stuck poll: its late settle is ignored
+  }
   var due = now >= nextPollAt;
   for (var i = rechecks.length - 1; i >= 0; i--) {
     if (now >= rechecks[i]) { rechecks.splice(i, 1); due = true; }
@@ -202,21 +220,40 @@ function pump() {
 }
 
 function refreshSlots() {
-  if (inflight) return;
-  var base = null;
-  for (var c in keys) { if ((isSlot(keys[c]) || isHabit(keys[c])) && keys[c].settings.base) { base = keys[c].settings.base; break; } }
+  if (inflightAt) return;
+  var base = null, secret = null;
+  for (var c in keys) {
+    if ((isSlot(keys[c]) || isHabit(keys[c])) && keys[c].settings.base) {
+      base = keys[c].settings.base;
+      secret = keys[c].settings.key || null;
+      break;
+    }
+  }
   if (!base) return;
-  inflight = true;
-  nextPollAt = Date.now() + POLL_MS;
+  var mySeq = ++pollSeq;
+  inflightAt = Date.now();
+  nextPollAt = inflightAt + POLL_MS;
   // ?deck= marks this as the hardware plugin's poll (not the dashboard's), so
   // the server can record a heartbeat and the dashboard can show whether a
-  // physical deck is actually live — see issue #5.
+  // physical deck is actually live — see issue #5. ?key= rides along because
+  // that heartbeat is a write, gated by HABIT_KEY when it's set.
   var url = base.replace(/\/+$/, '') + '/api/slots?deck=' + encodeURIComponent(VERSION) +
-    '&keys=' + liveKeys();
-  fetch(url)
+    '&keys=' + liveKeys() + (secret ? '&key=' + encodeURIComponent(secret) : '');
+  var opts;
+  if (typeof AbortController !== 'undefined') {
+    inflightCtrl = new AbortController();
+    opts = { signal: inflightCtrl.signal };
+  }
+  var settle = function () {
+    if (mySeq !== pollSeq) return false;   // pump() already gave up on us
+    inflightAt = 0;
+    inflightCtrl = null;
+    return true;
+  };
+  fetch(url, opts)
     .then(function (r) { return r.json(); })
     .then(function (j) {
-      inflight = false;
+      if (!settle()) return;
       var slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(j.slots || []);
       var habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(j.habits || []);
       slotCache = j.slots || [];
@@ -230,7 +267,7 @@ function refreshSlots() {
         } catch (e) { /* next poll retries this key */ }
       }
     })
-    .catch(function () { inflight = false; /* keep last faces on hiccups */ });
+    .catch(function () { settle(); /* keep last faces on hiccups */ });
 }
 
 // ---- key face rendering ---------------------------------------------------
