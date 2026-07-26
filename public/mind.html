@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Inside the Coach — Habit Tracker</title>
+  <style>
+    :root {
+      --ink: #eceef2; --ink2: #b6bcc6; --muted: #8a909c;
+      --card: rgba(255,255,255,.045); --line: rgba(255,255,255,.09);
+      --violet: #8b5cf6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background:
+        radial-gradient(60% 45% at 15% 10%, rgba(139,92,246,.16), transparent 60%),
+        radial-gradient(50% 40% at 85% 20%, rgba(37,99,235,.13), transparent 60%),
+        radial-gradient(70% 55% at 50% 100%, rgba(217,70,146,.10), transparent 65%),
+        linear-gradient(180deg, #0d0f16 0%, #0a0b11 100%);
+    }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 34px 20px 70px; }
+    header { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom: 6px; }
+    h1 { margin:0; font-size:24px; letter-spacing:-.01em; }
+    h1 .spark { filter: drop-shadow(0 0 12px rgba(139,92,246,.8)); }
+    .sub { color: var(--muted); font-size: 13px; }
+    .sub a { color:#8fb4ff; text-decoration:none; }
+    section { margin-top: 30px; }
+    h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:0 0 12px; font-weight:600; }
+
+    /* stat tiles — numbers wear ink, not color */
+    .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+    .tile { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; }
+    .tile .n { font-size:28px; font-weight:650; letter-spacing:-.02em; }
+    .tile .l { color:var(--muted); font-size:12.5px; margin-top:2px; }
+
+    /* core memories — glowing orbs (decoration, not data encoding) */
+    .orbs { display:flex; flex-direction:column; gap:10px; }
+    .orb {
+      display:flex; gap:14px; align-items:flex-start;
+      background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px 16px;
+    }
+    .orb .ball {
+      flex:0 0 26px; height:26px; margin-top:1px; border-radius:50%;
+      background: radial-gradient(circle at 32% 30%, rgba(255,255,255,.95), var(--c) 45%, color-mix(in oklab, var(--c), black 45%) 100%);
+      box-shadow: 0 0 14px color-mix(in oklab, var(--c), transparent 45%);
+    }
+    .orb .t { font-size:14.5px; line-height:1.55; color:var(--ink2); }
+    .orb.new { border-color: rgba(139,92,246,.4); }
+
+    /* intuitions — current slot keys, confidence from behavior */
+    .ints { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
+    .int { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px 16px; position:relative; }
+    .int .head { display:flex; align-items:center; gap:9px; }
+    .int .em { font-size:24px; filter:drop-shadow(0 0 10px rgba(139,92,246,.5)); }
+    .int .nm { font-weight:650; font-size:15px; }
+    .int .why { color:var(--muted); font-size:12.5px; line-height:1.5; margin-top:8px; }
+    .int .conf { margin-top:10px; font-size:11.5px; font-weight:700; letter-spacing:.05em; color:#a78bfa; }
+    .int.empty { color:var(--muted); display:flex; align-items:center; justify-content:center; min-height:90px; border-style:dashed; font-size:13px; }
+
+    .note { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px 18px; color:var(--ink2); font-size:14.5px; line-height:1.6; }
+    .note .d { color:var(--muted); font-size:12px; margin-bottom:6px; }
+    .empty { color:var(--muted); font-size:13.5px; padding:14px 2px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1><span class="spark">✨</span> Inside the Coach</h1>
+        <div class="sub" id="tagline">Loading its mind…</div>
+      </div>
+      <div class="sub"><a href="/">dashboard</a> · <a href="/deck.html">virtual deck</a></div>
+    </header>
+
+    <section><h2>Growing up</h2><div class="tiles" id="tiles"></div></section>
+    <section><h2>Core memories</h2><div class="orbs" id="orbs"><div class="empty">No memories yet — they form as the coach works.</div></div></section>
+    <section><h2>Intuitions right now</h2><div class="ints" id="ints"></div></section>
+    <section><h2>Last reflection</h2><div id="reflect"><div class="empty">The coach writes a reflection at the end of each day.</div></div></section>
+  </div>
+
+  <script>
+    const ORB_COLORS = ['#8b5cf6','#3f7ee8','#d9468f','#2fa47a','#d98f2f']; // decorative, per-memory
+    const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+
+    fetch('/api/mind').then(r=>r.json()).then(m => {
+      if (!m.configured) { document.getElementById('tagline').textContent = 'Storage not connected yet.'; return; }
+      const s = m.stats || {};
+      document.getElementById('tagline').textContent =
+        (m.humanName ? `Learning ${esc(m.humanName)}` : 'Learning its human') +
+        ` for ${s.daysTogether} day${s.daysTogether===1?'':'s'} · thinking with ${m.model}`;
+
+      // growth tiles
+      const tr = m.track?.overall || { offered: 0, landed: 0, hitRate: 0 };
+      document.getElementById('tiles').innerHTML = [
+        [s.tapsObserved ?? 0, 'taps observed'],
+        [s.ideasTried ?? 0, 'ideas tried'],
+        [tr.landed, 'intuitions that landed'],
+        [tr.offered ? Math.round(tr.hitRate*100) + '%' : '—', 'intuition hit rate']
+      ].map(([n,l]) => `<div class="tile"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+
+      // core memories: the coach's own notes, split into thoughts
+      const notes = (m.memory?.notes || '').split(/\n+|(?<=[.!?])\s+(?=[A-Z"“])/).map(t=>t.trim()).filter(t=>t.length>8);
+      if (notes.length) {
+        document.getElementById('orbs').innerHTML = notes.slice(0, 10).map((t,i) =>
+          `<div class="orb"><span class="ball" style="--c:${ORB_COLORS[i%ORB_COLORS.length]}"></span><span class="t">${esc(t)}</span></div>`
+        ).join('');
+      }
+
+      // intuitions: current slots + behavioral confidence
+      const per = Object.fromEntries((m.track?.perHabit||[]).map(r=>[r.habit,r]));
+      const conf = (h) => {
+        const r = per[h];
+        if (!r || r.offered < 1) return 'NEW INTUITION';
+        if (r.taps === 0) return 'TESTING · not yet felt';
+        if (r.hitRate >= 0.6) return `TRUSTED · landed ${r.landed}/${r.offered}`;
+        return `FORMING · landed ${r.landed}/${r.offered}`;
+      };
+      document.getElementById('ints').innerHTML = (m.slots||[]).map((d,i) => d
+        ? `<div class="int"><div class="head"><span class="em">${d.emoji}</span><span class="nm">${esc(d.label||d.habit)}</span></div>
+             <div class="why">${esc(d.reason||'')}</div><div class="conf">${conf(d.habit)}</div></div>`
+        : `<div class="int empty">quiet corner ${i+1}</div>`
+      ).join('');
+
+      // reflection
+      if (m.insight?.text) {
+        document.getElementById('reflect').innerHTML =
+          `<div class="note"><div class="d">${esc(m.insight.date||'')}</div>${esc(m.insight.text)}</div>`;
+      }
+    }).catch(() => {
+      document.getElementById('tagline').textContent = 'Couldn’t reach the coach — refresh to retry.';
+    });
+  </script>
+</body>
+</html>
