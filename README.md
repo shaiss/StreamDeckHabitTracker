@@ -71,10 +71,22 @@ Flags: `--key=yourword` if you set a secret (below), `--model=xl|mini|original`
 to match your hardware (default `mk2`, the standard 15-key Stream Deck),
 `--no-dashboard` to drop the Stats key, `--dashboard=URL` to point it elsewhere.
 
-**Icons:** the [`icons/`](icons/) folder holds a PNG per habit (plus `_dashboard.png`).
-They're already embedded in the profile, so an import shows them automatically.
-If you add buttons manually instead, drag the matching PNG onto each key. To
-re-render after editing habits: `npm i playwright-core --no-save && node tools/make-icons.mjs`.
+**Icons:** two sets, both committed:
+- [`icons/animated/`](icons/animated/) — looping GIFs (24 frames, 1.92 s), embedded
+  in the profile by default.
+- [`icons/`](icons/) — still PNGs (576×576). Used with `--static`, or drag one
+  onto a key manually.
+
+Format choice, for the record: the Stream Deck app accepts SVG/PNG/JPEG stills
+and GIF/WEBP animation. We use **PNG for stills** (our art is color-emoji glyphs,
+which render inconsistently as SVG text and gain nothing from vectors on a
+72–96 px key) and **GIF for animation** (the most widely supported animated
+format on keys). If an imported profile ever shows only the first frame, drag
+the `.gif` from `icons/animated/` onto the key — the app plays dragged GIFs.
+
+To re-render after editing habits:
+`npm i playwright-core pngjs gifenc --no-save`, then `node tools/make-icons.mjs`
+(stills) and `node tools/make-animations.mjs` (GIFs).
 
 ### Step 3 — Put them on the Stream Deck (~1 min)
 1. In the Stream Deck app, open the **Marketplace** and install **"Web

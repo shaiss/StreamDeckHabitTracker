@@ -58,10 +58,17 @@ if (!dashboardUrl && !noDashboard) {
   try { dashboardUrl = new URL(execBase).origin + '/'; } catch { /* leave unset */ }
 }
 
-// Embed a PNG from icons/ as a data URI (baked into the profile).
+// Embed a key icon as a data URI (baked into the profile). Prefers the
+// animated GIF in icons/animated/ unless --static is passed; falls back to
+// the still PNG in icons/.
+const useStatic = args.includes('--static');
 const iconDataUri = (name) => {
-  const p = join(ROOT, 'icons', `${name}.png`);
-  return existsSync(p) ? 'data:image/png;base64,' + readFileSync(p).toString('base64') : '';
+  const gif = join(ROOT, 'icons/animated', `${name}.gif`);
+  if (!useStatic && existsSync(gif)) {
+    return 'data:image/gif;base64,' + readFileSync(gif).toString('base64');
+  }
+  const png = join(ROOT, 'icons', `${name}.png`);
+  return existsSync(png) ? 'data:image/png;base64,' + readFileSync(png).toString('base64') : '';
 };
 
 // ---- read habits ----------------------------------------------------------
@@ -89,7 +96,7 @@ const urlsTxt =
       `Action: System -> Website (built-in). Opens the dashboard in a browser.\n` +
       `Title: 📊 Stats\n  URL: ${dashboardUrl}`
     : '') +
-  `\n\nCustom icons are in the icons/ folder (drag onto a key to set its image).\n`;
+  `\n\nIcons: animated GIFs in icons/animated/, stills in icons/ (drag one onto a key to set its image).\n`;
 writeFileSync(join(ROOT, 'dist/urls.txt'), urlsTxt);
 
 // ---- 2) .streamDeckProfile (convenience) ----------------------------------
@@ -185,11 +192,14 @@ console.log('  - urls.txt                      (paste these into your buttons - 
 console.log('  - Habit Tracker.streamDeckProfile  (double-click to import - convenience)\n');
 console.log(`Base URL : ${execBase}`);
 const iconsFound = habits.filter((h) => iconDataUri(h.name)).length;
+const animCount = useStatic
+  ? 0
+  : habits.filter((h) => existsSync(join(ROOT, 'icons/animated', `${h.name}.gif`))).length;
 console.log(
   `Habits   : ${habits.length}   Deck: ${modelArg} (${cols} cols)   Key: ${key ? 'yes' : 'none'}`
 );
 console.log(
-  `Icons    : ${iconsFound}/${habits.length} embedded   Dashboard key: ${dashboardUrl || 'off'}\n`
+  `Icons    : ${iconsFound}/${habits.length} embedded (${animCount} animated)   Dashboard key: ${dashboardUrl || 'off'}\n`
 );
 for (const r of rows) console.log('  ' + r);
 if (dashboardUrl) console.log('  📊 Stats        ' + dashboardUrl);
