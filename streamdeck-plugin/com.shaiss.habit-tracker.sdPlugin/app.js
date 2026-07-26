@@ -22,6 +22,7 @@ var REACT_RECHECK_MS = 9000; // the coach reacts to taps in the background;
                              // re-poll shortly after a tap to catch the swap
 
 var VIOLET_HUE = 262;   // reserved: the coach speaking
+var NUDGE_HUE = 38;     // the coach speaking LOUDER — proactive nudge keys
 var SILVER_HUE = 222;   // neutral / pending
 
 // ---- Stream Deck registration (the app calls this global) -----------------
@@ -137,7 +138,7 @@ function render(context) {
   var k = keys[context];
   if (!k) return;
   var s = k.settings;
-  if (!s.base) { setImage(context, face('⚙️', 'setup', SETUP_COLORS, '')); return; }
+  if (!s.base) { setImage(context, face('⚙️', 'setup', SILVER_HUE, '')); return; }
   if (isHabit(k)) {
     var idx = +s.index || 0;
     var def = habitCache ? habitCache[idx] : null;
@@ -148,7 +149,10 @@ function render(context) {
   }
   var n = parseInt(s.slot, 10) || 1;
   var def = slotCache ? slotCache[n - 1] : null;
-  if (def) {
+  if (def && def.nudge) {
+    // Proactive nudge: amber halo + ❗ so the poke reads across the room.
+    setImage(context, face(def.emoji || '✨', def.label || def.habit, NUDGE_HUE, '❗ ' + n, 90));
+  } else if (def) {
     setImage(context, face(def.emoji || '✨', def.label || def.habit, VIOLET_HUE, 'AI ' + n));
   } else {
     setImage(context, face('✨', 'Slot ' + n, SILVER_HUE, 'AI', 22));

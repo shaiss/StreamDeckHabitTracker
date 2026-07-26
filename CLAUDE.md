@@ -58,6 +58,9 @@ ships with a regression test. After merging, also probe the live deployment:
 - `GET /api/slots` — current AI slot assignments
 - `GET /api/log?habit=Test` — writes a real row (`?slot=N` for slot keys)
 - `GET /api/suggest?run=1` (or POST) — full AI refresh; 30s cooldown
+- `GET /api/nudge` — proactive-nudge state + gate evaluation (`?run=1` forces
+  a nudge pass, bypassing the gates; 30s cooldown, may repaint a slot key —
+  the passive loop rides the plugin's /api/slots poll, no cron)
 - `GET /api/roster` — pending roster proposals + retirement archive
   (`?run=1` forces a coach roster pass; 30s cooldown)
 - `GET /api/experiment?run=1&models=a,b&n=3` — replay captured coach contexts

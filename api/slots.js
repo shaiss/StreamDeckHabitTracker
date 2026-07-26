@@ -1,10 +1,12 @@
 // GET /api/slots -> { configured, aiReady, model, suggestedAt, slots: [def|null x4] }
 // def = { habit, emoji, label, reason, assignedAt }
 // Read by the dashboard and by the Stream Deck plugin (CORS open, read-only).
+import { waitUntil } from '@vercel/functions';
 import { getSlots, isConfigured, getSlotHistory, all } from '../lib/store.js';
 import { zaiKey, zaiModel } from '../lib/ai.js';
 import { getHabits } from '../lib/habits.js';
 import { scoreSuggestions } from '../lib/scorer.js';
+import { nudgePass } from '../lib/coach.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -31,6 +33,15 @@ export default async function handler(req, res) {
       out.track = scoreSuggestions(history, entries);
     }
     res.status(200).json(out);
+
+    // The deck's own heartbeat drives proactivity: the plugin polls this
+    // endpoint every ~15s (dashboard every 20s), so a throttled background
+    // nudge check rides on it — no cron, and a deck that's off nudges no one.
+    // nudgePass gates itself in Redis (one read on almost every poll) before
+    // doing anything expensive; the response above is already gone.
+    if (base.aiReady) {
+      waitUntil(nudgePass().catch(() => {}));
+    }
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }
