@@ -90,8 +90,11 @@ server-side (`?hkey=`/`?slot=`). No property inspector, no hardcoded server —
 per-key Settings come from the generator. Untested on physical hardware as of
 writing.
 
-**Asset pipeline** (`tools/`): `config/habits.json` is the single source for
-habits (name = logged id + URL param; label/emoji = display). Icons and
+**Asset pipeline** (`tools/`): generators read the LIVE habit list from
+`/api/habits` (tools/lib-habits.mjs), falling back loudly to
+`config/habits.json` when the deployment is unreachable — which is always the
+case in this sandbox, so sync the config from the live API before rebuilding
+here (see the rebuild-artifacts skill). Icons and
 animations are rendered in headless Chromium (emoji via Noto Color Emoji) and
 committed. `generate.mjs` builds `.streamDeckProfile` files — zips (via
 `lib-zip.mjs`, hand-rolled writer, no deps) containing profile manifests with

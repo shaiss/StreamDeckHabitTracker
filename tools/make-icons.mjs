@@ -12,6 +12,7 @@ import { readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { chromium } from 'playwright-core';
+import { loadHabits } from './lib-habits.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -60,7 +61,10 @@ export function nocturneFace(emoji, label, hue, { badge = '', sat = 72 } = {}) {
 // Allow import without side effects (make-animations reuses the template).
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   mkdirSync(join(ROOT, 'icons'), { recursive: true });
-  const { habits } = JSON.parse(readFileSync(join(ROOT, 'config/habits.json'), 'utf8'));
+  const base = process.argv.find((a) => a.startsWith('--base='))?.slice(7) ||
+    process.env.HABITS_BASE || 'https://stream-deck-habit-tracker.vercel.app';
+  const { habits, source } = await loadHabits(base, ROOT);
+  console.log('habits from ' + source);
 
   const jobs = habits.map((h) => ({
     name: h.name, emoji: h.emoji, label: h.label, hue: hueFor(h.name), opts: {}

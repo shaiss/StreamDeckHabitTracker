@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { hueFor, nocturneFace } from './make-icons.mjs';
+import { loadHabits } from './lib-habits.mjs';
 import { PNG } from 'pngjs';
 import gifenc from 'gifenc';
 const { GIFEncoder, quantize, applyPalette } = gifenc;
@@ -126,7 +127,10 @@ async function captureGif(page, html, outPath, probeDir) {
 
 const OUT = join(ROOT, 'icons/animated');
 mkdirSync(OUT, { recursive: true });
-const { habits } = JSON.parse(readFileSync(join(ROOT, 'config/habits.json'), 'utf8'));
+const base = process.argv.find((a) => a.startsWith('--base='))?.slice(7) ||
+  process.env.HABITS_BASE || 'https://stream-deck-habit-tracker.vercel.app';
+const { habits, source } = await loadHabits(base, ROOT);
+console.log('habits from ' + source);
 // Probe frames for visual QA go to the scratchpad if provided, else skipped.
 const probeDir = process.env.PROBE_DIR || '';
 if (probeDir) mkdirSync(probeDir, { recursive: true });
