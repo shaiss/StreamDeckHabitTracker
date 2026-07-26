@@ -58,6 +58,8 @@ ships with a regression test. After merging, also probe the live deployment:
 - `GET /api/slots` — current AI slot assignments
 - `GET /api/log?habit=Test` — writes a real row (`?slot=N` for slot keys)
 - `GET /api/suggest?run=1` (or POST) — full AI refresh; 30s cooldown
+- `GET /api/roster` — pending roster proposals + retirement archive
+  (`?run=1` forces a coach roster pass; 30s cooldown)
 - `GET /api/experiment?run=1&models=a,b&n=3` — replay captured coach contexts
   against multiple models, rule-scored (lib/quality.js); CI wrapper in
   .github/workflows/coach-experiment.yml
@@ -79,6 +81,16 @@ Vercel MCP `web_fetch_vercel_url` tool to probe the live site.
   `@vercel/functions`, 45s cooldown claimed in Redis *before* the model call to
   prevent double-fire). Both sanitize model output hard (`sanitize()`) and
   replace all 4 slots atomically.
+- `lib/roster.js` — the **self-managing roster**: the coach proposes changes to
+  the *fixed* habit list (`rosterPass()` in coach.js, run by the morning cron
+  after the keys pass and never allowed to fail it). Proposals only ever queue;
+  a human decision in the habit manager applies one (`api/roster.js`). Pure
+  functions, so the rules are unit-tested without Redis. Invariants worth
+  keeping: nothing self-applies, the projected roster stays within 1..10 in any
+  approval order, retirement is soft (archived + restorable, `habits:log`
+  untouched), and a dismissal is remembered in `rejected` so the coach stops
+  re-asking. Roster passes are deliberately **not** captured into the dataset —
+  that corpus and `lib/quality.js` are slot-shaped.
 - `api/log.js` — resolves `?slot=N` to the *current* assignment at tap time and
   stores the habit name+emoji in the entry, so history stays truthful after
   swaps. Responds before the reactive pass runs.
