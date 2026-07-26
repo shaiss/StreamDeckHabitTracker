@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { hueFor } from '../../tools/make-icons.mjs';
+import { hueFor } from '../../tools/lib-hue.mjs';
 
 test('habit hues never land in the reserved violet band', () => {
   for (const n of ['Pee', 'Poop', 'Eat', 'Drink', 'Exercise', 'Cannabis', 'Bedtime', 'Caffeine', 'Mood', 'Stretch']) {
@@ -16,7 +16,7 @@ test('the five fixed habits stay well separated', () => {
 });
 
 test('plugin and virtual deck embed the identical FNV-1a formula (drift guard)', () => {
-  for (const f of ['streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/app.js', 'public/deck.html']) {
+  for (const f of ['streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/app.js', 'public/deck.html', 'tools/lib-hue.mjs']) {
     const src = readFileSync(new URL('../../' + f, import.meta.url), 'utf8');
     for (const marker of ['2166136261', '16777619', '% 320', '245']) {
       assert.ok(src.includes(marker), `${f} missing hue-formula marker ${marker}`);

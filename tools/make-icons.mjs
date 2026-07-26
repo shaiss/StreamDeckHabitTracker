@@ -21,16 +21,10 @@ const EXE =
   (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
 const SIZE = 288;
 
-// Identical to the plugin's hueFor() — hue is the habit's identity for life.
-export function hueFor(name) {
-  // FNV-1a for spread, then skip the reserved violet band [245,285) — violet
-  // always means "the coach speaking", never a habit.
-  let h = 2166136261;
-  for (let i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
-  let hue = h % 320;
-  if (hue >= 245) hue += 40;
-  return hue;
-}
+// Identical to the plugin's hueFor() — lives in lib-hue.mjs so the unit
+// tests can import it without pulling in playwright-core.
+export { hueFor } from './lib-hue.mjs';
+import { hueFor } from './lib-hue.mjs';
 
 const VIOLET = 262; // reserved: the coach speaking
 const SILVER = 222; // neutral (stats)
