@@ -57,8 +57,6 @@ ships with a regression test. After merging, also probe the live deployment:
 - `GET /api/health` — storage + AI wiring (env var names only; never values)
 - `GET /api/slots` — current AI slot assignments
 - `GET /api/log?habit=Test` — writes a real row (`?slot=N` for slot keys)
-- `GET /api/nl?run=1&text=...` — natural-language parse (model call, proposal
-  only, no write; the dashboard's "Tell the coach" box commits via POST)
 - `GET /api/suggest?run=1` (or POST) — full AI refresh; 30s cooldown
 - `GET /api/roster` — pending roster proposals + retirement archive
   (`?run=1` forces a coach roster pass; 30s cooldown)
