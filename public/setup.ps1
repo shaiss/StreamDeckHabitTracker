@@ -16,7 +16,9 @@ $base = 'https://stream-deck-habit-tracker.vercel.app'
 $dl = Join-Path $env:USERPROFILE 'Downloads'
 $sdData = Join-Path $env:APPDATA 'Elgato\StreamDeck'
 $pluginsDir = Join-Path $sdData 'Plugins'
-$profilesDir = Join-Path $sdData 'ProfilesV2'
+# Profile storage moved between app generations: ProfilesV2 (Stream Deck 6.x)
+# vs ProfilesV3 (7.x). Clean both - an upgraded machine can carry either.
+$profileDirs = @((Join-Path $sdData 'ProfilesV2'), (Join-Path $sdData 'ProfilesV3'))
 $pluginId = 'com.shaiss.habit-tracker.sdPlugin'
 $profileFile = 'HabitTracker-MK2.streamDeckProfile'
 
@@ -86,7 +88,8 @@ foreach ($id in $pluginId, 'com.kalmansforge.habit-tracker.sdPlugin') {
   $p = Join-Path $pluginsDir $id
   if (Test-Path $p) { Remove-Item $p -Recurse -Force; $removed += "plugin $id" }
 }
-if (Test-Path $profilesDir) {
+foreach ($profilesDir in $profileDirs) {
+  if (-not (Test-Path $profilesDir)) { continue }
   Get-ChildItem $profilesDir -Directory -Filter '*.sdProfile' | ForEach-Object {
     $mf = Join-Path $_.FullName 'manifest.json'
     if (Test-Path $mf) {

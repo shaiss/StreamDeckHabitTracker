@@ -97,10 +97,18 @@ async function until(pred, { timeout = 30_000, label = 'condition' } = {}) {
 // Boot the plugin page with a fake Stream Deck socket. `killTimers` stubs the
 // page's setInterval/setTimeout into no-ops, standing in for a fully throttled
 // or frozen hidden page — the worst case the fix has to survive.
-async function boot({ killTimers = false, breakWorkerScript = false } = {}) {
-  const page = await browser.newPage();
+async function boot({ killTimers = false, breakWorkerScript = false, userAgent } = {}) {
+  const page = await browser.newPage(userAgent ? { userAgent } : {});
   await page.addInitScript(({ kill, breakWorker }) => {
     window.__sent = [];
+    // Count every Worker construction — Stream Deck 7's QtWebEngine kills the
+    // renderer process on Worker creation, so "zero workers" is an assertable
+    // safety property there, not an implementation detail.
+    window.__workerCount = 0;
+    if (window.Worker) {
+      const RealW = window.Worker;
+      window.Worker = function (u) { window.__workerCount++; return new RealW(u); };
+    }
     if (kill) {
       window.setInterval = function () { return 0; };
       window.setTimeout = function () { return 0; };
@@ -183,6 +191,28 @@ test('the poll clock survives dead page timers (the worker beat carries it)', as
   const page = await bootAndSettle({ killTimers: true });
   const before = pollUrls.length;
   await until(() => pollUrls.length > before, { label: 'a worker-driven poll' });
+  await page.close();
+});
+
+test('QtWebEngine (Stream Deck 7.x): no Worker is ever constructed, page clock carries the poll', async () => {
+  // SD 7.x runs legacy HTML plugins under QtWebEngine, where constructing a
+  // Worker kills the renderer process outright — the plugin crash-loops and
+  // the app disables it ("Plugin is unstable"). The only safe posture there
+  // is to never construct one; the page setInterval is the clock instead.
+  slots = [SLOT_A, null, null, null];
+  pollUrls = [];
+  const page = await boot({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) StreamDeck/7.5 Chrome/118.0.0.0 Safari/537.36 QtWebEngine/6.6.0'
+  });
+  await until(() => pollUrls.length >= 1, { label: 'first poll under QtWebEngine', timeout: 15_000 });
+  assert.equal(await page.evaluate(() => window.__workerCount), 0, 'no Worker may be constructed under QtWebEngine');
+  assert.ok(await page.evaluate(() => window.__ticker === undefined), 'no ticker handle should exist');
+
+  // The page timer must still carry the routine poll and repaint swaps.
+  await until(async () => (await paintCount(page)) >= 2, { label: 'initial faces', timeout: 15_000 });
+  const before = await paintCount(page);
+  slots = [SLOT_B, null, null, null];
+  await until(async () => (await paintCount(page)) > before, { label: 'swap repaint via page clock' });
   await page.close();
 });
 

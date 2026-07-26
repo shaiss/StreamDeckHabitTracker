@@ -144,6 +144,15 @@ go stale (issue #5). Do not "simplify" the clock in `app.js` back to a bare
 interval. Four layers, and the fix depends on all of them:
 1. `ticker.js` — a Web Worker beat (3s), off-thread where throttling doesn't
    apply. Same workaround Elgato shipped as `streamdeck-timerfix`.
+   ⚠️ **CEF only.** Stream Deck 7.x runs legacy HTML plugins under
+   **QtWebEngine**, and constructing a Worker there (sibling script OR blob)
+   **kills the renderer process** — not a catchable JS error. The plugin
+   crash-loops on a 10s cadence ("terminated with status 1 and code 18" in
+   `%APPDATA%\Elgato\StreamDeck\logs\StreamDeck.log`) until the app disables
+   it ("Plugin is unstable and was disabled") — keys then show the yellow
+   triangle on tap. `startClock()` gates all worker creation behind
+   `isQtWebEngine()` (UA sniff); under QtWebEngine the page `setInterval` is
+   the clock, which that embedder keeps serviceable. Never remove that gate.
 2. Wall-clock **deadlines** (`nextPollAt`, `rechecks[]`) re-evaluated on every
    wake instead of trusted to fire on time, so a throttled clock converges late
    rather than dropping work. `pump()` is the only scheduler; it's idempotent
@@ -189,14 +198,18 @@ layout. `build-plugin.mjs` packages the `.sdPlugin` folder the same way.
 **Distribution** (`public/downloads/` + `public/setup.ps1`): built artifacts
 are committed and served by Vercel. Windows bootstrap one-liner:
 `irm https://stream-deck-habit-tracker.vercel.app/setup.ps1 | iex`.
-The script is a **clean reinstall** and the supported upgrade path: it stops
-the Stream Deck app, removes prior installs (both plugin ids —
-`com.shaiss.…` and the legacy `com.kalmansforge.…` — plus any
-`Habit Tracker*` profiles found in `ProfilesV2` by manifest Name), extracts
-the plugin zip straight into `%APPDATA%\Elgato\StreamDeck\Plugins` (silent —
-no app prompt, no "already installed" refusal), relaunches the app, and
-imports the profile (the one prompt left). Keep it PowerShell-5.1-safe and
-`irm | iex`-safe: no `$PSScriptRoot`, no param blocks, no pwsh-7-only syntax.
+The script is a **clean reinstall** and the supported upgrade path: it
+downloads + stages + validates first (fail closed — nothing destructive
+until the replacement is proven good), then stops the Stream Deck app,
+removes prior installs (both plugin ids — `com.shaiss.…` and the legacy
+`com.kalmansforge.…` — plus any `Habit Tracker*` profiles found in
+**both** `ProfilesV2` (SD 6.x) and `ProfilesV3` (SD 7.x) by manifest Name),
+copies the staged plugin into `%APPDATA%\Elgato\StreamDeck\Plugins` (silent —
+no app prompt, no "already installed" refusal), relaunches the app (which
+also re-enables a plugin SD had marked unstable), and imports the profile
+(the one prompt left). Keep it PowerShell-5.1-safe and `irm | iex`-safe:
+no `$PSScriptRoot`, no param blocks, no pwsh-7-only syntax, **pure ASCII**
+(irm decodes charset-less text as ISO-8859-1).
 After changing the plugin or generator, **rebuild and re-commit the artifacts**
 — they don't rebuild themselves (Vercel runs no build step; `dist/` is
 gitignored scratch, `public/downloads/` is the published copy).
