@@ -25,6 +25,7 @@ You don't write or run any code.
 | Live dashboard | [`public/index.html`](public/index.html) | ✅ deployed |
 | Storage layer (KV/Upstash) | [`lib/store.js`](lib/store.js) | ✅ deployed |
 | Button generator | [`tools/generate.mjs`](tools/generate.mjs) | ✅ one command |
+| Custom key icons | [`icons/`](icons/) + [`tools/make-icons.mjs`](tools/make-icons.mjs) | ✅ pre-rendered |
 | Habit list you can edit | [`config/habits.json`](config/habits.json) | ✅ 5 defaults |
 
 ## The two things only you can do
@@ -63,10 +64,17 @@ node tools/generate.mjs "https://stream-deck-habit-tracker.vercel.app/api/log"
 
 This writes into `dist/`:
 - **`urls.txt`** — the exact URL for every button (the reliable path).
-- **`Habit Tracker.streamDeckProfile`** — a double-click-to-import profile.
+- **`Habit Tracker.streamDeckProfile`** — a double-click-to-import profile with
+  the custom icons baked in and a 6th **📊 Stats** key that opens the dashboard.
 
-Add `--key=yourword` if you set a secret (below), and `--model=xl|mini|original`
-to match your hardware (default `mk2`, the standard 15-key Stream Deck).
+Flags: `--key=yourword` if you set a secret (below), `--model=xl|mini|original`
+to match your hardware (default `mk2`, the standard 15-key Stream Deck),
+`--no-dashboard` to drop the Stats key, `--dashboard=URL` to point it elsewhere.
+
+**Icons:** the [`icons/`](icons/) folder holds a PNG per habit (plus `_dashboard.png`).
+They're already embedded in the profile, so an import shows them automatically.
+If you add buttons manually instead, drag the matching PNG onto each key. To
+re-render after editing habits: `npm i playwright-core --no-save && node tools/make-icons.mjs`.
 
 ### Step 3 — Put them on the Stream Deck (~1 min)
 1. In the Stream Deck app, open the **Marketplace** and install **"Web

@@ -10,7 +10,7 @@
 //
 // Zero dependencies. Needs only Node 16+.
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -50,6 +50,20 @@ if (!base || !/^https?:\/\//.test(base)) {
 }
 const execBase = base.replace(/\?.*$/, '').replace(/\/+$/, '');
 
+// Dashboard key: opens a URL in the browser. Defaults to the site root of the
+// log endpoint (e.g. https://host/api/log -> https://host/). --no-dashboard skips.
+const noDashboard = args.includes('--no-dashboard');
+let dashboardUrl = getOpt('dashboard');
+if (!dashboardUrl && !noDashboard) {
+  try { dashboardUrl = new URL(execBase).origin + '/'; } catch { /* leave unset */ }
+}
+
+// Embed a PNG from icons/ as a data URI (baked into the profile).
+const iconDataUri = (name) => {
+  const p = join(ROOT, 'icons', `${name}.png`);
+  return existsSync(p) ? 'data:image/png;base64,' + readFileSync(p).toString('base64') : '';
+};
+
 // ---- read habits ----------------------------------------------------------
 const { habits } = JSON.parse(readFileSync(join(ROOT, 'config/habits.json'), 'utf8'));
 if (!Array.isArray(habits) || habits.length === 0) {
@@ -70,7 +84,12 @@ const urlsTxt =
   `Web Request buttons (Method: GET). One per key.\n` +
   `Plugin: "Web Requests" by data-enabler (install from the Stream Deck Marketplace).\n\n` +
   habits.map((h) => `Title: ${h.emoji} ${h.label}\n  URL: ${buildUrl(h)}\n  Method: GET`).join('\n\n') +
-  `\n`;
+  (dashboardUrl
+    ? `\n\n--- Dashboard key (optional) ---\n` +
+      `Action: System -> Website (built-in). Opens the dashboard in a browser.\n` +
+      `Title: 📊 Stats\n  URL: ${dashboardUrl}`
+    : '') +
+  `\n\nCustom icons are in the icons/ folder (drag onto a key to set its image).\n`;
 writeFileSync(join(ROOT, 'dist/urls.txt'), urlsTxt);
 
 // ---- 2) .streamDeckProfile (convenience) ----------------------------------
@@ -82,6 +101,7 @@ const actions = {};
 habits.forEach((h, i) => {
   const col = i % cols;
   const row = Math.floor(i / cols);
+  const img = iconDataUri(h.name);
   actions[`${col},${row}`] = {
     ActionID: randomUUID().toUpperCase(),
     Name: 'HTTP Request',
@@ -93,16 +113,46 @@ habits.forEach((h, i) => {
         FSize: '14',
         FStyle: '',
         FUnderline: 'off',
-        Image: '',
+        Image: img,
         Title: `${h.emoji} ${h.label}`,
         TitleAlignment: 'middle',
         TitleColor: '#ffffff',
-        TitleShow: true
+        // The icon already has the label baked in; only show a text title as a
+        // fallback when there's no icon.
+        TitleShow: img ? false : true
       }
     ],
     UUID: 'gg.datagram.web-requests.http'
   };
 });
+
+// 6th key: open the dashboard in a browser (built-in Website action).
+if (dashboardUrl) {
+  const i = habits.length;
+  const col = i % cols;
+  const row = Math.floor(i / cols);
+  const img = iconDataUri('_dashboard');
+  actions[`${col},${row}`] = {
+    ActionID: randomUUID().toUpperCase(),
+    Name: 'Website',
+    Settings: { path: dashboardUrl, openInBrowser: true },
+    State: 0,
+    States: [
+      {
+        FFamily: '',
+        FSize: '14',
+        FStyle: '',
+        FUnderline: 'off',
+        Image: img,
+        Title: '📊 Stats',
+        TitleAlignment: 'middle',
+        TitleColor: '#ffffff',
+        TitleShow: img ? false : true
+      }
+    ],
+    UUID: 'com.elgato.streamdeck.system.website'
+  };
+}
 
 const outerManifest = {
   AppIdentifier: '',
@@ -134,8 +184,15 @@ console.log('\nGenerated in dist/:');
 console.log('  - urls.txt                      (paste these into your buttons - always works)');
 console.log('  - Habit Tracker.streamDeckProfile  (double-click to import - convenience)\n');
 console.log(`Base URL : ${execBase}`);
-console.log(`Habits   : ${habits.length}   Deck: ${modelArg} (${cols} cols)   Key: ${key ? 'yes' : 'none'}\n`);
+const iconsFound = habits.filter((h) => iconDataUri(h.name)).length;
+console.log(
+  `Habits   : ${habits.length}   Deck: ${modelArg} (${cols} cols)   Key: ${key ? 'yes' : 'none'}`
+);
+console.log(
+  `Icons    : ${iconsFound}/${habits.length} embedded   Dashboard key: ${dashboardUrl || 'off'}\n`
+);
 for (const r of rows) console.log('  ' + r);
+if (dashboardUrl) console.log('  📊 Stats        ' + dashboardUrl);
 console.log('');
 
 // ---- tiny zero-dep ZIP writer (DEFLATE) -----------------------------------
