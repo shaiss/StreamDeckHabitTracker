@@ -21,8 +21,8 @@ var POLL_MS = 15000;
 var REACT_RECHECK_MS = 9000; // the coach reacts to taps in the background;
                              // re-poll shortly after a tap to catch the swap
 
-var SLOT_COLORS = ['#8b5cf6', '#5b21b6'];   // violet — the AI's color
-var SETUP_COLORS = ['#6b7280', '#374151'];
+var VIOLET_HUE = 262;   // reserved: the coach speaking
+var SILVER_HUE = 222;   // neutral / pending
 
 // ---- Stream Deck registration (the app calls this global) -----------------
 window.connectElgatoStreamDeckSocket = function (port, pluginUUID, registerEvent) {
@@ -67,13 +67,16 @@ function handle(ev) {
 function isSlot(k) { return k && /\.slot$/.test(k.action); }
 function isHabit(k) { return k && /\.habit$/.test(k.action); }
 
-// Stable per-habit color derived from the name, so a habit keeps its color
-// even when the manager reorders the list.
-function colorFor(name) {
-  var h = 0;
-  for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  var hue = h % 360;
-  return ['hsl(' + hue + ',68%,55%)', 'hsl(' + hue + ',72%,30%)'];
+// Stable per-habit hue derived from the name (same formula as tools/make-icons)
+// so a habit keeps its color for life, across icons and live-rendered faces.
+function hueFor(name) {
+  // FNV-1a for spread, then skip the reserved viovar band [245,285) — violet
+  // always means "the coach speaking", never a habit.
+  var h = 2166136261;
+  for (var i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  var hue = h % 320;
+  if (hue >= 245) hue += 40;
+  return hue;
 }
 
 function tap(context) {
@@ -138,49 +141,63 @@ function render(context) {
   if (isHabit(k)) {
     var idx = +s.index || 0;
     var def = habitCache ? habitCache[idx] : null;
-    if (def) setImage(context, face(def.emoji || '•', def.label || def.habit, colorFor(def.name), ''));
-    else if (habitCache) setImage(context, face('·', 'empty', SETUP_COLORS, '')); // habit removed in manager
-    else setImage(context, face('⏳', '…', SETUP_COLORS, '')); // first poll pending
+    if (def) setImage(context, face(def.emoji || '•', def.label || def.habit, hueFor(def.name), ''));
+    else if (habitCache) setImage(context, face('·', 'empty', SILVER_HUE, '', 22)); // habit removed in manager
+    else setImage(context, face('⏳', '…', SILVER_HUE, '', 22)); // first poll pending
     return;
   }
   var n = parseInt(s.slot, 10) || 1;
   var def = slotCache ? slotCache[n - 1] : null;
   if (def) {
-    setImage(context, face(def.emoji || '✨', def.label || def.habit, SLOT_COLORS, 'AI ' + n));
+    setImage(context, face(def.emoji || '✨', def.label || def.habit, VIOLET_HUE, 'AI ' + n));
   } else {
-    setImage(context, face('✨', 'Slot ' + n, SETUP_COLORS, 'AI'));
+    setImage(context, face('✨', 'Slot ' + n, SILVER_HUE, 'AI', 22));
   }
 }
 
-function face(emoji, label, colors, badge) {
+// Nocturne Ritual face: night base, votive halo in the key's hue, hairline
+// inner ring, oversized glyph, whispered label (design/PHILOSOPHY.md).
+function face(emoji, label, hue, badge, sat) {
+  sat = sat === undefined ? 72 : sat;
   var S = 144;
   var cv = document.createElement('canvas');
   cv.width = S; cv.height = S;
   var ctx = cv.getContext('2d');
 
-  var g = ctx.createRadialGradient(S / 2, S * 0.33, 10, S / 2, S * 0.45, S * 0.9);
-  g.addColorStop(0, colors[0]);
-  g.addColorStop(1, colors[1]);
-  ctx.fillStyle = g;
+  var base = ctx.createLinearGradient(0, 0, 0, S);
+  base.addColorStop(0, '#141827');
+  base.addColorStop(1, '#0a0c13');
+  ctx.fillStyle = base;
   ctx.fillRect(0, 0, S, S);
 
-  ctx.textAlign = 'center';
-  ctx.font = '64px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
-  ctx.fillText(emoji, S / 2, 78);
+  var halo = ctx.createRadialGradient(S / 2, S * 0.36, 6, S / 2, S * 0.36, S * 0.62);
+  halo.addColorStop(0, 'hsla(' + hue + ',' + sat + '%,58%,.62)');
+  halo.addColorStop(0.42, 'hsla(' + hue + ',' + sat + '%,45%,.18)');
+  halo.addColorStop(1, 'hsla(' + hue + ',' + sat + '%,45%,0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, S, S);
 
-  ctx.fillStyle = '#fff';
-  ctx.shadowColor = 'rgba(0,0,0,.55)';
+  ctx.strokeStyle = 'hsla(' + hue + ',' + sat + '%,65%,.30)';
+  ctx.lineWidth = 1.5;
+  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(6, 6, S - 12, S - 12, 17); ctx.stroke(); }
+
+  ctx.textAlign = 'center';
+  ctx.font = '62px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
+  ctx.fillText(emoji, S / 2, 76);
+
+  ctx.fillStyle = '#e9edf4';
+  ctx.shadowColor = 'rgba(0,0,0,.6)';
   ctx.shadowBlur = 4;
   var lbl = String(label);
-  ctx.font = '700 ' + (lbl.length > 8 ? 18 : 22) + 'px "Segoe UI",Arial,sans-serif';
-  ctx.fillText(lbl.slice(0, 12), S / 2, 118);
+  ctx.font = '600 ' + (lbl.length > 8 ? 17 : 20) + 'px "Segoe UI",Arial,sans-serif';
+  ctx.fillText(lbl.slice(0, 12), S / 2, 116);
   ctx.shadowBlur = 0;
 
   if (badge) {
-    ctx.fillStyle = 'rgba(255,255,255,.85)';
-    ctx.font = '700 12px "Segoe UI",Arial,sans-serif';
+    ctx.fillStyle = 'hsla(' + hue + ',80%,80%,.9)';
+    ctx.font = '700 11px "Segoe UI",Arial,sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText(badge, S - 7, 16);
+    ctx.fillText(badge, S - 10, 18);
   }
   return cv.toDataURL('image/png');
 }

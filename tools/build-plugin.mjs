@@ -19,36 +19,37 @@ const EXE =
   process.env.CHROME_PATH ||
   (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
 
-function tile(emoji, [c1, c2], size, label) {
+function tile(emoji, hue, size, label, sat = 72) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     *{margin:0;padding:0}html,body{width:${size}px;height:${size}px;overflow:hidden;
-    background:radial-gradient(circle at 50% 36%, ${c1}, ${c2})}
+    background:linear-gradient(180deg,#141827 0%,#0a0c13 100%)}
+    .halo{position:absolute;inset:0;background:radial-gradient(circle at 50% 38%, hsla(${hue},${sat}%,58%,.6) 0%, transparent 68%)}
     .w{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
        font-family:'DejaVu Sans',sans-serif}
-    .e{font-size:${Math.round(size * (label ? 0.44 : 0.58))}px;line-height:1;
-       filter:drop-shadow(0 ${size / 48}px ${size / 36}px rgba(0,0,0,.35))}
-    .l{font-size:${Math.round(size * 0.15)}px;font-weight:700;color:#fff;margin-top:${size / 36}px;
-       text-shadow:0 2px 4px rgba(0,0,0,.5)}
-  </style></head><body><div class="w"><div class="e">${emoji}</div>${label ? `<div class="l">${label}</div>` : ''}</div></body></html>`;
+    .e{font-size:${Math.round(size * (label ? 0.42 : 0.56))}px;line-height:1;
+       filter:drop-shadow(0 ${size / 48}px ${size / 36}px rgba(0,0,0,.45))}
+    .l{font-size:${Math.round(size * 0.14)}px;font-weight:600;color:#e9edf4;margin-top:${size / 36}px;
+       letter-spacing:.04em;text-shadow:0 2px 4px rgba(0,0,0,.55)}
+  </style></head><body><div class="halo"></div><div class="w"><div class="e">${emoji}</div>${label ? `<div class="l">${label}</div>` : ''}</div></body></html>`;
 }
 
-const VIOLET = ['#8b5cf6', '#5b21b6'];
-const GRAY = ['#9aa0aa', '#3a3f47'];
+const VIOLET = 262;
+const SILVER = 222;
 
 const assets = [
-  { file: 'plugin.png', size: 144, emoji: '✅', colors: VIOLET, label: '' },
-  { file: 'category.png', size: 46, emoji: '✅', colors: VIOLET, label: '' },
-  { file: 'habit_action.png', size: 40, emoji: '✅', colors: GRAY, label: '' },
-  { file: 'slot_action.png', size: 40, emoji: '✨', colors: VIOLET, label: '' },
-  { file: 'habit_key.png', size: 144, emoji: '✅', colors: GRAY, label: 'Habit' },
-  { file: 'slot_key.png', size: 144, emoji: '✨', colors: VIOLET, label: 'AI Slot' }
+  { file: 'plugin.png', size: 144, emoji: '✅', hue: VIOLET, label: '' },
+  { file: 'category.png', size: 46, emoji: '✅', hue: VIOLET, label: '' },
+  { file: 'habit_action.png', size: 40, emoji: '✅', hue: SILVER, label: '', sat: 26 },
+  { file: 'slot_action.png', size: 40, emoji: '✨', hue: VIOLET, label: '' },
+  { file: 'habit_key.png', size: 144, emoji: '✅', hue: SILVER, label: 'Habit', sat: 26 },
+  { file: 'slot_key.png', size: 144, emoji: '✨', hue: VIOLET, label: 'AI Slot' }
 ];
 
 mkdirSync(IMAGES, { recursive: true });
 const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
 for (const a of assets) {
   const page = await browser.newPage({ viewport: { width: a.size, height: a.size }, deviceScaleFactor: 1 });
-  await page.setContent(tile(a.emoji, a.colors, a.size, a.label), { waitUntil: 'load' });
+  await page.setContent(tile(a.emoji, a.hue, a.size, a.label, a.sat ?? 72), { waitUntil: 'load' });
   await page.screenshot({ path: join(IMAGES, a.file) });
   await page.close();
   console.log('  rendered images/' + a.file);
