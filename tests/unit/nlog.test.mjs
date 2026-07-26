@@ -60,6 +60,21 @@ test('caps entry count, note length, unmatched list, and reply', () => {
   assert.equal(out.reply.length, 240);
 });
 
+test('slot-derived keys stamp the slot index so the scorer credits them; roster keys do not', () => {
+  const keys = [...KEYS, { name: 'Stretch', emoji: '🧘', label: 'Stretch', ai: true, slot: 2 }];
+  const { entries } = sanitizeNlEntries(
+    { entries: [{ habit: 'stretch' }, { habit: 'Exercise' }] }, keys, NOW
+  );
+  assert.equal(entries[0].slot, 2);
+  assert.equal('slot' in entries[1], false);
+});
+
+test('labels with edge whitespace still match (map keys trimmed like the probe)', () => {
+  const keys = [{ name: 'DeepWork', emoji: '🧠', label: 'After lunch ' }]; // slice(0,12) artifact
+  const { entries } = sanitizeNlEntries({ entries: [{ habit: 'after lunch' }] }, keys, NOW);
+  assert.deepEqual(entries.map((e) => e.h), ['DeepWork']);
+});
+
 test('tolerates garbage shapes without throwing', () => {
   for (const junk of [null, {}, { entries: 'x' }, { entries: [null, 42, 'str'] }, { unmatched: 'x', reply: 7 }]) {
     const out = sanitizeNlEntries(junk, KEYS, NOW);
@@ -74,4 +89,13 @@ test('prompt carries the key names, local time, and the raw text', () => {
   assert.match(p, /Sat 9:15 PM/);
   assert.match(p, /"ran 5k"/);
   assert.match(p, /ONLY JSON/);
+});
+
+test('prompt states the entry cap, forbids logging negations, and its example cannot match a real key', () => {
+  const p = NL_PROMPT({ keys: [{ name: 'Exercise', label: 'Exercise' }], localTime: 'Sat 9:15 PM', timezone: 'America/New_York', text: 'skipped the gym' });
+  assert.match(p, new RegExp(`at most ${MAX_ENTRIES}`));
+  assert.match(p, /ONLY what they actually did/);
+  assert.match(p, /skipped the gym", "no workout/);
+  assert.match(p, /"habit":"KeyName"/, 'format example must use a placeholder id');
+  assert.doesNotMatch(p, /"habit":"Exercise"/, 'a roster key in the example invites echo-logging');
 });

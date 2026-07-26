@@ -25,7 +25,9 @@ before(async () => {
         nlPosts.push(j);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         if (j.entries) {
-          res.end(JSON.stringify({ ok: true, logged: j.entries }));
+          // Delayed like a real network round-trip, so the busy window
+          // between clicking Log and the response is actually testable.
+          setTimeout(() => res.end(JSON.stringify({ ok: true, logged: j.entries })), 250);
         } else {
           const now = Date.now();
           res.end(JSON.stringify({
@@ -42,7 +44,13 @@ before(async () => {
     }
     if (url === '/api/data') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ configured: true, entries: [{ h: 'Drink', t: Date.now(), note: '', e: '💧', nl: 1 }] }));
+      // Append order is deliberately NOT time order (a backdated NL entry was
+      // appended after a newer tap), and the note carries markup — Recent must
+      // sort by t and escape.
+      res.end(JSON.stringify({ configured: true, entries: [
+        { h: 'Drink', t: Date.now(), note: 'ran <b>xss</b>', e: '💧', nl: 1 },
+        { h: 'Exercise', t: Date.now() - 2 * 3600_000, e: '🏃' }
+      ] }));
       return;
     }
     if (url === '/api/slots') {
@@ -105,7 +113,26 @@ test('unchecked entries are excluded and double-clicking Log posts once', async 
   assert.equal((await page.$eval('#nlText', (e) => e.value)), '', 'input clears after logging');
 });
 
-test('NL entries carry the 💬 marker in Recent', async () => {
+test('form submits are ignored while a confirm is in flight', async () => {
+  const parses = () => nlPosts.filter((p) => p.text).length;
+  const commits = () => nlPosts.filter((p) => p.entries).length;
+  await page.fill('#nlText', 'walked 20 min');
+  await page.click('#nlGo');
+  await page.waitForSelector('#nlConfirm');
+  const p0 = parses(), c0 = commits();
+  await page.click('#nlConfirm');       // commit pending (mock delays 250ms)
+  await page.press('#nlText', 'Enter'); // the "did it work?" reflex mid-flight
+  await page.waitForFunction(() => document.querySelector('.nl-out').textContent.includes('Logged'));
+  assert.equal(parses(), p0, 'no re-parse while the confirm is pending');
+  assert.equal(commits(), c0 + 1, 'exactly one commit');
+});
+
+test('Recent is chronological, escaped, and carries the 💬 marker', async () => {
   await page.waitForSelector('.recent .row');
-  assert.match(await page.$eval('.recent', (e) => e.textContent), /💬/);
+  const txt = await page.$eval('.recent', (e) => e.textContent);
+  assert.match(txt, /💬/);
+  assert.match(txt, /ran <b>xss<\/b>/, 'note markup must render as text');
+  assert.equal(await page.$('.recent b'), null, 'note markup must not become live HTML');
+  assert.match(await page.$eval('.recent .row', (e) => e.textContent), /Drink/,
+    'newest-by-timestamp first, even when appended out of order');
 });

@@ -6,10 +6,16 @@
 //                              let the coach react in the background.
 //   GET  ?run=1&text=...    -> parse only, for probing (model call, no write).
 import { waitUntil } from '@vercel/functions';
-import { append, isConfigured } from '../lib/store.js';
+import { appendMany, isConfigured } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { reactTo } from '../lib/coach.js';
 import { parseNl, sanitizeNlEntries, loggableKeys } from '../lib/nlog.js';
+
+// Only entries this fresh trigger the coach's reactive pass — its prompt says
+// "the human JUST tapped a key", which is a lie for a backdated report like
+// "big dinner yesterday evening" and would repaint today's keys around a
+// long-gone moment.
+const REACT_FRESH_MS = 15 * 60_000;
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -41,12 +47,14 @@ export default async function handler(req, res) {
         res.status(400).json({ error: 'No valid entries — habits must match existing keys.' });
         return;
       }
-      for (const e of entries) await append(e);
+      await appendMany(entries);
       res.status(200).json({ ok: true, logged: entries });
       // The coach hears about it after the response, same as a key tap
       // (reactTo's cooldown makes multi-entry commits a single pass).
       const latest = entries.reduce((a, b) => (b.t > a.t ? b : a));
-      if (zaiKey()) waitUntil(reactTo(latest).catch(() => {}));
+      if (zaiKey() && Date.now() - latest.t < REACT_FRESH_MS) {
+        waitUntil(reactTo(latest).catch(() => {}));
+      }
       return;
     }
 
