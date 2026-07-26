@@ -1,0 +1,49 @@
+name: Coach experiment
+
+# Replays recently captured coach contexts against the current + fallback
+# models on the live deployment (where the z.ai key lives) and fails if
+# output quality regresses. Run manually before shipping prompt changes,
+# plus a weekly drift check.
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "Comma-separated z.ai models to compare"
+        required: false
+        default: "glm-5.2,glm-4.7-flash"
+      n:
+        description: "Dataset items to replay (1-5)"
+        required: false
+        default: "3"
+  schedule:
+    - cron: "0 12 * * 1" # Mondays 12:00 UTC
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run experiment on the live deployment
+        env:
+          BASE: https://stream-deck-habit-tracker.vercel.app
+          MODELS: ${{ github.event.inputs.models || 'glm-5.2,glm-4.7-flash' }}
+          N: ${{ github.event.inputs.n || '3' }}
+          HABIT_KEY: ${{ secrets.HABIT_KEY }}
+        run: |
+          URL="$BASE/api/experiment?run=1&models=$MODELS&n=$N"
+          if [ -n "$HABIT_KEY" ]; then URL="$URL&key=$HABIT_KEY"; fi
+          echo "Running: $BASE/api/experiment (models=$MODELS n=$N)"
+          RESP=$(curl -sS --max-time 120 "$URL")
+          echo "$RESP" | jq .models
+          echo "$RESP" | jq -e '.models' > /dev/null || { echo "::error::Experiment failed: $RESP"; exit 1; }
+
+          # Gate: the primary (first) model must produce valid JSON in at
+          # least half its runs and score above the quality floor.
+          PRIMARY=$(echo "$MODELS" | cut -d, -f1)
+          JSON_RATE=$(echo "$RESP" | jq -r --arg m "$PRIMARY" '.models[$m].jsonValidRate // 0')
+          COMPOSITE=$(echo "$RESP" | jq -r --arg m "$PRIMARY" '.models[$m].avgComposite // 0')
+          echo "primary=$PRIMARY jsonValidRate=$JSON_RATE avgComposite=$COMPOSITE"
+          awk -v r="$JSON_RATE" 'BEGIN { exit (r >= 0.5) ? 0 : 1 }' \
+            || { echo "::error::$PRIMARY jsonValidRate $JSON_RATE < 0.5"; exit 1; }
+          awk -v c="$COMPOSITE" 'BEGIN { exit (c >= 0.5) ? 0 : 1 }' \
+            || { echo "::error::$PRIMARY avgComposite $COMPOSITE < 0.5"; exit 1; }
+          echo "Quality gate passed."
