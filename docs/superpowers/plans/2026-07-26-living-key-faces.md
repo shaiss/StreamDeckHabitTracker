@@ -143,17 +143,18 @@ Create `lib/today.js`:
 //
 // Day bucketing uses the VIEWER's timezone (the dashboard groups days in the
 // viewer's tz by design). tzOffsetMs follows JS getTimezoneOffset() sign:
-// UTC-5 → +300 min → the offset is ADDED to utc ms before flooring into days.
+// UTC-5 → +300 min (positive west). To get local-day we SUBTRACT the offset
+// from utc ms before flooring: t_local = t_utc - tzOffset.
 
 const DAY_MS = 86_400_000;
 
 function dayIndex(t, tzOffsetMs) {
-  return Math.floor((t + tzOffsetMs) / DAY_MS);
+  return Math.floor((t - tzOffsetMs) / DAY_MS);
 }
 
 function goalOf(habit) {
-  const g = Math.floor(Number(habit && habit.goal));
-  return Number.isFinite(g) && g >= 1 ? Math.min(g, 99) : 1;
+  const g = Number(habit && habit.goal);
+  return Number.isInteger(g) && g >= 1 && g <= 99 ? g : 1;
 }
 
 export function computeToday(habits, entries, nowMs, tzOffsetMs = 0) {
