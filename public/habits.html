@@ -11,7 +11,7 @@
     h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.01em; }
     .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
     .rows { display: flex; flex-direction: column; gap: 10px; }
-    .hrow { display: grid; grid-template-columns: 64px 1fr 1fr 40px; gap: 10px; align-items: center;
+    .hrow { display: grid; grid-template-columns: 64px 1fr 1fr 64px 40px; gap: 10px; align-items: center;
             background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
     .hrow input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line);
                   border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px; }
@@ -19,7 +19,7 @@
     .hrow input[readonly] { opacity: .6; cursor: not-allowed; }
     .hrow .del { border: 0; background: transparent; color: var(--muted); font-size: 17px; cursor: pointer; }
     .hrow .del:hover { color: var(--bad); }
-    .cols { display: grid; grid-template-columns: 64px 1fr 1fr 40px; gap: 10px; padding: 0 14px; margin-bottom: 6px;
+    .cols { display: grid; grid-template-columns: 64px 1fr 1fr 64px 40px; gap: 10px; padding: 0 14px; margin-bottom: 6px;
             color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
     .actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
     .status { font-size: 13px; color: var(--muted); }
@@ -27,6 +27,22 @@
     .note { margin-top: 24px; background: var(--card); border: 1px solid var(--line); border-radius: 14px;
             padding: 14px 16px; font-size: 13px; color: var(--muted); line-height: 1.6; }
     .note b { color: var(--fg); font-weight: 600; }
+    .chip { font-size: 10px; font-weight: 700; letter-spacing: .07em; padding: 3px 7px; border-radius: 6px;
+            justify-self: start; }
+    .chip.human { color: var(--muted); border: 1px solid var(--line); }
+    .chip.coach { color: #fff; background: linear-gradient(135deg, var(--violet), var(--violet-deep)); }
+    .sect { margin-top: 34px; }
+    .sect h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em;
+               color: var(--muted); margin: 0 0 4px; }
+    .sect .hint { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; }
+    .crow { display: grid; grid-template-columns: 40px 1fr auto auto; gap: 12px; align-items: center;
+            background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px;
+            border-left: 3px solid var(--violet); margin-bottom: 10px; }
+    .crow .em { font-size: 22px; text-align: center; }
+    .crow .nm { font-weight: 600; }
+    .crow .meta { font-size: 12px; color: var(--muted); }
+    .crow .stats { font-size: 12px; color: var(--muted); text-align: right; }
+    .crow .active { color: #a78bfa; font-weight: 700; font-size: 11px; letter-spacing: .05em; }
   </style>
 </head>
 <body>
@@ -34,13 +50,19 @@
   <div class="wrap">
     <h1>Habits</h1>
     <div class="sub">The fixed keys — what you're deliberately tracking. (The ✨ AI slots pick their own.)</div>
-    <div class="cols"><span>Emoji</span><span>Label (on the key)</span><span>Id (logged name)</span><span></span></div>
+    <div class="cols"><span>Emoji</span><span>Label (on the key)</span><span>Id (logged name)</span><span>Origin</span><span></span></div>
     <div class="rows" id="rows"></div>
     <div class="actions">
       <button class="btn ghost" id="addBtn">+ Add habit</button>
       <button class="btn" id="saveBtn">Save</button>
       <span class="status" id="status"></span>
     </div>
+    <div class="sect" id="coachSect" hidden>
+      <h2>The coach's inventions</h2>
+      <div class="hint">Habits the AI created for its slot keys. Promote one to make it a permanent fixed key — it keeps its coach badge.</div>
+      <div id="coachRows"></div>
+    </div>
+
     <div class="note">
       <b>Where changes land:</b> everywhere, live — the dashboard, AI coach,
       🎛 virtual deck, and your <b>physical Stream Deck</b> (keys repaint within
@@ -57,12 +79,38 @@
     const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
 
     function rowHtml(h, isNew) {
-      return `<div class="hrow" data-new="${isNew ? 1 : 0}">
+      const origin = h.origin === 'coach' ? 'coach' : 'human';
+      const chip = origin === 'coach'
+        ? '<span class="chip coach" title="Invented by the AI coach, promoted by you">COACH</span>'
+        : '<span class="chip human" title="Created by you">HUMAN</span>';
+      return `<div class="hrow" data-new="${isNew ? 1 : 0}" data-origin="${origin}">
         <input class="emoji" value="${esc(h.emoji||'')}" maxlength="8" placeholder="🙂">
         <input class="label" value="${esc(h.label||'')}" maxlength="12" placeholder="Label">
         <input class="name" value="${esc(h.name||'')}" maxlength="20" placeholder="OneWordId" ${isNew ? '' : 'readonly title="Ids are locked to keep history consistent — delete and re-add to rename."'}>
+        ${chip}
         <button class="del" title="Remove">✕</button>
       </div>`;
+    }
+
+    function renderCoach(list) {
+      const sect = document.getElementById('coachSect');
+      if (!list || !list.length) { sect.hidden = true; return; }
+      sect.hidden = false;
+      document.getElementById('coachRows').innerHTML = list.map(c => `
+        <div class="crow">
+          <span class="em">${esc(c.emoji)}</span>
+          <span><span class="nm">${esc(c.label)}</span> <span class="meta">· ${esc(c.habit)}</span>
+            ${c.active ? '<div class="active">ON A SLOT KEY NOW</div>' : ''}</span>
+          <span class="stats">offered ${c.offered}× · tapped ${c.taps}×</span>
+          <button class="btn ghost promote" data-habit="${esc(c.habit)}" data-emoji="${esc(c.emoji)}" data-label="${esc(c.label)}">⬆ Promote</button>
+        </div>`).join('');
+      document.querySelectorAll('.promote').forEach(b => b.addEventListener('click', () => {
+        rowsEl.insertAdjacentHTML('beforeend', rowHtml({ name: b.dataset.habit, emoji: b.dataset.emoji, label: b.dataset.label, origin: 'coach' }, true));
+        wireRow(rowsEl.lastElementChild);
+        rowsEl.lastElementChild.dataset.origin = 'coach';
+        statusEl.textContent = `${b.dataset.label} added as a coach-origin key — hit Save to make it permanent.`;
+        rowsEl.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }));
     }
 
     function wireRow(el) {
@@ -72,6 +120,7 @@
     fetch('/api/habits').then(r=>r.json()).then(j => {
       rowsEl.innerHTML = (j.habits||[]).map(h => rowHtml(h, false)).join('');
       rowsEl.querySelectorAll('.hrow').forEach(wireRow);
+      renderCoach(j.coachHabits);
     }).catch(() => { statusEl.textContent = 'Couldn’t load habits.'; });
 
     document.getElementById('addBtn').addEventListener('click', () => {
@@ -84,7 +133,8 @@
       const habits = [...rowsEl.querySelectorAll('.hrow')].map(el => ({
         emoji: el.querySelector('.emoji').value.trim(),
         label: el.querySelector('.label').value.trim(),
-        name: el.querySelector('.name').value.trim()
+        name: el.querySelector('.name').value.trim(),
+        origin: el.dataset.origin === 'coach' ? 'coach' : 'human'
       }));
       statusEl.className = 'status'; statusEl.textContent = 'Saving…';
       fetch('/api/habits', {
