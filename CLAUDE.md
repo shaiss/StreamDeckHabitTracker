@@ -34,8 +34,13 @@ node tools/build-plugin.mjs
 # Regenerate the hosted profile (single-user build: 15-key, plugin flavor only):
 node tools/generate.mjs "https://stream-deck-habit-tracker.vercel.app/api/log" --plugin --static --outfile=public/downloads/HabitTracker-MK2.streamDeckProfile --name="Habit Tracker AI"
 
-# Sanity: node --check every touched .js/.mjs file. There is no test suite;
-# verification is against the live deployment (see below).
+# Tests — run before every PR (the ship skill enforces this):
+npm test          # unit suite, zero-dep (glob form is required on this Node —
+                  # `node --test tests/unit/` fails, the script uses the glob)
+npm run test:e2e  # browser tests vs a mock server (needs playwright-core + Chromium)
+
+# Plus: node --check every touched .js/.mjs file. Final verification is still
+# against the live deployment (see below).
 ```
 
 Headless Chromium lives at `/opt/pw-browsers/chromium` in this environment
@@ -44,7 +49,10 @@ GIF encoder** — that's why GIFs are assembled with pngjs+gifenc.
 
 ## Verifying changes
 
-There are no unit tests; the loop is deploy-and-probe. After pushing, check:
+`tests/unit/` (pure logic: validation, scorer, quality, JSON extraction, hue
+drift guard) and `tests/e2e/` (habit-manager flows in headless Chromium against
+a mock server) run locally and in CI (.github/workflows/ci.yml). New UI behavior
+ships with a regression test. After merging, also probe the live deployment:
 
 - `GET /api/health` — storage + AI wiring (env var names only; never values)
 - `GET /api/slots` — current AI slot assignments

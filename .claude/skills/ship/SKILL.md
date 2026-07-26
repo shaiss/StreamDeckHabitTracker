@@ -13,15 +13,23 @@ description: >
 # Ship a change
 
 Production deploys straight from the default branch (`claude/stream-deck-developers-tqy1gj`
-unless the repo has migrated to `main`) via Vercel's git integration. There is no CI
-and no test suite — the deploy-and-probe loop below IS the verification, so never
-skip step 6.
+unless the repo has migrated to `main`) via Vercel's git integration. Tests run
+locally and in CI (.github/workflows/ci.yml), but the deploy-and-probe loop below
+is still the final verification — never skip step 6.
 
 ## Procedure
 
-1. **Pre-flight**: `node --check` every touched `.js`/`.mjs` file. If assets or
-   the plugin changed, run the `rebuild-artifacts` skill first so
-   `public/downloads/` is current — artifacts never rebuild themselves.
+1. **Pre-flight — no exceptions**:
+   - `npm test` — unit suite (zero-dep, runs anywhere). Must be green.
+   - If `public/`, `streamdeck-plugin/`, or `tools/` changed: `npm run test:e2e`
+     (needs `npm i playwright-core --no-save` once; Chromium at
+     `/opt/pw-browsers/chromium` or `CHROME_PATH`). Must be green.
+   - `node --check` every touched `.js`/`.mjs` file.
+   - New UI behavior (buttons, forms, flows) ships WITH a regression test in
+     `tests/` covering it — a bug class we've already hit (double-tap, duplicate
+     rows) must never rely on manual probing again.
+   - If assets or the plugin changed, run the `rebuild-artifacts` skill first so
+     `public/downloads/` is current — artifacts never rebuild themselves.
 2. **Branch + commit**: `git checkout -b <type>/<slug>` (`feat/`, `fix/`).
    Commit with a body that explains why, not just what.
 3. **Push with retry**: `git push -u origin <branch>`; on network failure retry
