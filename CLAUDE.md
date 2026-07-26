@@ -56,7 +56,9 @@ drift guard) and `tests/e2e/` (habit-manager flows in headless Chromium against
 a mock server) run locally and in CI (.github/workflows/ci.yml). New UI behavior
 ships with a regression test. After merging, also probe the live deployment:
 
-- `GET /api/health` — storage + AI wiring (env var names only; never values)
+- `GET /api/health` — storage + AI wiring (env var names only; never values),
+  plus `deck` — when a *physical* Stream Deck last polled (`null` = the plugin
+  has never connected). First thing to check when hardware keys look stale.
 - `GET /api/slots` — current AI slot assignments
 - `GET /api/log?habit=Test` — writes a real row (`?slot=N` for slot keys)
 - `GET /api/suggest?run=1` (or POST) — full AI refresh; 30s cooldown
@@ -129,11 +131,36 @@ step. Dashboard + AI Coach section; polls every 20s.
 — classic SDKVersion-2 JS plugin (WebSocket, `connectElgatoStreamDeckSocket`
 global). Two actions, both live: `…habit` ({base, index} — resolves the habit
 at that position from `/api/slots`) and `…slot` ({base, slot}); faces are
-canvas-rendered from one `/api/slots` poll (15s + ~9s after each tap), so
-habit-manager edits and coach swaps repaint physical keys. Taps resolve
-server-side (`?hkey=`/`?slot=`). No property inspector, no hardcoded server —
-per-key Settings come from the generator. Untested on physical hardware as of
-writing.
+canvas-rendered from one `/api/slots` poll, so habit-manager edits and coach
+swaps repaint physical keys. Taps resolve server-side (`?hkey=`/`?slot=`). No
+property inspector, no hardcoded server — per-key Settings come from the
+generator.
+
+⚠️ **The plugin page is a CEF page that is never visible, so page timers cannot
+be trusted.** Chromium throttles `setInterval`/`setTimeout` on hidden pages
+(~1/min under intensive throttling; page freezing can stop them outright), which
+is why a plain 15s poll kept the *virtual* deck current but let *physical* faces
+go stale (issue #5). Do not "simplify" the clock in `app.js` back to a bare
+interval. Four layers, and the fix depends on all of them:
+1. `ticker.js` — a Web Worker beat (3s), off-thread where throttling doesn't
+   apply. Same workaround Elgato shipped as `streamdeck-timerfix`.
+2. Wall-clock **deadlines** (`nextPollAt`, `rechecks[]`) re-evaluated on every
+   wake instead of trusted to fire on time, so a throttled clock converges late
+   rather than dropping work. `pump()` is the only scheduler; it's idempotent
+   and rate-limited by `nextPollAt` + the `inflight` single-flight guard.
+3. Every inbound Stream Deck WebSocket event calls `pump()`. That socket is a
+   native push channel throttling can't touch, so any keypress/wake/device
+   reconnect un-sticks a frozen page.
+4. A page `setInterval` backstop, for a CEF build where `Worker` fails.
+
+Taps push a **chain** of rechecks (2/5/9/15/25s) because the reactive coach pass
+runs in the background after `/api/log` answers — one recheck often lands before
+the swap exists. The poll tags itself `?deck=<version>&keys=N`; `api/slots.js`
+records that as `habits:deck` so `/api/health` and the dashboard can say whether
+a *physical* deck is live (the only way to tell a dead plugin from a dead
+backend). `tests/e2e/plugin.e2e.mjs` loads the real `app.js` against a mock
+Stream Deck socket with page timers stubbed to no-ops — that suite is what keeps
+the throttling fix honest.
 
 **Asset pipeline** (`tools/`): generators read the LIVE habit list from
 `/api/habits` (tools/lib-habits.mjs), falling back loudly to

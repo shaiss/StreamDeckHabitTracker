@@ -8,18 +8,48 @@
  * carries both the habit list and the AI slot assignments, so habit-manager
  * edits and coach swaps repaint physical keys within one poll. Taps resolve
  * server-side (?hkey= / ?slot=) so history records what the key showed.
+ *
+ * LIVENESS — why the clock is built the way it is:
+ * this page is a CEF page that is never visible, and Chromium throttles page
+ * timers on hidden pages (~1/min under intensive throttling, and page freezing
+ * can stop them entirely). A plain setInterval therefore does NOT keep the
+ * faces live on hardware, even though a visible browser tab polling the same
+ * endpoint stays current. Four layers, cheapest first:
+ *   1. ticker.js — a Web Worker beat, off-thread where throttling does not
+ *      apply (Elgato's own `streamdeck-timerfix` workaround).
+ *   2. Wall-clock deadlines (nextPollAt / rechecks), re-evaluated on every
+ *      wake rather than trusted to fire on time — a throttled or frozen clock
+ *      converges late instead of dropping the work.
+ *   3. Inbound Stream Deck WebSocket traffic (keyDown, willAppear, wake, device
+ *      connect) pumps the same deadline check. That socket is a native push
+ *      channel page throttling cannot touch, so any interaction un-sticks a
+ *      frozen page.
+ *   4. A page setInterval as a last-resort backstop, in case Worker is
+ *      unavailable in this CEF build.
  */
 'use strict';
+
+var VERSION = '1.6.0';    // reported to the server so the dashboard can show
+                          // which plugin build a physical deck is running
 
 var ws = null;
 var keys = {};            // context -> { action, settings }
 var slotCache = null;     // latest slots array from the server
 var habitCache = null;    // latest habit list from the server (live-editable)
 var slotCacheAt = 0;
-var pollTimer = null;
+
 var POLL_MS = 15000;
-var REACT_RECHECK_MS = 9000; // the coach reacts to taps in the background;
-                             // re-poll shortly after a tap to catch the swap
+var TICK_MS = 3000;       // heartbeat granularity; deadlines resolve on a tick
+// The coach reacts to taps in a background pass, so one recheck can easily land
+// before the swap exists. Chain a few wall-clock rechecks instead of betting on
+// a single delay.
+var RECHECK_MS = [2000, 5000, 9000, 15000, 25000];
+
+var ticker = null;
+var clockStarted = false;
+var nextPollAt = 0;       // wall-clock deadline for the routine poll
+var rechecks = [];        // pending wall-clock deadlines from taps
+var inflight = false;     // single-flight guard for /api/slots
 
 var VIOLET_HUE = 262;   // reserved: the coach speaking
 var NUDGE_HUE = 38;     // the coach speaking LOUDER — proactive nudge keys
@@ -49,19 +79,25 @@ function handle(ev) {
     case 'willAppear':
       keys[c] = { action: ev.action, settings: (ev.payload && ev.payload.settings) || {} };
       render(c);
-      ensurePolling();
+      startClock();
+      nextPollAt = 0;              // a key just appeared — refresh on this pump
       break;
     case 'didReceiveSettings':
       if (keys[c]) { keys[c].settings = (ev.payload && ev.payload.settings) || {}; render(c); }
       break;
     case 'willDisappear':
       delete keys[c];
-      ensurePolling();
       break;
     case 'keyDown':
       tap(c);
       break;
+    case 'systemDidWakeUp':
+    case 'deviceDidConnect':
+      nextPollAt = 0;              // faces are certainly stale after a wake
+      break;
   }
+  // Every inbound event is a free wake for the deadline check (layer 3).
+  pump();
 }
 
 // ---- behavior -------------------------------------------------------------
@@ -93,44 +129,108 @@ function tap(context) {
     .then(function (r) {
       if (r.ok) {
         showOk(context);
-        refreshSlots(true);
-        setTimeout(function () { refreshSlots(true); }, REACT_RECHECK_MS);
+        // The reactive coach pass runs in the background after /api/log
+        // answers, so watch for the swap across a chain of deadlines.
+        nextPollAt = 0;
+        var now = Date.now();
+        for (var i = 0; i < RECHECK_MS.length; i++) rechecks.push(now + RECHECK_MS[i]);
+        pump();
       } else { showAlert(context); }
     })
     .catch(function () { showAlert(context); });
 }
 
-function ensurePolling() {
-  // Both slot keys AND habit keys render from live server state now.
-  var anySlots = Object.keys(keys).some(function (c) { return isSlot(keys[c]) || isHabit(keys[c]); });
-  if (anySlots && !pollTimer) {
-    refreshSlots(true);
-    pollTimer = setInterval(function () { refreshSlots(false); }, POLL_MS);
-  } else if (!anySlots && pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
+// ---- clock ----------------------------------------------------------------
+// Both slot keys AND habit keys render from live server state.
+function liveKeys() {
+  var n = 0;
+  for (var c in keys) { if (isSlot(keys[c]) || isHabit(keys[c])) n++; }
+  return n;
 }
 
-function refreshSlots(force) {
+// The same beat as ticker.js, inline. If Stream Deck serves this page from a
+// file:// origin, loading a sibling worker script is an opaque-origin failure —
+// and it fails ASYNCHRONOUSLY via onerror, not by throwing — so the blob form
+// is the fallback that actually runs there.
+function blobTicker() {
+  var src = 'var t=null;self.onmessage=function(e){var m=(e.data&&e.data.every)||3000;' +
+    'if(t)clearInterval(t);t=setInterval(function(){self.postMessage(Date.now());},m);};';
+  return new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+}
+
+function useTicker(w, onFail) {
+  ticker = w;
+  window.__ticker = w;   // tests/e2e/plugin.e2e.mjs stops the beat to prove the
+                         // WebSocket wake path carries the sync on its own
+  w.onmessage = function () { pump(); };
+  w.onerror = function () {
+    w.onerror = null;
+    try { w.terminate(); } catch (e) { /* already gone */ }
+    ticker = null;
+    if (onFail) onFail();
+  };
+  w.postMessage({ every: TICK_MS });
+}
+
+function startClock() {
+  if (clockStarted) return;
+  clockStarted = true;
+  // Layer 1: off-thread beat. Sibling script first (debuggable, cached), blob
+  // second. If both fail, layers 3 and 4 still carry the sync.
+  try {
+    useTicker(new Worker('ticker.js'), function () {
+      try { useTicker(blobTicker(), null); } catch (e) { ticker = null; }
+    });
+  } catch (e) {
+    try { useTicker(blobTicker(), null); } catch (e2) { ticker = null; }
+  }
+  // Layer 4: page timer backstop. Throttled when hidden — which is the whole
+  // reason the worker exists — but free, and it covers a Worker that never ran.
+  setInterval(function () { pump(); }, TICK_MS);
+}
+
+// Resolve every wall-clock deadline that has come due. Safe to call as often
+// as we like: nextPollAt and the single-flight guard do the rate limiting.
+function pump() {
+  if (!liveKeys()) return;
+  var now = Date.now();
+  var due = now >= nextPollAt;
+  for (var i = rechecks.length - 1; i >= 0; i--) {
+    if (now >= rechecks[i]) { rechecks.splice(i, 1); due = true; }
+  }
+  if (due) refreshSlots();
+}
+
+function refreshSlots() {
+  if (inflight) return;
   var base = null;
   for (var c in keys) { if ((isSlot(keys[c]) || isHabit(keys[c])) && keys[c].settings.base) { base = keys[c].settings.base; break; } }
   if (!base) return;
-  if (!force && Date.now() - slotCacheAt < POLL_MS / 2) return;
-  fetch(base.replace(/\/+$/, '') + '/api/slots')
+  inflight = true;
+  nextPollAt = Date.now() + POLL_MS;
+  // ?deck= marks this as the hardware plugin's poll (not the dashboard's), so
+  // the server can record a heartbeat and the dashboard can show whether a
+  // physical deck is actually live — see issue #5.
+  var url = base.replace(/\/+$/, '') + '/api/slots?deck=' + encodeURIComponent(VERSION) +
+    '&keys=' + liveKeys();
+  fetch(url)
     .then(function (r) { return r.json(); })
     .then(function (j) {
+      inflight = false;
       var slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(j.slots || []);
       var habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(j.habits || []);
       slotCache = j.slots || [];
       habitCache = j.habits || [];
       slotCacheAt = Date.now();
       for (var c in keys) {
-        if (slotsChanged && isSlot(keys[c])) render(c);
-        if (habitsChanged && isHabit(keys[c])) render(c);
+        // One bad face must not strand the rest of the deck on stale images.
+        try {
+          if (slotsChanged && isSlot(keys[c])) render(c);
+          if (habitsChanged && isHabit(keys[c])) render(c);
+        } catch (e) { /* next poll retries this key */ }
       }
     })
-    .catch(function () { /* keep last faces on network hiccups */ });
+    .catch(function () { inflight = false; /* keep last faces on hiccups */ });
 }
 
 // ---- key face rendering ---------------------------------------------------

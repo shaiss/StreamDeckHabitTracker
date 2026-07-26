@@ -67,6 +67,8 @@
                   background:linear-gradient(160deg, rgba(245,158,11,.18), var(--card) 55%); }
     .slot.nudge .tag { color:#f59e0b; }
     .ai-note { font-size:13px; color:var(--muted); margin-top:10px; }
+    .deckline b { color:#f0b429; }
+    .deckline[data-live="1"] b { color:#7ee081; }
     .ai-err { font-size:13px; color:#e05252; margin-top:10px; white-space:pre-wrap; }
     .gear { border:0; background:transparent; color:var(--muted); font-size:18px; cursor:pointer; padding:4px 6px; }
     .settings { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:22px; display:none; }
@@ -223,6 +225,19 @@
       });
     }
 
+    // Hardware heartbeat: the plugin tags its /api/slots poll, so this line
+    // separates "the coach isn't swapping" from "the physical deck never asked".
+    // The plugin polls every 15s; allow 3 misses before calling it stale.
+    function deckLine(deck) {
+      if (!deck?.at) {
+        return `<div class="ai-note deckline" id="deckline" data-live="0">Physical deck: <b>never seen</b> — no Stream Deck plugin has polled this backend. Install the plugin + profile, then watch this line.</div>`;
+      }
+      const ago = Math.max(0, Date.now() - deck.at);
+      const live = ago < 45000;
+      const when = ago < 60000 ? `${Math.round(ago/1000)}s ago` : `${Math.round(ago/60000)}m ago`;
+      return `<div class="ai-note deckline" id="deckline" data-live="${live ? 1 : 0}">Physical deck: <b>${live ? 'live' : 'stale'}</b> · last poll ${when} · plugin ${deck.plugin || '?'} · ${deck.keys || 0} keys</div>`;
+    }
+
     function renderAi() {
       const el = document.getElementById('ai');
       if (!el) return;
@@ -246,7 +261,7 @@
         ? `<div class="ai-note" style="margin:0 0 10px">Track record: ${tr.landed}/${tr.offered} suggested keys tapped (${Math.round(tr.hitRate*100)}%) — the coach sees this and adapts.</div>`
         : '';
       el.innerHTML = `<div class="ai-head"><h2>AI Coach${s?.model ? ` <span class="muted" style="text-transform:none;letter-spacing:0">· ${s.model}</span>` : ''}</h2>${btn}</div>
-        ${insight}${trackLine}<div class="slot-grid">${cards}</div>${note}<div class="ai-err" id="aiErr"></div>`;
+        ${insight}${trackLine}<div class="slot-grid">${cards}</div>${deckLine(s?.deck)}${note}<div class="ai-err" id="aiErr"></div>`;
       document.getElementById('suggestBtn')?.addEventListener('click', suggest);
     }
 

@@ -152,7 +152,15 @@ after each tap so the physical faces catch the change almost immediately. The
   habit is assigned *right now* and logs that name + emoji, so swaps never
   corrupt history.
 - The Habit Tracker AI plugin polls `/api/slots` every 15 s and repaints slot
-  key faces when assignments change.
+  key faces when assignments change. The poll clock runs in a Web Worker, not a
+  page timer: the plugin page is a hidden browser page and Chromium throttles
+  timers on those, which used to leave *physical* faces stale while the virtual
+  deck stayed current. Taps also queue a short chain of rechecks so the coach's
+  reactive swap shows up within seconds.
+- Wondering whether the hardware is actually talking to the backend? The
+  dashboard's AI Coach section shows **Physical deck: live / stale / never
+  seen** with the plugin version and key count, and `GET /api/health` returns
+  the same under `deck`.
 - **Runs on Mastra**: the coach is a Mastra agent (`lib/agent.js`) with an
   `update_hypotheses` tool — it keeps persistent notes about what it's
   learning; a plain z.ai call is the automatic fallback.
