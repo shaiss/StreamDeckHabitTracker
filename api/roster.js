@@ -52,7 +52,7 @@ export default async function handler(req, res) {
         return;
       }
       const doc = await rosterPass();
-      res.status(200).json({ added: doc.added, ...view(doc) });
+      res.status(200).json({ added: doc.added, parseError: doc.parseError || undefined, ...view(doc) });
       return;
     }
 
