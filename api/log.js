@@ -30,9 +30,23 @@ export default async function handler(req, res) {
     }
 
     const slotNum = parseInt(q.slot, 10);
+    const hkeyNum = parseInt(q.hkey, 10);
     let habit = (q.habit || '').toString().trim();
     let emoji = '';
     let slotField;
+
+    // ?hkey=N: positional habit key — resolve which habit currently lives at
+    // that position (habit manager can change it any time), like AI slots.
+    if (!habit && hkeyNum >= 1 && hkeyNum <= 10) {
+      const list = await getHabits();
+      const def = list[hkeyNum - 1];
+      if (!def) {
+        res.status(409).send(`No habit at key ${hkeyNum} — add one on the Habits page.`);
+        return;
+      }
+      habit = def.name;
+      emoji = def.emoji || '';
+    }
 
     if (!habit && slotNum >= 1 && slotNum <= 4) {
       const { slots } = await getSlots();
