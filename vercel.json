@@ -1,4 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "outputDirectory": "public"
+  "outputDirectory": "public",
+  "functions": {
+    "api/suggest.js": { "maxDuration": 60 }
+  }
 }

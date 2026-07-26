@@ -52,6 +52,11 @@ const jobs = habits.map((h) => ({
   name: h.name, emoji: h.emoji, label: h.label, colors: COLORS[h.name] || COLORS._default
 }));
 jobs.push({ name: '_dashboard', emoji: '📊', label: 'Stats', colors: COLORS._dashboard });
+// Generic faces for the AI slot keys (used by the Web Requests flavor, where
+// the key can't repaint itself; the dashboard shows what each slot means).
+for (let n = 1; n <= 4; n++) {
+  jobs.push({ name: `Slot${n}`, emoji: '✨', label: `AI ${n}`, colors: ['#8b5cf6', '#5b21b6'] });
+}
 
 const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
 const page = await browser.newPage({ viewport: { width: SIZE, height: SIZE }, deviceScaleFactor: 2 });

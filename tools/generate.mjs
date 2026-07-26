@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { deflateRawSync } from 'node:zlib';
+import { zip } from './lib-zip.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -36,11 +36,24 @@ const MODELS = {
   mk2: '20GBA9901',      // Stream Deck MK.2 (15 keys) - most common
   mini: '20GAI9901',     // Stream Deck Mini (6 keys)
   xl: '20GAT9901',       // Stream Deck XL (32 keys)
+  neo: '',               // Stream Deck Neo (8 keys, 4x2) - app asks for device at import
   any: ''
 };
-const COLS = { original: 5, mk2: 5, mini: 3, xl: 8, any: 5 };
+const COLS = { original: 5, mk2: 5, mini: 3, xl: 8, neo: 4, any: 5 };
+const ROWS = { original: 3, mk2: 3, mini: 2, xl: 4, neo: 2, any: 3 };
 const deviceModel = MODELS[modelArg] ?? MODELS.mk2;
 const cols = COLS[modelArg] ?? COLS.mk2;
+const rows = ROWS[modelArg] ?? ROWS.mk2;
+
+// Per-habit key colors (mirrors tools/make-icons.mjs; baked into plugin settings).
+const HABIT_COLORS = {
+  Pee: ['#f6c445', '#d68a06'],
+  Poop: ['#a9764e', '#5e3a20'],
+  Eat: ['#ff7a59', '#e03a2f'],
+  Drink: ['#5aa0ff', '#2160e6'],
+  Exercise: ['#4fd98a', '#12915a'],
+  _default: ['#6b7280', '#374151']
+};
 
 if (!base || !/^https?:\/\//.test(base)) {
   console.error(
@@ -57,6 +70,23 @@ let dashboardUrl = getOpt('dashboard');
 if (!dashboardUrl && !noDashboard) {
   try { dashboardUrl = new URL(execBase).origin + '/'; } catch { /* leave unset */ }
 }
+
+// --plugin: emit keys for our own "Habit Tracker AI" plugin (live-updating AI
+// slot faces) instead of the third-party Web Requests plugin.
+const usePlugin = args.includes('--plugin');
+const PLUGIN_HABIT = 'com.kalmansforge.habit-tracker.habit';
+const PLUGIN_SLOT = 'com.kalmansforge.habit-tracker.slot';
+const siteOrigin = (() => { try { return new URL(execBase).origin; } catch { return ''; } })();
+
+// AI slot keys: fill whatever key cells remain after habits + Stats, up to 4.
+// Override with --slots=N (0 disables). Computed after habits load.
+const slotsOpt = getOpt('slots');
+const capacity = cols * rows;
+
+// --outfile / --name: write the profile somewhere specific (used to publish
+// hosted artifacts into public/downloads/).
+const outFile = getOpt('outfile');
+const profileName = getOpt('name') || 'Habit Tracker';
 
 // Embed a key icon as a data URI (baked into the profile). Prefers the
 // animated GIF in icons/animated/ unless --static is passed; falls back to
@@ -83,10 +113,19 @@ const buildUrl = (h) => {
   if (key) q.set('key', key);
   return `${execBase}?${q.toString()}`;
 };
+const buildSlotUrl = (n) => {
+  const q = new URLSearchParams({ slot: String(n) });
+  if (key) q.set('key', key);
+  return `${execBase}?${q.toString()}`;
+};
+
+const slotCount = slotsOpt !== undefined
+  ? Math.max(0, Math.min(4, parseInt(slotsOpt, 10) || 0))
+  : Math.max(0, Math.min(4, capacity - habits.length - (dashboardUrl ? 1 : 0)));
 
 // ---- 1) urls.txt (guaranteed manual path) ---------------------------------
 mkdirSync(join(ROOT, 'dist'), { recursive: true });
-const rows = habits.map((h) => `${(h.emoji || '').padEnd(2)} ${h.label.padEnd(12)} ${buildUrl(h)}`);
+const reportRows = habits.map((h) => `${(h.emoji || '').padEnd(2)} ${h.label.padEnd(12)} ${buildUrl(h)}`);
 const urlsTxt =
   `Web Request buttons (Method: GET). One per key.\n` +
   `Plugin: "Web Requests" by data-enabler (install from the Stream Deck Marketplace).\n\n` +
@@ -95,6 +134,12 @@ const urlsTxt =
     ? `\n\n--- Dashboard key (optional) ---\n` +
       `Action: System -> Website (built-in). Opens the dashboard in a browser.\n` +
       `Title: 📊 Stats\n  URL: ${dashboardUrl}`
+    : '') +
+  (slotCount > 0
+    ? `\n\n--- AI slot keys (the AI decides what these log; see the dashboard) ---\n` +
+      Array.from({ length: slotCount }, (_, i) =>
+        `Title: ✨ AI ${i + 1}\n  URL: ${buildSlotUrl(i + 1)}\n  Method: GET`
+      ).join('\n')
     : '') +
   `\n\nIcons: animated GIFs in icons/animated/, stills in icons/ (drag one onto a key to set its image).\n`;
 writeFileSync(join(ROOT, 'dist/urls.txt'), urlsTxt);
@@ -105,67 +150,94 @@ const pageUuid = randomUUID().toUpperCase();
 const folder = `${profileUuid}.sdProfile`;
 
 const actions = {};
-habits.forEach((h, i) => {
-  const col = i % cols;
-  const row = Math.floor(i / cols);
+let cell = 0;
+const place = (action) => {
+  const col = cell % cols;
+  const row = Math.floor(cell / cols);
+  actions[`${col},${row}`] = action;
+  cell++;
+};
+const states = (img, title) => [
+  {
+    FFamily: '',
+    FSize: '14',
+    FStyle: '',
+    FUnderline: 'off',
+    Image: img,
+    Title: title,
+    TitleAlignment: 'middle',
+    TitleColor: '#ffffff',
+    // Icons carry their own label; show a text title only when there's no icon.
+    TitleShow: img ? false : true
+  }
+];
+
+// Habit keys.
+habits.forEach((h) => {
   const img = iconDataUri(h.name);
-  actions[`${col},${row}`] = {
-    ActionID: randomUUID().toUpperCase(),
-    Name: 'HTTP Request',
-    Settings: { url: buildUrl(h), method: 'GET', contentType: '', headers: '', body: '' },
-    State: 0,
-    States: [
-      {
-        FFamily: '',
-        FSize: '14',
-        FStyle: '',
-        FUnderline: 'off',
-        Image: img,
-        Title: `${h.emoji} ${h.label}`,
-        TitleAlignment: 'middle',
-        TitleColor: '#ffffff',
-        // The icon already has the label baked in; only show a text title as a
-        // fallback when there's no icon.
-        TitleShow: img ? false : true
-      }
-    ],
-    UUID: 'gg.datagram.web-requests.http'
-  };
+  const [c1, c2] = HABIT_COLORS[h.name] || HABIT_COLORS._default;
+  place(
+    usePlugin
+      ? {
+          ActionID: randomUUID().toUpperCase(),
+          Name: 'Habit Key',
+          Settings: { base: siteOrigin, habit: h.name, emoji: h.emoji, label: h.label, c1, c2, ...(key ? { key } : {}) },
+          State: 0,
+          States: states(img, `${h.emoji} ${h.label}`),
+          UUID: PLUGIN_HABIT
+        }
+      : {
+          ActionID: randomUUID().toUpperCase(),
+          Name: 'HTTP Request',
+          Settings: { url: buildUrl(h), method: 'GET', contentType: '', headers: '', body: '' },
+          State: 0,
+          States: states(img, `${h.emoji} ${h.label}`),
+          UUID: 'gg.datagram.web-requests.http'
+        }
+  );
 });
 
-// 6th key: open the dashboard in a browser (built-in Website action).
+// Stats key: open the dashboard in a browser (built-in Website action).
 if (dashboardUrl) {
-  const i = habits.length;
-  const col = i % cols;
-  const row = Math.floor(i / cols);
-  const img = iconDataUri('_dashboard');
-  actions[`${col},${row}`] = {
+  place({
     ActionID: randomUUID().toUpperCase(),
     Name: 'Website',
     Settings: { path: dashboardUrl, openInBrowser: true },
     State: 0,
-    States: [
-      {
-        FFamily: '',
-        FSize: '14',
-        FStyle: '',
-        FUnderline: 'off',
-        Image: img,
-        Title: '📊 Stats',
-        TitleAlignment: 'middle',
-        TitleColor: '#ffffff',
-        TitleShow: img ? false : true
-      }
-    ],
+    States: states(iconDataUri('_dashboard'), '📊 Stats'),
     UUID: 'com.elgato.streamdeck.system.website'
-  };
+  });
+}
+
+// AI slot keys.
+for (let n = 1; n <= slotCount; n++) {
+  const img = iconDataUri(`Slot${n}`);
+  place(
+    usePlugin
+      ? {
+          ActionID: randomUUID().toUpperCase(),
+          Name: 'AI Slot Key',
+          Settings: { base: siteOrigin, slot: n, ...(key ? { key } : {}) },
+          State: 0,
+          States: states(img, `✨ AI ${n}`),
+          UUID: PLUGIN_SLOT
+        }
+      : {
+          ActionID: randomUUID().toUpperCase(),
+          Name: 'HTTP Request',
+          Settings: { url: buildSlotUrl(n), method: 'GET', contentType: '', headers: '', body: '' },
+          State: 0,
+          States: states(img, `✨ AI ${n}`),
+          UUID: 'gg.datagram.web-requests.http'
+        }
+  );
 }
 
 const outerManifest = {
   AppIdentifier: '',
   DeviceModel: deviceModel,
   DeviceUUID: '',
-  Name: 'Habit Tracker',
+  Name: profileName,
   Pages: { Current: pageUuid, Pages: [pageUuid] },
   Version: '1.0'
 };
@@ -173,7 +245,7 @@ const pageManifest = {
   Actions: actions,
   DeviceModel: deviceModel,
   DeviceUUID: '',
-  Name: 'Habit Tracker',
+  Name: profileName,
   Version: '1.0'
 };
 
@@ -184,96 +256,25 @@ const files = [
     data: Buffer.from(JSON.stringify(pageManifest, null, 2))
   }
 ];
-writeFileSync(join(ROOT, 'dist/Habit Tracker.streamDeckProfile'), zip(files));
+const profilePath = outFile || join(ROOT, 'dist/Habit Tracker.streamDeckProfile');
+writeFileSync(profilePath, zip(files));
 
 // ---- report ---------------------------------------------------------------
-console.log('\nGenerated in dist/:');
-console.log('  - urls.txt                      (paste these into your buttons - always works)');
-console.log('  - Habit Tracker.streamDeckProfile  (double-click to import - convenience)\n');
+console.log(`\nWrote ${profilePath}`);
+console.log(`  + dist/urls.txt (manual fallback)\n`);
 console.log(`Base URL : ${execBase}`);
 const iconsFound = habits.filter((h) => iconDataUri(h.name)).length;
 const animCount = useStatic
   ? 0
   : habits.filter((h) => existsSync(join(ROOT, 'icons/animated', `${h.name}.gif`))).length;
 console.log(
-  `Habits   : ${habits.length}   Deck: ${modelArg} (${cols} cols)   Key: ${key ? 'yes' : 'none'}`
+  `Habits   : ${habits.length}   Deck: ${modelArg} (${cols}x${rows})   Flavor: ${usePlugin ? 'HabitTrackerAI plugin' : 'Web Requests plugin'}   Key: ${key ? 'yes' : 'none'}`
 );
 console.log(
-  `Icons    : ${iconsFound}/${habits.length} embedded (${animCount} animated)   Dashboard key: ${dashboardUrl || 'off'}\n`
+  `Icons    : ${iconsFound}/${habits.length} embedded (${animCount} animated)   AI slots: ${slotCount}   Dashboard key: ${dashboardUrl || 'off'}\n`
 );
-for (const r of rows) console.log('  ' + r);
+for (const r of reportRows) console.log('  ' + r);
 if (dashboardUrl) console.log('  📊 Stats        ' + dashboardUrl);
+for (let n = 1; n <= slotCount; n++) console.log(`  ✨ AI Slot ${n}    ${buildSlotUrl(n)}`);
 console.log('');
 
-// ---- tiny zero-dep ZIP writer (DEFLATE) -----------------------------------
-function crc32(buf) {
-  let c = ~0;
-  for (let i = 0; i < buf.length; i++) {
-    c ^= buf[i];
-    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
-  }
-  return (~c) >>> 0;
-}
-function zip(entries) {
-  const chunks = [];
-  const central = [];
-  let offset = 0;
-  const time = 0;
-  const date = 0x21; // 1980-01-01, stable output
-  for (const e of entries) {
-    const name = Buffer.from(e.name, 'utf8');
-    const raw = e.data;
-    const comp = deflateRawSync(raw);
-    const crc = crc32(raw);
-    const lh = Buffer.alloc(30);
-    lh.writeUInt32LE(0x04034b50, 0);
-    lh.writeUInt16LE(20, 4);
-    lh.writeUInt16LE(0, 6);
-    lh.writeUInt16LE(8, 8); // method: deflate
-    lh.writeUInt16LE(time, 10);
-    lh.writeUInt16LE(date, 12);
-    lh.writeUInt32LE(crc, 14);
-    lh.writeUInt32LE(comp.length, 18);
-    lh.writeUInt32LE(raw.length, 22);
-    lh.writeUInt16LE(name.length, 26);
-    lh.writeUInt16LE(0, 28);
-    chunks.push(lh, name, comp);
-    const ch = Buffer.alloc(46);
-    ch.writeUInt32LE(0x02014b50, 0);
-    ch.writeUInt16LE(20, 4);
-    ch.writeUInt16LE(20, 6);
-    ch.writeUInt16LE(0, 8);
-    ch.writeUInt16LE(8, 10);
-    ch.writeUInt16LE(time, 12);
-    ch.writeUInt16LE(date, 14);
-    ch.writeUInt32LE(crc, 16);
-    ch.writeUInt32LE(comp.length, 20);
-    ch.writeUInt32LE(raw.length, 24);
-    ch.writeUInt16LE(name.length, 28);
-    ch.writeUInt16LE(0, 30);
-    ch.writeUInt16LE(0, 32);
-    ch.writeUInt16LE(0, 34);
-    ch.writeUInt16LE(0, 36);
-    ch.writeUInt32LE(0, 38);
-    ch.writeUInt32LE(offset, 42);
-    central.push(Buffer.concat([ch, name]));
-    offset += lh.length + name.length + comp.length;
-  }
-  const cdStart = offset;
-  let cdSize = 0;
-  for (const c of central) {
-    chunks.push(c);
-    cdSize += c.length;
-  }
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(0, 4);
-  eocd.writeUInt16LE(0, 6);
-  eocd.writeUInt16LE(central.length, 8);
-  eocd.writeUInt16LE(central.length, 10);
-  eocd.writeUInt32LE(cdSize, 12);
-  eocd.writeUInt32LE(cdStart, 16);
-  eocd.writeUInt16LE(0, 20);
-  chunks.push(eocd);
-  return Buffer.concat(chunks);
-}

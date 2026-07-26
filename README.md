@@ -1,4 +1,4 @@
-# Stream Deck → Habit Tracker
+# Stream Deck → Habit Tracker (with an AI coach)
 
 Tap a physical Stream Deck key → a timestamped tap is logged in the cloud and
 shows up on a live dashboard. No always-on PC needed — the endpoint runs on
@@ -10,6 +10,38 @@ Vercel, so it works even when your machine is asleep.
 Each Stream Deck key sends a tiny web request to `/api/log`, which appends a row
 to a Redis store. The dashboard at `/` reads it back and shows counts, a 7-day
 chart, and recent taps.
+
+**AI slot keys:** beyond the 5 fixed habits, spare keys are *AI slots*. An LLM
+(z.ai GLM) looks at your actual tap history and decides what it wants you to
+start logging — to fill gaps in the data or test a hypothesis about your day —
+then assigns those habits to the slot keys. With the bundled **Habit Tracker AI**
+Stream Deck plugin, the slot key faces repaint themselves when assignments
+change. Slot taps resolve server-side at tap time, so history stays truthful
+across swaps.
+
+## Fastest setup (Windows, one line)
+
+```powershell
+irm https://stream-deck-habit-tracker.vercel.app/setup.ps1 | iex
+```
+
+That installs the Stream Deck app if needed (winget), downloads the plugin and
+your device's profile from this app's `/downloads/`, and opens both — you just
+confirm the two Stream Deck prompts and plug in the deck. **No repo clone, no
+Node, nothing else on your machine.**
+
+Hosted artifacts (also linked from the dashboard):
+
+| File | What |
+|---|---|
+| [`setup.ps1`](https://stream-deck-habit-tracker.vercel.app/setup.ps1) | the bootstrap above |
+| [`com.kalmansforge.habit-tracker.streamDeckPlugin`](https://stream-deck-habit-tracker.vercel.app/downloads/com.kalmansforge.habit-tracker.streamDeckPlugin) | our plugin (habit keys + live AI slot keys) |
+| [`HabitTracker-MK2.streamDeckProfile`](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-MK2.streamDeckProfile) | 15-key layout: 5 habits + Stats + 4 AI slots |
+| [`HabitTracker-Neo.streamDeckProfile`](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-Neo.streamDeckProfile) | 8-key Neo layout: 5 habits + Stats + 2 AI slots |
+| `…-WebRequests.streamDeckProfile` ([MK2](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-MK2-WebRequests.streamDeckProfile), [Neo](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-Neo-WebRequests.streamDeckProfile)) | fallback flavor using the third-party Web Requests plugin (animated icons, but slot faces don't self-update) |
+
+> The Neo has 8 LCD keys plus 2 touch points; the touch points are fixed
+> page-navigation sensors and can't run actions, so 8 keys is the real budget.
 
 ---
 
@@ -116,9 +148,30 @@ To stop anyone who guesses your URL from writing rows:
 
 For a personal tracker it's fine to skip this.
 
+## The AI coach (z.ai)
+
+One env var enables it: in Vercel → project → **Settings → Environment
+Variables** add `ZAI_API_KEY` (from [z.ai](https://z.ai)), then redeploy.
+Optional: `ZAI_MODEL` (default `glm-4.7-flash`, which is free-tier; try
+`glm-4.7` for stronger suggestions) and `ZAI_BASE_URL`.
+
+- **✨ Suggest** on the dashboard → `POST /api/suggest` → GLM sees the fixed
+  habits plus a 14-day summary of your taps (counts, active days, top hours)
+  and returns up to 4 habits *it* wants tracked, each with an emoji, short
+  label, and its reason. They're stored as slots 1–4.
+- Slot keys call `/api/log?slot=N`; the server resolves the slot to whatever
+  habit is assigned *right now* and logs that name + emoji, so swaps never
+  corrupt history.
+- The Habit Tracker AI plugin polls `/api/slots` every 20 s and repaints slot
+  key faces when assignments change.
+
 ## Endpoints
 - `GET /api/log?habit=NAME[&note=...][&key=SECRET]` → logs a tap, returns text.
+- `GET /api/log?slot=N` → logs whatever the AI assigned to slot N (1–4).
+- `POST /api/suggest` → ask the AI to (re)fill the slots. 30 s cooldown.
+- `GET /api/slots` → current slot assignments (read by plugin + dashboard).
 - `GET /api/data` → JSON of all taps (feeds the dashboard).
+- `GET /api/health` → storage/AI wiring status (env var names only).
 - `GET /` → the dashboard.
 
 ---
