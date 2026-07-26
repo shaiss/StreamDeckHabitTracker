@@ -13,6 +13,7 @@
 var ws = null;
 var keys = {};            // context -> { action, settings }
 var slotCache = null;     // latest slots array from the server
+var habitCache = null;    // latest habit list from the server (live-editable)
 var slotCacheAt = 0;
 var pollTimer = null;
 var POLL_MS = 15000;
@@ -63,13 +64,26 @@ function handle(ev) {
 
 // ---- behavior -------------------------------------------------------------
 function isSlot(k) { return k && /\.slot$/.test(k.action); }
+function isHabit(k) { return k && /\.habit$/.test(k.action); }
+
+// Stable per-habit color derived from the name, so a habit keeps its color
+// even when the manager reorders the list.
+function colorFor(name) {
+  var h = 0;
+  for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  var hue = h % 360;
+  return ['hsl(' + hue + ',68%,55%)', 'hsl(' + hue + ',72%,30%)'];
+}
 
 function tap(context) {
   var k = keys[context];
   if (!k || !k.settings.base) { showAlert(context); return; }
   var s = k.settings;
-  var url = s.base.replace(/\/+$/, '') + '/api/log?' +
-    (isSlot(k) ? 'slot=' + encodeURIComponent(s.slot || 1) : 'habit=' + encodeURIComponent(s.habit || '')) +
+  var q;
+  if (isSlot(k)) q = 'slot=' + encodeURIComponent(s.slot || 1);
+  else if (s.index !== undefined && s.index !== null) q = 'hkey=' + encodeURIComponent((+s.index) + 1);
+  else q = 'habit=' + encodeURIComponent(s.habit || ''); // legacy profiles
+  var url = s.base.replace(/\/+$/, '') + '/api/log?' + q +
     (s.key ? '&key=' + encodeURIComponent(s.key) : '');
   fetch(url)
     .then(function (r) {
@@ -83,7 +97,8 @@ function tap(context) {
 }
 
 function ensurePolling() {
-  var anySlots = Object.keys(keys).some(function (c) { return isSlot(keys[c]); });
+  // Both slot keys AND habit keys render from live server state now.
+  var anySlots = Object.keys(keys).some(function (c) { return isSlot(keys[c]) || isHabit(keys[c]); });
   if (anySlots && !pollTimer) {
     refreshSlots(true);
     pollTimer = setInterval(function () { refreshSlots(false); }, POLL_MS);
@@ -95,18 +110,20 @@ function ensurePolling() {
 
 function refreshSlots(force) {
   var base = null;
-  for (var c in keys) { if (isSlot(keys[c]) && keys[c].settings.base) { base = keys[c].settings.base; break; } }
+  for (var c in keys) { if ((isSlot(keys[c]) || isHabit(keys[c])) && keys[c].settings.base) { base = keys[c].settings.base; break; } }
   if (!base) return;
   if (!force && Date.now() - slotCacheAt < POLL_MS / 2) return;
   fetch(base.replace(/\/+$/, '') + '/api/slots')
     .then(function (r) { return r.json(); })
     .then(function (j) {
-      var next = JSON.stringify(j.slots || []);
-      var changed = !slotCache || JSON.stringify(slotCache) !== next;
+      var slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(j.slots || []);
+      var habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(j.habits || []);
       slotCache = j.slots || [];
+      habitCache = j.habits || [];
       slotCacheAt = Date.now();
-      if (changed) {
-        for (var c in keys) if (isSlot(keys[c])) render(c);
+      for (var c in keys) {
+        if (slotsChanged && isSlot(keys[c])) render(c);
+        if (habitsChanged && isHabit(keys[c])) render(c);
       }
     })
     .catch(function () { /* keep last faces on network hiccups */ });
@@ -118,6 +135,20 @@ function render(context) {
   if (!k) return;
   var s = k.settings;
   if (!s.base) { setImage(context, face('⚙️', 'setup', SETUP_COLORS, '')); return; }
+  if (isHabit(k)) {
+    // Live habit list wins (habit manager edits repaint within one poll);
+    // baked settings are the offline/first-render fallback.
+    var idx = (s.index !== undefined && s.index !== null) ? +s.index : -1;
+    var def = habitCache && idx >= 0 ? habitCache[idx] : null;
+    if (def) {
+      setImage(context, face(def.emoji || '•', def.label || def.habit, colorFor(def.name), ''));
+    } else if (habitCache && idx >= 0) {
+      setImage(context, face('·', 'empty', SETUP_COLORS, '')); // habit removed
+    } else {
+      setImage(context, face(s.emoji || '•', s.label || s.habit || '?', [s.c1 || '#6b7280', s.c2 || '#374151'], ''));
+    }
+    return;
+  }
   if (!isSlot(k)) {
     setImage(context, face(s.emoji || '•', s.label || s.habit || '?', [s.c1 || '#6b7280', s.c2 || '#374151'], ''));
     return;

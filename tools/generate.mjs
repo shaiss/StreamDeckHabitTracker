@@ -173,7 +173,7 @@ const states = (img, title) => [
 ];
 
 // Habit keys.
-habits.forEach((h) => {
+habits.forEach((h, i) => {
   const img = iconDataUri(h.name);
   const [c1, c2] = HABIT_COLORS[h.name] || HABIT_COLORS._default;
   place(
@@ -181,7 +181,10 @@ habits.forEach((h) => {
       ? {
           ActionID: randomUUID().toUpperCase(),
           Name: 'Habit Key',
-          Settings: { base: siteOrigin, habit: h.name, emoji: h.emoji, label: h.label, c1, c2, ...(key ? { key } : {}) },
+          // index = position: the plugin resolves the CURRENT habit at this
+          // position from /api/slots, so habit-manager edits repaint the key.
+          // The rest is an offline/first-render fallback.
+          Settings: { base: siteOrigin, index: i, habit: h.name, emoji: h.emoji, label: h.label, c1, c2, ...(key ? { key } : {}) },
           State: 0,
           States: states(img, `${h.emoji} ${h.label}`),
           UUID: PLUGIN_HABIT
