@@ -26,3 +26,18 @@ test('rejects bad ids, missing emoji/label, unknown origin, bad counts', () => {
   assert.match(validateHabits([]), /Between 1 and 10/);
   assert.match(validateHabits(Array.from({ length: 11 }, (_, i) => ({ name: 'H' + i, emoji: '🙂', label: 'x' }))), /Between 1 and 10/);
 });
+
+test('accepts an optional positive-integer goal', () => {
+  assert.equal(validateHabits([{ name: 'Drink', emoji: '💧', label: 'Drink', goal: 8 }]), null);
+});
+
+test('rejects out-of-range or non-integer goal (must be a whole number 1-99)', () => {
+  assert.match(validateHabits([{ name: 'X', emoji: '💧', label: 'D', goal: 0 }]), /goal/i);
+  assert.match(validateHabits([{ name: 'X', emoji: '💧', label: 'D', goal: 100 }]), /goal/i);
+  assert.match(validateHabits([{ name: 'X', emoji: '💧', label: 'D', goal: 2.5 }]), /goal/i);
+  assert.match(validateHabits([{ name: 'X', emoji: '💧', label: 'D', goal: 'wat' }]), /goal/i);
+});
+
+test('goal is optional (no goal still validates)', () => {
+  assert.equal(validateHabits([{ name: 'Eat', emoji: '🍽', label: 'Eat' }]), null);
+});
