@@ -28,10 +28,14 @@ across swaps.
 irm https://stream-deck-habit-tracker.vercel.app/setup.ps1 | iex
 ```
 
-That installs the Stream Deck app if needed (winget), downloads the plugin and
-your device's profile from this app's `/downloads/`, and opens both — you just
-confirm the two Stream Deck prompts and plug in the deck. **No repo clone, no
-Node, nothing else on your machine.**
+That installs the Stream Deck app if needed (winget), then does a **clean
+install**: any previous copy of the plugin (including the legacy
+`com.kalmansforge` build) and any imported `Habit Tracker*` profiles are
+removed first, the plugin is placed directly into the Stream Deck plugins
+folder (no prompt), and the fresh profile import is the one prompt you confirm.
+**Re-running the one-liner is the upgrade path** — it never stacks duplicate
+profiles or leaves a stale plugin behind. No repo clone, no Node, nothing else
+on your machine.
 
 Hosted artifacts (also linked from the dashboard):
 
@@ -89,8 +93,11 @@ Until step 1 is done, the dashboard shows a "connect storage" note and
    [dashboard](https://stream-deck-habit-tracker.vercel.app).
 
 ### Step 2 — Install plugin + profile
-Run the one-liner above, or double-click the two hosted files (plugin first,
-then profile). Habit keys and AI slot keys all render from live server state —
+Run the one-liner above (recommended — it cleans out any previous install
+first), or double-click the two hosted files (plugin first, then profile;
+note the manual path does *not* remove old copies, so upgrades and re-imports
+can leave a stale plugin or duplicate profiles behind). Habit keys and AI slot
+keys all render from live server state —
 edits on the [Habits page](https://stream-deck-habit-tracker.vercel.app/habits.html)
 repaint physical keys within ~15 s.
 
