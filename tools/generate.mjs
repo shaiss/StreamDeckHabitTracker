@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { zip } from './lib-zip.mjs';
+import { loadHabits } from './lib-habits.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -91,12 +92,8 @@ const iconDataUri = (name) => {
   return existsSync(png) ? 'data:image/png;base64,' + readFileSync(png).toString('base64') : '';
 };
 
-// ---- read habits ----------------------------------------------------------
-const { habits } = JSON.parse(readFileSync(join(ROOT, 'config/habits.json'), 'utf8'));
-if (!Array.isArray(habits) || habits.length === 0) {
-  console.error('config/habits.json has no habits.');
-  process.exit(1);
-}
+// ---- read habits (live list first — the habit manager is the source of truth)
+const { habits, source: habitsSource } = await loadHabits(siteOrigin, ROOT);
 
 const buildUrl = (h) => {
   const q = new URLSearchParams({ habit: h.name });
@@ -254,6 +251,7 @@ writeFileSync(profilePath, zip(files));
 console.log(`\nWrote ${profilePath}`);
 console.log(`  + dist/urls.txt (manual fallback)\n`);
 console.log(`Base URL : ${execBase}`);
+console.log(`Habits   : from ${habitsSource}`);
 const iconsFound = habits.filter((h) => iconDataUri(h.name)).length;
 const animCount = useStatic
   ? 0

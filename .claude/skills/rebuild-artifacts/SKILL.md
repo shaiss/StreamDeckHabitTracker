@@ -17,6 +17,22 @@ Vercel runs no build step: whatever sits in `public/downloads/` is exactly what
 plugin, or the generator, rebuild in this order (later steps embed earlier
 steps' outputs).
 
+## Habit list source (read this first)
+
+All three generators read the LIVE habit list from `/api/habits` (what the
+habit manager edits) and fall back — loudly — to `config/habits.json` when the
+deployment is unreachable. **This sandbox cannot reach `*.vercel.app`**, so the
+fallback always fires here. Before rebuilding from the sandbox, sync the config
+from the live API so the fallback is fresh:
+
+1. Fetch `https://stream-deck-habit-tracker.vercel.app/api/habits` with the
+   Vercel MCP `web_fetch_vercel_url` tool.
+2. Write the returned list into `config/habits.json` (keep the `//` comment keys).
+3. Commit the sync together with the rebuilt artifacts.
+
+On a machine with normal egress (the owner's PC), no sync is needed — the tools
+fetch live directly (`--base=URL` / `HABITS_BASE` override the default origin).
+
 ## One-time per machine
 
 Tool deps are intentionally NOT in package.json (keeps Vercel's install lean —
