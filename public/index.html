@@ -14,6 +14,7 @@
     }
     * { box-sizing: border-box; }
     body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+    .hnav { margin-bottom: 4px; }
     .wrap { max-width: 860px; margin: 0 auto; padding: 28px 20px 64px; }
     header { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:22px; }
     h1 { font-size: 22px; margin:0; letter-spacing:-.01em; }
@@ -71,16 +72,14 @@
   </style>
 </head>
 <body>
+  <script src="/nav.js" defer></script>
   <div class="wrap">
     <header>
       <div>
         <h1>Habit Tracker</h1>
-        <div class="sub">Tap a Stream Deck key &rarr; it lands here. <a href="/deck.html">🎛 virtual deck</a> · <a href="/mind.html">✨ coach's mind</a> <span id="total" class="muted"></span></div>
+        <div class="sub">Tap a Stream Deck key &rarr; it lands here. <span id="total" class="muted"></span></div>
       </div>
-      <div style="display:flex; align-items:center; gap:6px;">
-        <div class="sub" id="updated"></div>
-        <button class="gear" id="gearBtn" title="Settings">⚙️</button>
-      </div>
+      <div class="sub" id="updated"></div>
     </header>
     <div class="settings" id="settings">
       <h3>Settings &amp; profile</h3>
@@ -218,15 +217,16 @@
       </div>`;
     }
 
-    // Settings panel
-    const gear = document.getElementById('gearBtn'), panel = document.getElementById('settings');
+    // Settings panel (opened from the nav bar, or /?settings=1 from other pages)
+    const panel = document.getElementById('settings');
     try {
       document.getElementById('tzList').innerHTML =
         Intl.supportedValuesOf('timeZone').map(z=>`<option value="${z}">`).join('');
     } catch {}
-    gear.addEventListener('click', () => {
-      panel.classList.toggle('open');
-      if (panel.classList.contains('open')) {
+    function toggleSettings(forceOpen) {
+      const open = forceOpen === true ? true : !panel.classList.contains('open');
+      panel.classList.toggle('open', open);
+      if (open) {
         fetch('/api/profile').then(r=>r.json()).then(p => {
           document.getElementById('setName').value = p.name || '';
           document.getElementById('setTz').value = p.tz || p.effectiveTz || '';
@@ -234,8 +234,11 @@
           document.getElementById('profileStatus').textContent =
             p.effectiveTz ? `Coach currently reads your day as ${p.effectiveTz}` : '';
         }).catch(()=>{});
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
-    });
+    }
+    window.addEventListener('toggle-settings', () => toggleSettings());
+    if (new URLSearchParams(location.search).get('settings') === '1') toggleSettings(true);
     document.getElementById('saveProfile').addEventListener('click', () => {
       const st = document.getElementById('profileStatus');
       st.textContent = 'Saving…';
