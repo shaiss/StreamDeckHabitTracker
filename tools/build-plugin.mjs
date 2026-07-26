@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Renders the plugin's manifest images and packages the .sdPlugin folder into
-// public/downloads/com.kalmansforge.habit-tracker.streamDeckPlugin (a zip).
+// public/downloads/com.shaiss.habit-tracker.streamDeckPlugin (a zip).
 //
 //   npm i playwright-core --no-save   # one-time, if regenerating
 //   node tools/build-plugin.mjs
@@ -13,7 +13,7 @@ import { zip } from './lib-zip.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
-const PLUGIN_DIR = join(ROOT, 'streamdeck-plugin/com.kalmansforge.habit-tracker.sdPlugin');
+const PLUGIN_DIR = join(ROOT, 'streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin');
 const IMAGES = join(PLUGIN_DIR, 'images');
 const EXE =
   process.env.CHROME_PATH ||
@@ -66,10 +66,10 @@ function walk(dir) {
   return out;
 }
 const entries = walk(PLUGIN_DIR).map((p) => ({
-  name: 'com.kalmansforge.habit-tracker.sdPlugin/' + relative(PLUGIN_DIR, p).split('\\').join('/'),
+  name: 'com.shaiss.habit-tracker.sdPlugin/' + relative(PLUGIN_DIR, p).split('\\').join('/'),
   data: readFileSync(p)
 }));
 mkdirSync(join(ROOT, 'public/downloads'), { recursive: true });
-const out = join(ROOT, 'public/downloads/com.kalmansforge.habit-tracker.streamDeckPlugin');
+const out = join(ROOT, 'public/downloads/com.shaiss.habit-tracker.streamDeckPlugin');
 writeFileSync(out, zip(entries));
 console.log(`Packaged ${entries.length} files -> ${relative(ROOT, out)}`);

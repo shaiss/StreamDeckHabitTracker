@@ -28,14 +28,14 @@ if (-not $sd) {
 }
 if ($sd) { Start-Process $sd; Start-Sleep -Seconds 5 }
 
-# 2) Deck model: 15-key by default; set $env:DECK='neo' before running for the 8-key Neo.
-$profileFile = if ($env:DECK -eq 'neo') { 'HabitTracker-Neo.streamDeckProfile' } else { 'HabitTracker-MK2.streamDeckProfile' }
+# 2) Profile (15-key)
+$profileFile = 'HabitTracker-MK2.streamDeckProfile'
 Write-Host "[2/4] Using profile: $profileFile" -ForegroundColor Green
 
 # 3) Plugin (own plugin: habit keys + AI slot keys with live faces)
 Write-Host '[3/4] Downloading + installing the Habit Tracker AI plugin...' -ForegroundColor Yellow
-$pluginPath = Join-Path $dl 'com.kalmansforge.habit-tracker.streamDeckPlugin'
-Invoke-WebRequest "$base/downloads/com.kalmansforge.habit-tracker.streamDeckPlugin" -OutFile $pluginPath
+$pluginPath = Join-Path $dl 'com.shaiss.habit-tracker.streamDeckPlugin'
+Invoke-WebRequest "$base/downloads/com.shaiss.habit-tracker.streamDeckPlugin" -OutFile $pluginPath
 Start-Process $pluginPath   # Stream Deck app pops an install prompt -> click Install
 Start-Sleep -Seconds 4
 
