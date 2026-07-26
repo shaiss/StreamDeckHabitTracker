@@ -75,6 +75,16 @@
     .settings textarea { min-height:70px; resize:vertical; }
     .settings .row2 { display:flex; gap:10px; align-items:center; margin-top:14px; }
     .settings .status { font-size:12.5px; color:var(--muted); }
+    .nlbar { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px 14px; margin-bottom:22px; }
+    .nlbar form { display:flex; gap:10px; }
+    .nlbar input[type=text] { flex:1; min-width:0; background:var(--bg); color:var(--fg);
+      border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; font-size:14px; }
+    .nl-chip { display:flex; align-items:center; gap:8px; padding:8px 4px; font-size:14px; border-top:1px solid var(--line); cursor:pointer; }
+    .nl-out .nl-chip:first-child { margin-top:10px; }
+    .nl-chip .meta { color:var(--muted); font-size:12.5px; }
+    .nl-reply { color:var(--muted); font-size:13px; margin-top:8px; font-style:italic; }
+    .nl-row2 { display:flex; gap:10px; align-items:center; margin-top:10px; }
+    .nl-status { font-size:12.5px; color:var(--muted); margin-top:8px; }
   </style>
 </head>
 <body>
@@ -100,6 +110,14 @@
         <button class="btn" id="saveProfile">Save</button>
         <span class="status" id="profileStatus"></span>
       </div>
+    </div>
+    <div class="nlbar">
+      <form id="nlForm">
+        <input type="text" id="nlText" maxlength="500" autocomplete="off"
+          placeholder='Tell the coach what you did &mdash; "walked 20 min, big lunch, skipped the gym"' />
+        <button class="btn" id="nlGo" type="submit">Log it</button>
+      </form>
+      <div class="nl-out" id="nlOut"></div>
     </div>
     <div id="app"><div class="empty">Loading&hellip;</div></div>
   </div>
@@ -167,7 +185,7 @@
       const tableRows = days.map(d=>`<tr><td>${new Date(d+'T00:00').toLocaleDateString([], { weekday:'long', month:'short', day:'numeric' })}</td><td>${perDay[d]}</td></tr>`).join('');
 
       const recent = entries.slice(-12).reverse().map(e => `
-        <div class="row"><span>${emojiFor(e.h, e.e)} ${e.h}${e.slot?` <span class="tag">AI</span>`:''}${e.note?` <span class="muted">(${e.note})</span>`:''}</span><span class="when">${fmtTime(e.t)}</span></div>`).join('');
+        <div class="row"><span>${emojiFor(e.h, e.e)} ${e.h}${e.slot?` <span class="tag">AI</span>`:''}${e.nl?` <span class="tag">💬</span>`:''}${e.note?` <span class="muted">(${e.note})</span>`:''}</span><span class="when">${fmtTime(e.t)}</span></div>`).join('');
 
       app.innerHTML = `
         <div class="grid">${cards}</div>
@@ -306,6 +324,79 @@
       }).then(r=>r.json()).then(j => {
         st.textContent = j.ok ? 'Saved — the coach will use this on its next pass.' : (j.error || 'Save failed');
       }).catch(e => { st.textContent = 'Save failed: ' + e.message; });
+    });
+
+    // "Tell the coach" — natural-language logging. Lives outside #app so the
+    // 20s re-render never eats a half-typed sentence. Two phases: parse (the
+    // model proposes entries; nothing is written) then confirm (the checked
+    // entries are POSTed back and land in the log).
+    const nlText = document.getElementById('nlText');
+    const nlGo = document.getElementById('nlGo');
+    const nlOut = document.getElementById('nlOut');
+    let nlProposal = null;
+    const nlEsc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    const agoLabel = (t) => {
+      const h = Math.round((Date.now() - t) / 3600000);
+      return h <= 0 ? 'now' : h >= 24 ? Math.round(h/24) + 'd ago' : h + 'h ago';
+    };
+    function nlReset(msg) {
+      nlProposal = null;
+      nlOut.innerHTML = msg ? `<div class="nl-status">${msg}</div>` : '';
+      nlGo.disabled = false; nlGo.textContent = 'Log it';
+    }
+    function nlRenderProposal(p) {
+      nlProposal = p;
+      const chips = (p.entries || []).map((e, i) => `
+        <label class="nl-chip"><input type="checkbox" checked data-i="${i}">
+          <span>${nlEsc(e.e || '•')} ${nlEsc(e.h)}</span>
+          <span class="meta">${e.note ? nlEsc(e.note) + ' · ' : ''}${agoLabel(e.t)}</span>
+        </label>`).join('');
+      const un = p.unmatched?.length
+        ? `<div class="nl-status">No key for: ${p.unmatched.map(nlEsc).join(', ')} — mention it to the coach via Suggest, or add a habit.</div>` : '';
+      const reply = p.reply ? `<div class="nl-reply">${nlEsc(p.reply)}</div>` : '';
+      nlOut.innerHTML = p.entries?.length
+        ? `${chips}${un}${reply}<div class="nl-row2">
+            <button class="btn" id="nlConfirm">Log ${p.entries.length === 1 ? 'it' : 'these'}</button>
+            <button class="btn ghost" id="nlCancel">Cancel</button>
+            <span class="nl-status" id="nlStatus" style="margin-top:0"></span></div>`
+        : `<div class="nl-status">Couldn't match that to any key.${p.unmatched?.length ? ' Unmatched: ' + p.unmatched.map(nlEsc).join(', ') : ''}</div>`;
+      document.getElementById('nlCancel')?.addEventListener('click', () => nlReset());
+      document.getElementById('nlConfirm')?.addEventListener('click', nlConfirm);
+    }
+    async function nlConfirm() {
+      const btn = document.getElementById('nlConfirm'), st = document.getElementById('nlStatus');
+      if (!nlProposal || btn.disabled) return;
+      const picked = [...nlOut.querySelectorAll('input[type=checkbox]:checked')]
+        .map((c) => nlProposal.entries[+c.dataset.i]);
+      if (!picked.length) { st.textContent = 'Nothing checked.'; return; }
+      btn.disabled = true; btn.textContent = 'Logging…'; // double-tap guard (bug class from #26)
+      try {
+        const r = await fetch('/api/nl', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ entries: picked }) });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        nlText.value = '';
+        nlReset(`&#10003; Logged ${j.logged.length} ${j.logged.length === 1 ? 'entry' : 'entries'} — the coach saw it.`);
+        refresh();
+      } catch (e2) {
+        btn.disabled = false; btn.textContent = 'Log these';
+        st.textContent = e2.message;
+      }
+    }
+    document.getElementById('nlForm').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const text = nlText.value.trim();
+      if (!text || nlGo.disabled) return;
+      nlGo.disabled = true; nlGo.textContent = '🤔 Parsing…'; nlOut.innerHTML = ''; nlProposal = null;
+      try {
+        const r = await fetch('/api/nl', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ text }) });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        nlGo.disabled = false; nlGo.textContent = 'Log it';
+        nlRenderProposal(j);
+      } catch (e2) {
+        nlGo.disabled = false; nlGo.textContent = 'Log it';
+        nlOut.innerHTML = `<div class="nl-status">${nlEsc(e2.message)}</div>`;
+      }
     });
 
     let firstLoad = true;
