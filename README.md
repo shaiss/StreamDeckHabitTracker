@@ -179,8 +179,13 @@ after each tap so the physical faces catch the change almost immediately. The
   the coach's end-of-day note, shown on the dashboard. Trigger manually with
   `/api/cron/morning?run=1` / `/api/cron/daily?run=1`. Optionally set
   `CRON_SECRET` to lock the cron routes.
-- **Timezone**: set `HOME_TZ` (IANA name; default `America/New_York`) so the
-  coach reads your day in your clock, not the server's UTC.
+- **Settings & profile** (⚙️ on the dashboard): your name, timezone, and a
+  free-text "about you" the coach reads on every pass. The profile timezone
+  wins over the `HOME_TZ` env default (`America/New_York`).
+- **The coach learns from behavior** (behavioral scorer): every slot
+  assignment is kept in history, and each pass shows the coach its track
+  record — which suggested keys you actually tapped vs ignored — so it drops
+  asks that don't land. The dashboard shows the current hit rate.
 - Reactive feedback keys expire automatically (default 2 h; the model can set
   `ttlMinutes` 15–720 per key), so a "was that meal good?" key doesn't squat
   a slot all day.

@@ -58,6 +58,16 @@
     .slot .tag { font-size:11px; color:#8b5cf6; font-weight:700; letter-spacing:.05em; margin-top:8px; }
     .ai-note { font-size:13px; color:var(--muted); margin-top:10px; }
     .ai-err { font-size:13px; color:#e05252; margin-top:10px; white-space:pre-wrap; }
+    .gear { border:0; background:transparent; color:var(--muted); font-size:18px; cursor:pointer; padding:4px 6px; }
+    .settings { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:22px; display:none; }
+    .settings.open { display:block; }
+    .settings h3 { margin:0 0 12px; font-size:14px; }
+    .settings label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+    .settings input, .settings textarea { width:100%; box-sizing:border-box; background:var(--bg); color:var(--fg);
+      border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; font-size:14px; }
+    .settings textarea { min-height:70px; resize:vertical; }
+    .settings .row2 { display:flex; gap:10px; align-items:center; margin-top:14px; }
+    .settings .status { font-size:12.5px; color:var(--muted); }
   </style>
 </head>
 <body>
@@ -67,8 +77,25 @@
         <h1>Habit Tracker</h1>
         <div class="sub">Tap a Stream Deck key &rarr; it lands here. <span id="total" class="muted"></span></div>
       </div>
-      <div class="sub" id="updated"></div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <div class="sub" id="updated"></div>
+        <button class="gear" id="gearBtn" title="Settings">⚙️</button>
+      </div>
     </header>
+    <div class="settings" id="settings">
+      <h3>Settings &amp; profile</h3>
+      <label for="setName">Your name (the coach uses it)</label>
+      <input id="setName" maxlength="60" placeholder="e.g. Shai" />
+      <label for="setTz">Timezone (IANA name)</label>
+      <input id="setTz" list="tzList" placeholder="America/New_York" />
+      <datalist id="tzList"></datalist>
+      <label for="setAbout">About you — anything the coach should know</label>
+      <textarea id="setAbout" maxlength="1000" placeholder="Night owl. Desk job. Trying to drink more water and stop late-night snacking."></textarea>
+      <div class="row2">
+        <button class="btn" id="saveProfile">Save</button>
+        <span class="status" id="profileStatus"></span>
+      </div>
+    </div>
     <div id="app"><div class="empty">Loading&hellip;</div></div>
   </div>
 
@@ -155,8 +182,12 @@
       const insight = lastInsight?.text
         ? `<div class="slot" style="margin-bottom:12px"><div class="top"><span class="em">📝</span><span class="nm">Coach's note · ${lastInsight.date||''}</span></div><div class="why">${String(lastInsight.text).replace(/</g,'&lt;')}</div></div>`
         : '';
+      const tr = s?.track?.overall;
+      const trackLine = tr && tr.offered > 0
+        ? `<div class="ai-note" style="margin:0 0 10px">Track record: ${tr.landed}/${tr.offered} suggested keys tapped (${Math.round(tr.hitRate*100)}%) — the coach sees this and adapts.</div>`
+        : '';
       el.innerHTML = `<div class="ai-head"><h2>AI Coach${s?.model ? ` <span class="muted" style="text-transform:none;letter-spacing:0">· ${s.model}</span>` : ''}</h2>${btn}</div>
-        ${insight}<div class="slot-grid">${cards}</div>${note}<div class="ai-err" id="aiErr"></div>`;
+        ${insight}${trackLine}<div class="slot-grid">${cards}</div>${note}<div class="ai-err" id="aiErr"></div>`;
       document.getElementById('suggestBtn')?.addEventListener('click', suggest);
     }
 
@@ -187,11 +218,45 @@
       </div>`;
     }
 
+    // Settings panel
+    const gear = document.getElementById('gearBtn'), panel = document.getElementById('settings');
+    try {
+      document.getElementById('tzList').innerHTML =
+        Intl.supportedValuesOf('timeZone').map(z=>`<option value="${z}">`).join('');
+    } catch {}
+    gear.addEventListener('click', () => {
+      panel.classList.toggle('open');
+      if (panel.classList.contains('open')) {
+        fetch('/api/profile').then(r=>r.json()).then(p => {
+          document.getElementById('setName').value = p.name || '';
+          document.getElementById('setTz').value = p.tz || p.effectiveTz || '';
+          document.getElementById('setAbout').value = p.about || '';
+          document.getElementById('profileStatus').textContent =
+            p.effectiveTz ? `Coach currently reads your day as ${p.effectiveTz}` : '';
+        }).catch(()=>{});
+      }
+    });
+    document.getElementById('saveProfile').addEventListener('click', () => {
+      const st = document.getElementById('profileStatus');
+      st.textContent = 'Saving…';
+      fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('setName').value.trim(),
+          tz: document.getElementById('setTz').value.trim(),
+          about: document.getElementById('setAbout').value.trim()
+        })
+      }).then(r=>r.json()).then(j => {
+        st.textContent = j.ok ? 'Saved — the coach will use this on its next pass.' : (j.error || 'Save failed');
+      }).catch(e => { st.textContent = 'Save failed: ' + e.message; });
+    });
+
     let firstLoad = true;
     function refresh() {
       Promise.all([
         fetch('/api/data').then(r=>r.json()),
-        fetch('/api/slots').then(r=>r.json()).catch(()=>null)
+        fetch('/api/slots?track=1').then(r=>r.json()).catch(()=>null)
       ]).then(([d, s]) => {
         slotState = s;
         lastInsight = d.insight || null;
