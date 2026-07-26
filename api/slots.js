@@ -2,7 +2,7 @@
 // def = { habit, emoji, label, reason, assignedAt }
 // Read by the dashboard and by the Stream Deck plugin (CORS open, read-only).
 import { waitUntil } from '@vercel/functions';
-import { getSlots, isConfigured, getSlotHistory, all } from '../lib/store.js';
+import { getSlots, isConfigured, getSlotHistory, all, getDeckState, setDeckState } from '../lib/store.js';
 import { zaiKey, zaiModel } from '../lib/ai.js';
 import { getHabits } from '../lib/habits.js';
 import { scoreSuggestions } from '../lib/scorer.js';
@@ -24,15 +24,41 @@ export default async function handler(req, res) {
       res.status(200).json({ ...base, suggestedAt: 0, slots: [null, null, null, null] });
       return;
     }
+    const q = req.query || {};
     const doc = await getSlots();
     const out = { ...base, suggestedAt: doc.suggestedAt, slots: doc.slots };
     // ?track=1 (dashboard only — keeps the plugin's poll light): behavioral
-    // scorecard of past suggestions vs actual taps.
-    if ((req.query || {}).track === '1') {
-      const [history, entries] = await Promise.all([getSlotHistory(), all()]);
+    // scorecard of past suggestions vs actual taps, plus the hardware
+    // heartbeat so the dashboard can report whether a physical deck is live.
+    if (q.track === '1') {
+      const [history, entries, deck] = await Promise.all([
+        getSlotHistory(),
+        all(),
+        getDeckState().catch(() => null)
+      ]);
       out.track = scoreSuggestions(history, entries);
+      out.deck = deck;
     }
     res.status(200).json(out);
+
+    // ?deck=<pluginVersion> marks the physical deck's own poll. Recording it
+    // after the response keeps the plugin's poll as cheap as it was.
+    //
+    // This is the one WRITE on an otherwise read-only, open-CORS endpoint, so it
+    // honors the same HABIT_KEY gate as /api/log: without it, any anonymous
+    // caller could forge "the hardware is live" (the plugin sends ?key= too when
+    // the env var is set). `plugin` is still attacker-shaped when HABIT_KEY is
+    // unset — it's stripped of markup here and escaped again at render.
+    const secret = process.env.HABIT_KEY;
+    if (q.deck && (!secret || q.key === secret)) {
+      waitUntil(
+        setDeckState({
+          at: Date.now(),
+          plugin: String(q.deck).replace(/[^\w.+-]/g, '').slice(0, 20),
+          keys: Math.max(0, Math.min(64, parseInt(q.keys, 10) || 0))
+        }).catch(() => {})
+      );
+    }
 
     // The deck's own heartbeat drives proactivity: the plugin polls this
     // endpoint every ~15s (dashboard every 20s), so a throttled background
