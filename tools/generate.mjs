@@ -92,6 +92,23 @@ const iconDataUri = (name) => {
   return existsSync(png) ? 'data:image/png;base64,' + readFileSync(png).toString('base64') : '';
 };
 
+// v3.0 profiles embed icons as real PNG files inside each page's Images/
+// folder (NOT data URIs — Stream Deck rejects them). Returns the raw PNG
+// Buffer plus the relative Images/<file>.png ref a state should cite, or
+// null when there's no icon for this name. PNG-only: GIFs aren't a valid
+// Images/ entry, so even without --static we read the still PNG.
+const ICON_REFS = new Map(); // name -> { ref, buffer }  (dedupes shared icons)
+const iconImage = (name) => {
+  if (ICON_REFS.has(name)) return ICON_REFS.get(name);
+  const png = join(ROOT, 'icons', `${name}.png`);
+  if (!existsSync(png)) return null;
+  const slug = name.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'icon';
+  const ref = `Images/${slug}.png`;
+  const entry = { ref, buffer: readFileSync(png) };
+  ICON_REFS.set(name, entry);
+  return entry;
+};
+
 // ---- read habits (live list first — the habit manager is the source of truth)
 const { habits, source: habitsSource } = await loadHabits(siteOrigin, ROOT);
 
@@ -132,10 +149,17 @@ const urlsTxt =
 writeFileSync(join(ROOT, 'dist/urls.txt'), urlsTxt);
 
 // ---- 2) .streamDeckProfile (convenience) ----------------------------------
+// v3.0 layout: one populated page (the deck) + one extra empty "Default"
+// page the app requires (referenced from Pages.Default, NOT Pages.Pages).
+// On-disk page folders are uppercase UUIDs; the outer manifest cites them
+// in lowercase, matching how Stream Deck itself writes profiles.
 const profileUuid = randomUUID().toUpperCase();
 const pageUuid = randomUUID().toUpperCase();
+const defaultPageUuid = randomUUID().toUpperCase();
 const folder = `${profileUuid}.sdProfile`;
 
+// v3.0 page Controllers[].Actions is keyed "col,row" (column first). Habits
+// fill row-major, top-left first, matching how the keys read on the deck.
 const actions = {};
 let cell = 0;
 const place = (action) => {
@@ -144,42 +168,41 @@ const place = (action) => {
   actions[`${col},${row}`] = action;
   cell++;
 };
-const states = (img, title) => [
-  {
-    FFamily: '',
-    FSize: '14',
-    FStyle: '',
-    FUnderline: 'off',
-    Image: img,
-    Title: title,
-    TitleAlignment: 'middle',
-    TitleColor: '#ffffff',
-    // Icons carry their own label; show a text title only when there's no icon.
-    TitleShow: img ? false : true
-  }
-];
+// Build a single state. `imgName` is an icon name (resolved to an Images/
+// ref via iconImage); pass null when the key has no icon (title-only state).
+const states = (imgName, title) => {
+  const img = imgName ? iconImage(imgName) : null;
+  // Icons carry their own label; show a text title only when there's no icon.
+  const state = { ShowTitle: !img, TitleAlignment: 'middle', TitleColor: '#ffffff' };
+  if (img) state.Image = img.ref;
+  else state.Title = title;
+  return [state];
+};
 
 // Habit keys.
 habits.forEach((h, i) => {
-  const img = iconDataUri(h.name);
   place(
     usePlugin
       ? {
           ActionID: randomUUID().toUpperCase(),
+          LinkedTitle: true,
           Name: 'Habit Key',
           // index = position: the plugin resolves the CURRENT habit at this
           // position from /api/slots, so habit-manager edits repaint the key.
           Settings: { base: siteOrigin, index: i, ...(key ? { key } : {}) },
+          Resources: null,
           State: 0,
-          States: states(img, `${h.emoji} ${h.label}`),
+          States: states(h.name, `${h.emoji} ${h.label}`),
           UUID: PLUGIN_HABIT
         }
       : {
           ActionID: randomUUID().toUpperCase(),
+          LinkedTitle: true,
           Name: 'HTTP Request',
           Settings: { url: buildUrl(h), method: 'GET', contentType: '', headers: '', body: '' },
+          Resources: null,
           State: 0,
-          States: states(img, `${h.emoji} ${h.label}`),
+          States: states(h.name, `${h.emoji} ${h.label}`),
           UUID: 'gg.datagram.web-requests.http'
         }
   );
@@ -189,59 +212,86 @@ habits.forEach((h, i) => {
 if (dashboardUrl) {
   place({
     ActionID: randomUUID().toUpperCase(),
+    LinkedTitle: true,
     Name: 'Website',
     Settings: { path: dashboardUrl, openInBrowser: true },
+    Resources: null,
     State: 0,
-    States: states(iconDataUri('_dashboard'), '📊 Stats'),
+    States: states('_dashboard', '📊 Stats'),
     UUID: 'com.elgato.streamdeck.system.website'
   });
 }
 
 // AI slot keys.
 for (let n = 1; n <= slotCount; n++) {
-  const img = iconDataUri(`Slot${n}`);
   place(
     usePlugin
       ? {
           ActionID: randomUUID().toUpperCase(),
+          LinkedTitle: true,
           Name: 'AI Slot Key',
           Settings: { base: siteOrigin, slot: n, ...(key ? { key } : {}) },
+          Resources: null,
           State: 0,
-          States: states(img, `✨ AI ${n}`),
+          States: states(`Slot${n}`, `✨ AI ${n}`),
           UUID: PLUGIN_SLOT
         }
       : {
           ActionID: randomUUID().toUpperCase(),
+          LinkedTitle: true,
           Name: 'HTTP Request',
           Settings: { url: buildSlotUrl(n), method: 'GET', contentType: '', headers: '', body: '' },
+          Resources: null,
           State: 0,
-          States: states(img, `✨ AI ${n}`),
+          States: states(`Slot${n}`, `✨ AI ${n}`),
           UUID: 'gg.datagram.web-requests.http'
         }
   );
 }
 
+// ---- v3.0 manifests -------------------------------------------------------
+// Outer: Device object + Pages (Current is a real page; Default is the empty
+// fallback page). Version MUST be "3.0" or the app's v1.0 importer chokes on
+// the (intentionally absent) top-level Actions key.
 const outerManifest = {
-  AppIdentifier: '',
-  DeviceModel: deviceModel,
-  DeviceUUID: '',
+  Device: { Model: deviceModel, UUID: '' },
   Name: profileName,
-  Pages: { Current: pageUuid, Pages: [pageUuid] },
-  Version: '1.0'
+  Pages: {
+    Current: pageUuid.toLowerCase(),
+    Default: defaultPageUuid.toLowerCase(),
+    Pages: [pageUuid.toLowerCase()]
+  },
+  Version: '3.0'
 };
+// Page: actions live inside Controllers[].Actions, keyed "row,col". An empty
+// page (the Default fallback) uses Actions: null.
 const pageManifest = {
-  Actions: actions,
-  DeviceModel: deviceModel,
-  DeviceUUID: '',
-  Name: profileName,
-  Version: '1.0'
+  Controllers: [{ Actions: actions, Type: 'Keypad' }],
+  Icon: '',
+  Name: ''
 };
+const defaultPageManifest = {
+  Controllers: [{ Actions: null, Type: 'Keypad' }],
+  Icon: '',
+  Name: ''
+};
+
+// Icon files: one PNG per referenced icon name, inside the page's Images/.
+const imageFiles = [...ICON_REFS.values()].map((e) => ({
+  name: `${folder}/Profiles/${pageUuid}/Images/${e.ref.split('/').pop()}`,
+  data: e.buffer
+}));
 
 const files = [
   { name: `${folder}/manifest.json`, data: Buffer.from(JSON.stringify(outerManifest, null, 2)) },
   {
     name: `${folder}/Profiles/${pageUuid}/manifest.json`,
     data: Buffer.from(JSON.stringify(pageManifest, null, 2))
+  },
+  ...imageFiles,
+  {
+    name: `${folder}/Profiles/${defaultPageUuid}/manifest.json`,
+    data: Buffer.from(JSON.stringify(defaultPageManifest, null, 2))
   }
 ];
 const profilePath = outFile || join(ROOT, 'dist/Habit Tracker.streamDeckProfile');
