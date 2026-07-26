@@ -43,6 +43,22 @@
     .crow .meta { font-size: 12px; color: var(--muted); }
     .crow .stats { font-size: 12px; color: var(--muted); text-align: right; }
     .crow .active { color: #a78bfa; font-weight: 700; font-size: 11px; letter-spacing: .05em; }
+    .prow { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: center;
+            background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px;
+            border-left: 3px solid var(--violet); margin-bottom: 10px; }
+    .prow .em { font-size: 22px; text-align: center; }
+    .prow .nm { font-weight: 600; }
+    .prow .meta { font-size: 12px; color: var(--muted); }
+    .prow .why { font-size: 12.5px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+    .prow .pbtns { display: flex; gap: 8px; }
+    .kind { font-size: 10px; font-weight: 700; letter-spacing: .07em; padding: 3px 7px; border-radius: 6px;
+            margin-right: 7px; }
+    .kind.add { color: #fff; background: linear-gradient(135deg, var(--violet), var(--violet-deep)); }
+    .kind.retire { color: var(--muted); border: 1px solid var(--line); }
+    .arow { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: center;
+            background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px;
+            margin-bottom: 8px; opacity: .72; }
+    .arow .em { font-size: 20px; text-align: center; }
   </style>
 </head>
 <body>
@@ -50,6 +66,11 @@
   <div class="wrap">
     <h1>Habits</h1>
     <div class="sub">The fixed keys — what you're deliberately tracking. (The ✨ AI slots pick their own.)</div>
+    <div class="sect" id="propSect" hidden style="margin-top:0">
+      <h2>The coach wants to change your roster</h2>
+      <div class="hint">It reviews the fixed keys each morning. Nothing changes until you say so — and dismissing one tells it not to ask again.</div>
+      <div id="propRows"></div>
+    </div>
     <div class="cols"><span>Emoji</span><span>Label (on the key)</span><span>Id (logged name)</span><span>Origin</span><span></span></div>
     <div class="rows" id="rows"></div>
     <div class="actions">
@@ -61,6 +82,11 @@
       <h2>The coach's inventions</h2>
       <div class="hint">Habits the AI created for its slot keys. Promote one to make it a permanent fixed key — it keeps its coach badge.</div>
       <div id="coachRows"></div>
+    </div>
+    <div class="sect" id="archSect" hidden>
+      <h2>Retired</h2>
+      <div class="hint">Keys you've retired. Their tap history is intact — restore one and it picks up where it left off.</div>
+      <div id="archRows"></div>
     </div>
 
     <div class="note">
@@ -121,16 +147,83 @@
       }));
     }
 
+    // The coach's roster proposals: add/retire asks awaiting a yes or no.
+    // Unlike Promote (which stages a row for you to edit), a decision here is
+    // final on click — the server applies it and we re-read both lists.
+    function renderRoster(r) {
+      const props = r.proposals || [], arch = r.archive || [];
+      document.getElementById('propSect').hidden = !props.length;
+      document.getElementById('propRows').innerHTML = props.map(p => `
+        <div class="prow">
+          <span class="em">${esc(p.emoji)}</span>
+          <span>
+            <span class="kind ${p.kind === 'retire' ? 'retire' : 'add'}">${p.kind === 'retire' ? 'RETIRE' : 'ADD'}</span>
+            <span class="nm">${esc(p.label)}</span> <span class="meta">· ${esc(p.name)}</span>
+            ${p.reason ? `<div class="why">${esc(p.reason)}</div>` : ''}
+          </span>
+          <span class="pbtns">
+            <button class="btn decide" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-decision="approve">${p.kind === 'retire' ? '✓ Retire it' : '✓ Add it'}</button>
+            <button class="btn ghost decide" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-decision="dismiss">Dismiss</button>
+          </span>
+        </div>`).join('');
+
+      document.getElementById('archSect').hidden = !arch.length;
+      document.getElementById('archRows').innerHTML = arch.map(a => `
+        <div class="arow">
+          <span class="em">${esc(a.emoji)}</span>
+          <span><span class="nm">${esc(a.label)}</span> <span class="meta">· ${esc(a.name)}</span></span>
+          <button class="btn ghost restore" data-name="${esc(a.name)}">↩ Restore</button>
+        </div>`).join('');
+
+      document.querySelectorAll('.decide').forEach(b => b.addEventListener('click', () =>
+        decide({ id: b.dataset.id, decision: b.dataset.decision })));
+      document.querySelectorAll('.restore').forEach(b => b.addEventListener('click', () =>
+        decide({ restore: b.dataset.name })));
+    }
+
+    function decided(a) {
+      if (!a) return 'Done.';
+      if (a.status === 'restored') return `${a.label} is back on your roster.`;
+      if (a.status === 'dismissed') return `Dismissed — the coach won’t ask about ${a.name} again.`;
+      if (a.kind === 'retire') return `${a.label} retired — it’s under Retired below, and its history is untouched.`;
+      return `${a.label} is a fixed key now — re-import your deck profile to give it a physical key.`;
+    }
+
+    function decide(payload) {
+      document.querySelectorAll('.decide, .restore').forEach(b => { b.disabled = true; });
+      statusEl.className = 'status'; statusEl.textContent = 'Working…';
+      return fetch('/api/roster', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(r=>r.json()).then(j =>
+        // Re-read first, then report: the status line must never announce a
+        // change the lists above it haven't caught up to yet.
+        load(true).then(() => {
+          if (!j.ok) { statusEl.className = 'status err'; statusEl.textContent = j.error || 'Failed.'; }
+          else { statusEl.textContent = decided(j.applied); }
+        })
+      ).catch(e => load(true).then(() => {
+        statusEl.className = 'status err'; statusEl.textContent = 'Failed: ' + e.message;
+      }));
+    }
+
     function wireRow(el) {
       el.querySelector('.del').addEventListener('click', () => el.remove());
     }
 
-    function load() {
-      return fetch('/api/habits').then(r=>r.json()).then(j => {
+    function load(keepStatus) {
+      return Promise.all([
+        fetch('/api/habits').then(r=>r.json()),
+        fetch('/api/roster').then(r=>r.json()).catch(() => ({}))
+      ]).then(([j, r]) => {
         rowsEl.innerHTML = (j.habits||[]).map(h => rowHtml(h, false)).join('');
         rowsEl.querySelectorAll('.hrow').forEach(wireRow);
         renderCoach(j.coachHabits);
-      }).catch(() => { statusEl.textContent = 'Couldn’t load habits.'; });
+        renderRoster(r);
+      }).catch(() => {
+        if (!keepStatus) statusEl.textContent = 'Couldn’t load habits.';
+      });
     }
     load();
 
