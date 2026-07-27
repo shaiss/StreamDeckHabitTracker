@@ -1,222 +1,340 @@
-# Stream Deck → Habit Tracker (with an AI coach)
+<div align="center">
 
-Tap a physical Stream Deck key → a timestamped tap is logged in the cloud and
-shows up on a live dashboard. No always-on PC needed — the endpoint runs on
-Vercel, so it works even when your machine is asleep.
+# Habit Tracker
 
-**Live app:** https://stream-deck-habit-tracker.vercel.app
-**Virtual deck:** https://stream-deck-habit-tracker.vercel.app/deck.html — a browser
-twin of the 15-key deck (same faces, live AI slot keys, real logging) for when
-you're away from the hardware or don't own one. Add `?key=...` if `HABIT_KEY` is set.
-**Log endpoint:** `https://stream-deck-habit-tracker.vercel.app/api/log?habit=NAME`
+### A Stream Deck that tracks your habits — and an AI coach that decides what to ask you next.
 
-Each Stream Deck key sends a tiny web request to `/api/log`, which appends a row
-to a Redis store. The dashboard at `/` reads it back and shows counts, a 7-day
-chart, and recent taps.
+Tap a physical key, and a timestamped row lands in the cloud. No always-on PC, no phone app,
+no friction. Then the coach takes over the spare keys and starts asking better questions.
 
-**AI slot keys:** beyond the 5 fixed habits, spare keys are *AI slots*. An LLM
-(z.ai GLM) looks at your actual tap history and decides what it wants you to
-start logging — to fill gaps in the data or test a hypothesis about your day —
-then assigns those habits to the slot keys. With the bundled **Habit Tracker AI**
-Stream Deck plugin, the slot key faces repaint themselves when assignments
-change. Slot taps resolve server-side at tap time, so history stays truthful
-across swaps.
+[**Live app**](https://stream-deck-habit-tracker.vercel.app) ·
+[**Virtual deck**](https://stream-deck-habit-tracker.vercel.app/deck.html) ·
+[**Inside the coach**](https://stream-deck-habit-tracker.vercel.app/mind.html) ·
+[**Deploy your own**](#deploy-your-own)
 
-## Fastest setup (Windows, one line)
+[![CI](https://github.com/shaiss/StreamDeckHabitTracker/actions/workflows/ci.yml/badge.svg)](https://github.com/shaiss/StreamDeckHabitTracker/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Node 22+](https://img.shields.io/badge/node-22%2B-5FA04E)
+![Stream Deck 7.1+](https://img.shields.io/badge/Stream%20Deck-7.1%2B-111)
+
+<img src="design/specimen.png" alt="Habit Tracker key faces: five habit keys in their own hues, a Stats key, and four violet AI slot keys" width="820">
+
+</div>
+
+---
+
+## What it is
+
+Habit tracking usually fails on the capture step. Apps demand an unlock, a scroll, and a tap;
+by the time you've done that, you've forgotten why you opened the phone. A Stream Deck key is
+one thumb-press away, always visible, and never asks you to context-switch.
+
+Habit Tracker turns that key into a logger. Each press sends a single web request to a
+serverless endpoint; the row lands in Redis and shows up on a live dashboard within seconds.
+Because the endpoint runs on Vercel rather than your desktop, logging works while your machine
+is asleep, rebooting, or three timezones away.
+
+The other half is the coach. Beyond your fixed habits, up to four keys are **AI slots** — the
+coach reads your real tap history and decides what it wants tracked, then writes those habits
+onto the physical keys. The key faces repaint themselves. It is a tracker that asks follow-up
+questions.
+
+## Highlights
+
+| | |
+|---|---|
+| 🔌 **No always-on PC** | The key talks to Vercel, not to your computer. Sleep it, close the lid, log from anywhere. |
+| ✨ **AI slot keys** | An LLM picks up to 4 habits it wants tracked and assigns them to real keys, each with an emoji, label, and a stated reason. |
+| ⚡ **Reactive, not scheduled** | Every tap triggers a background coach pass (45 s cooldown). Tap 🍽 Eat and 👍/👎 food-feedback keys can appear seconds later. |
+| 🎛 **Living key faces** | The bundled Stream Deck plugin polls server state and repaints physical keys — progress rings, streaks, and new AI assignments, no re-import. |
+| 🧠 **It remembers** | The coach keeps persistent hypothesis notes across passes and reads them back at the start of the next one. |
+| 📉 **It learns what you ignore** | A behavioral scorer tracks which suggested keys you actually tapped, and feeds that record back into every pass. |
+| 🗂 **Self-managing roster** | The coach can propose adding or retiring *fixed* habits — but nothing applies without your approval. |
+| 🖥 **No hardware required** | The virtual deck is a browser twin of the 15-key device: same faces, same live slots, real logging. |
+| 🔬 **Evaluated, not vibes** | Every coach pass is captured into a dataset; a replay endpoint scores model-vs-model on your real production contexts. |
+
+## Quick start
+
+### Have a Stream Deck? (Windows, one line)
 
 ```powershell
 irm https://stream-deck-habit-tracker.vercel.app/setup.ps1 | iex
 ```
 
-That installs the Stream Deck app if needed (winget), then does a **clean
-install**: any previous copy of the plugin (including the legacy
-`com.kalmansforge` build) and any imported `Habit Tracker*` profiles are
-removed first, the plugin is placed directly into the Stream Deck plugins
-folder (no prompt), and the fresh profile import is the one prompt you confirm.
-**Re-running the one-liner is the upgrade path** — it never stacks duplicate
-profiles or leaves a stale plugin behind. No repo clone, no Node, nothing else
-on your machine.
+That's the whole install. The script installs the Elgato Stream Deck app if it's missing
+(via winget), then performs a **clean install**: it downloads, extracts, and validates
+everything *before* touching anything on disk, then removes any previous copy of the plugin
+(including the legacy `com.kalmansforge` build) and any imported `Habit Tracker*` profiles,
+drops the plugin straight into the plugins folder with no prompt, and imports the fresh
+profile — the one prompt you'll confirm.
 
-Hosted artifacts (also linked from the dashboard):
+**Re-running the one-liner is the upgrade path.** It never stacks duplicate profiles or
+leaves a stale plugin behind. No repo clone, no Node, nothing else on your machine.
 
-| File | What |
+<details>
+<summary>Manual install / macOS</summary>
+
+Download and double-click the two artifacts below — **plugin first, then profile**. Note
+that the manual path does *not* remove old copies, so upgrades can leave a stale plugin or
+duplicate profiles behind.
+
+| File | What it is |
 |---|---|
-| [`setup.ps1`](https://stream-deck-habit-tracker.vercel.app/setup.ps1) | the bootstrap above |
-| [`com.shaiss.habit-tracker.streamDeckPlugin`](https://stream-deck-habit-tracker.vercel.app/downloads/com.shaiss.habit-tracker.streamDeckPlugin) | the plugin (live habit keys + live AI slot keys) |
-| [`HabitTracker-MK2.streamDeckProfile`](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-MK2.streamDeckProfile) | 15-key layout: 5 habit keys + Stats + 4 AI slots |
+| [`setup.ps1`](https://stream-deck-habit-tracker.vercel.app/setup.ps1) | the Windows bootstrap above |
+| [`com.shaiss.habit-tracker.streamDeckPlugin`](https://stream-deck-habit-tracker.vercel.app/downloads/com.shaiss.habit-tracker.streamDeckPlugin) | the plugin — live habit keys + live AI slot keys |
+| [`HabitTracker-MK2.streamDeckProfile`](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-MK2.streamDeckProfile) | 15-key layout: habit keys + Stats + up to 4 AI slots |
 
-Single-user build: one deck (15-key), one plugin, no fallback flavors. Other
-layouts can be regenerated any time with `tools/generate.mjs --model=…`.
+Other deck models can be generated on demand — see [Regenerating artifacts](#regenerating-artifacts).
 
----
+</details>
 
-## What's deployed for you
+### No Stream Deck?
 
-This repo **is** the app, and it's connected to Vercel — every push deploys it.
-You don't write or run any code.
+Open the [**virtual deck**](https://stream-deck-habit-tracker.vercel.app/deck.html). It's a
+browser twin of the 15-key hardware — same faces, same live AI slots, real logging into the
+same store. Append `?key=...` if `HABIT_KEY` is set on the deployment.
 
-| Piece | Where | Status |
-|-------|-------|--------|
-| Log endpoint | [`api/log.js`](api/log.js) | ✅ deployed |
-| Dashboard data API | [`api/data.js`](api/data.js) | ✅ deployed |
-| Live dashboard | [`public/index.html`](public/index.html) | ✅ deployed |
-| Storage layer (KV/Upstash) | [`lib/store.js`](lib/store.js) | ✅ deployed |
-| Button generator | [`tools/generate.mjs`](tools/generate.mjs) | ✅ one command |
-| Custom key icons | [`icons/`](icons/) + [`tools/make-icons.mjs`](tools/make-icons.mjs) | ✅ pre-rendered |
-| Habit list you can edit | [`config/habits.json`](config/habits.json) | ✅ 5 defaults |
+## How it works
 
-## The two things only you can do
+```mermaid
+flowchart LR
+    K["🎛 Stream Deck key<br/>(or virtual deck)"] -->|"GET /api/log?habit=…<br/>or ?slot=N"| L["api/log.js"]
+    L -->|"RPUSH"| R[("Redis<br/>Upstash / Vercel KV")]
+    L -.->|"background pass<br/>45 s cooldown"| C["lib/coach.js<br/>Mastra agent → GLM"]
+    C -->|"writes 4 slot assignments"| R
+    R --> S["api/slots.js"]
+    S -->|"poll every 15 s"| P["Habit Tracker AI plugin<br/>repaints key faces"]
+    P --> K
+    R --> D["📊 Dashboard · Habits · Mind"]
+```
 
-Everything else is done. These two need *your* account and take ~3 minutes:
+1. **A tap is one HTTP request.** `GET /api/log?habit=Drink` appends `{h, t, note?, e?, slot?}`
+   to a Redis list. That's the entire write path — no client, no queue, no daemon.
+2. **Slot taps resolve server-side.** A slot key sends `?slot=2`; the server looks up what's
+   assigned to slot 2 *at tap time* and stores that habit's name and emoji in the row. Swaps
+   never rewrite history.
+3. **The coach runs after the response.** `/api/log` answers immediately, then a background
+   pass (via `waitUntil`) shows the model what you just tapped, today's taps, its current keys,
+   and its own prior notes — and lets it repaint slots right now.
+4. **The plugin polls and repaints.** One `/api/slots` poll drives every face. After a tap it
+   queues a short chain of rechecks (2/5/9/15/25 s), so a reactive swap reaches the physical
+   key within seconds rather than at the next 15 s tick.
 
-1. **Connect storage** (~1 min, one time). Writing to a datastore needs a
-   credential only your Vercel account can issue — I can't create it for you.
-   In Vercel → this project → **Storage** → create **Upstash for Redis** (or
-   **KV**), free tier → **Connect** to `stream-deck-habit-tracker`. Vercel
-   injects the credentials and redeploys automatically. That's it — the code
-   already reads them.
-2. **Install the Stream Deck plugin** (~20 sec). One click from the Marketplace.
+### The AI coach
 
-Until step 1 is done, the dashboard shows a "connect storage" note and
-`/api/log` replies `503 Storage not connected yet` — that's expected.
+The coach is a [Mastra](https://mastra.ai) agent backed by z.ai's GLM models. It has six entry
+points, and a two-tool memory loop (`recall_hypotheses` / `update_hypotheses`) whose bytes
+persist in Redis so they survive serverless cold starts.
 
----
+| Pass | Trigger | What it does |
+|---|---|---|
+| **Reactive** | every tap, 45 s cooldown | Sees the tap in context; may repaint slots immediately |
+| **Full refresh** | ✨ Suggest on the dashboard | Re-thinks all 4 slots against a 14-day summary |
+| **Morning** | cron, 10:00 UTC | Sets the day's keys |
+| **Nudge** | rides the deck's `/api/slots` poll | Proactive single-slot repaint when the gates allow |
+| **Roster** | after the morning pass | Proposes adding/retiring *fixed* habits — queued for your approval, never self-applied |
+| **Daily digest** | cron, 03:00 UTC | Writes the end-of-day note shown on the dashboard |
 
-## Setup
+Reactive feedback keys **expire on their own** (default 2 h; the model can set `ttlMinutes`
+between 15 and 720), so a "was that meal any good?" key doesn't squat a slot all day.
 
-### Step 1 — Connect storage (Vercel dashboard)
-1. Open the [project](https://vercel.com/shaiss-projects/stream-deck-habit-tracker) → **Storage** tab.
-2. **Create Database → Upstash for Redis** (or **KV**), free plan.
-3. **Connect** it to this project. Vercel adds the env vars and redeploys.
-4. Verify: open https://stream-deck-habit-tracker.vercel.app/api/log?habit=Test
-   in a browser — you should see `Logged: Test`, and it appears on the
-   [dashboard](https://stream-deck-habit-tracker.vercel.app).
+The [**Mind page**](https://stream-deck-habit-tracker.vercel.app/mind.html) exposes all of it:
+the coach's current notes, its live intuitions, its behavioral hit rate, and its latest
+reflection.
 
-### Step 2 — Install plugin + profile
-Run the one-liner above (recommended — it cleans out any previous install
-first), or double-click the two hosted files (plugin first, then profile;
-note the manual path does *not* remove old copies, so upgrades and re-imports
-can leave a stale plugin or duplicate profiles behind). Habit keys and AI slot
-keys all render from live server state —
-edits on the [Habits page](https://stream-deck-habit-tracker.vercel.app/habits.html)
-repaint physical keys within ~15 s.
+### Where the data lives
 
-**Icons:** two sets, both committed:
-- [`icons/animated/`](icons/animated/) — looping GIFs (24 frames, 1.92 s), embedded
-  in the profile by default.
-- [`icons/`](icons/) — still PNGs (576×576). Used with `--static`, or drag one
-  onto a key manually.
+Two Redis keys carry the whole product: `habits:log` (an append-only list of taps) and
+`habits:slots` (the current four assignments). Everything else — the dashboard, the streaks,
+the scorer, the datasets — is derived. Days are grouped in *your* timezone, not the server's.
 
-Format choice, for the record: the Stream Deck app accepts SVG/PNG/JPEG stills
-and GIF/WEBP animation. We use **PNG for stills** (our art is color-emoji glyphs,
-which render inconsistently as SVG text and gain nothing from vectors on a
-72–96 px key) and **GIF for animation** (the most widely supported animated
-format on keys). If an imported profile ever shows only the first frame, drag
-the `.gif` from `icons/animated/` onto the key — the app plays dragged GIFs.
+## Deploy your own
 
-To re-render after editing habits:
-`npm i playwright-core pngjs gifenc --no-save`, then `node tools/make-icons.mjs`
-(stills) and `node tools/make-animations.mjs` (GIFs).
+The hosted app is a live single-user deployment. To run your own instance:
 
-### Step 3 — Plug in the Stream Deck and tap
-Each tap logs instantly and shows on the
-[dashboard](https://stream-deck-habit-tracker.vercel.app).
+**1. Deploy the repo to Vercel.** Fork it, import the fork into Vercel, and deploy. There's no
+build step — `public/` is served static and `api/*.js` become Node functions.
 
----
+**2. Connect storage** (~1 min). In Vercel → your project → **Storage** → create
+**Upstash for Redis** (or **KV**) on the free tier → **Connect** it to the project. Vercel
+injects the credentials and redeploys; the code auto-detects any of the standard REST
+variable names. Until this is done, the dashboard shows a "connect storage" note and
+`/api/log` replies `503 Storage not connected yet` — that's expected, not broken.
 
-## Customizing your habits
-Use the [Habits page](https://stream-deck-habit-tracker.vercel.app/habits.html)
-— changes go live everywhere, including physical keys, within ~15 s.
-(`config/habits.json` only seeds icons/profile generation.)
+Verify with `https://YOUR-APP.vercel.app/api/log?habit=Test` in a browser. You should see
+`Logged: Test`, and it should appear on the dashboard.
 
-## Optional: require a secret
-To stop anyone who guesses your URL from writing rows:
-1. In Vercel → project → **Settings → Environment Variables**, add
-   `HABIT_KEY` = a random word, then redeploy.
-2. Re-run the generator with `--key=thatword`. Every URL now carries `&key=...`.
+**3. Enable the coach** (optional). Add `ZAI_API_KEY` from [z.ai](https://z.ai) under
+**Settings → Environment Variables**, then redeploy. Without it, everything except the AI
+slots works normally.
 
-For a personal tracker it's fine to skip this.
+**4. Generate your own deck artifacts.** The hosted plugin and profile point at the reference
+deployment, so build ones that point at yours:
 
-## The AI coach (z.ai)
+```bash
+node tools/generate.mjs "https://YOUR-APP.vercel.app/api/log" \
+  --plugin --static \
+  --outfile=public/downloads/HabitTracker-MK2.streamDeckProfile \
+  --name="Habit Tracker AI"
+```
 
-One env var enables it: in Vercel → project → **Settings → Environment
-Variables** add `ZAI_API_KEY` (from [z.ai](https://z.ai)), then redeploy.
-Optional: `ZAI_MODEL` (default `glm-5.2`, auto-falling back to the free
-`glm-4.7-flash` if the preferred model rejects a call) and `ZAI_BASE_URL`.
+Add `--model=mk2|neo|xl|mini|original` for a different device, `--key=SECRET` if you set
+`HABIT_KEY`, and `--slots=N` to change how many AI slots to reserve. If you plan to use the
+one-liner installer, also point `$base` in [`public/setup.ps1`](public/setup.ps1) at your
+deployment. Then commit the rebuilt artifacts — Vercel runs no build step, so
+`public/downloads/` is the published copy.
 
-**The coach is reactive, not periodic.** Every tap triggers a background pass
-(45 s cooldown) where the model sees what you just tapped, today's taps, and
-its current keys — and decides whether to repaint its slots *right now*. Tap
-🍽 Eat and it may swap in 👍/👎 food-feedback keys; the plugin re-polls ~9 s
-after each tap so the physical faces catch the change almost immediately. The
-✨ Suggest button remains as the manual "re-think everything" trigger.
+### Configuration
 
-- **✨ Suggest** on the dashboard → `POST /api/suggest` → GLM sees the fixed
-  habits plus a 14-day summary of your taps (counts, active days, top hours)
-  and returns up to 4 habits *it* wants tracked, each with an emoji, short
-  label, and its reason. They're stored as slots 1–4.
-- Slot keys call `/api/log?slot=N`; the server resolves the slot to whatever
-  habit is assigned *right now* and logs that name + emoji, so swaps never
-  corrupt history.
-- The Habit Tracker AI plugin polls `/api/slots` every 15 s and repaints slot
-  key faces when assignments change. The poll clock runs in a Web Worker, not a
-  page timer: the plugin page is a hidden browser page and Chromium throttles
-  timers on those, which used to leave *physical* faces stale while the virtual
-  deck stayed current. Taps also queue a short chain of rechecks so the coach's
-  reactive swap shows up within seconds.
-- Wondering whether the hardware is actually talking to the backend? The
-  dashboard's AI Coach section shows **Physical deck: live / stale / never
-  seen** with the plugin version and key count, and `GET /api/health` returns
-  the same under `deck`.
-- **Runs on Mastra**: the coach is a Mastra agent (`lib/agent.js`) with an
-  `update_hypotheses` tool — it keeps persistent notes about what it's
-  learning; a plain z.ai call is the automatic fallback.
-- **Scheduled passes** (Vercel Cron, production only): a **morning pass**
-  (10:00 UTC) sets the day's keys, and a **daily digest** (03:00 UTC) writes
-  the coach's end-of-day note, shown on the dashboard. Trigger manually with
-  `/api/cron/morning?run=1` / `/api/cron/daily?run=1`. Optionally set
-  `CRON_SECRET` to lock the cron routes.
-- **Settings & profile** (⚙️ on the dashboard): your name, timezone, and a
-  free-text "about you" the coach reads on every pass. The profile timezone
-  wins over the `HOME_TZ` env default (`America/New_York`).
-- **The coach learns from behavior** (behavioral scorer): every slot
-  assignment is kept in history, and each pass shows the coach its track
-  record — which suggested keys you actually tapped vs ignored — so it drops
-  asks that don't land. The dashboard shows the current hit rate.
-- **Datasets & experiments**: every coach pass captures its exact context +
-  output (rule-scored for quality) into a dataset. `GET
-  /api/experiment?run=1&models=glm-5.2,glm-4.7-flash&n=3` replays those real
-  contexts against each model and compares scores — run it (or the *Coach
-  experiment* GitHub Action) before shipping prompt/model changes.
-- Reactive feedback keys expire automatically (default 2 h; the model can set
-  `ttlMinutes` 15–720 per key), so a "was that meal good?" key doesn't squat
-  a slot all day.
+Every variable is optional; the app degrades cleanly without each one.
 
-## Endpoints
-- `GET /api/log?habit=NAME[&note=...][&key=SECRET]` → logs a tap, returns text.
-- `GET /api/log?slot=N` → logs whatever the AI assigned to slot N (1–4).
-- `POST /api/suggest` → ask the AI to (re)fill the slots. 30 s cooldown.
-- `GET /api/slots` → current slot assignments (read by plugin + dashboard).
-- `GET /api/data` → JSON of all taps (feeds the dashboard).
-- `GET /api/health` → storage/AI wiring status (env var names only).
-- `GET /` → the dashboard.
+| Variable | Default | What it does |
+|---|---|---|
+| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | — | Redis over REST. `UPSTASH_REDIS_REST_*`, `REDIS_REST_*`, and `STORAGE_REST_API_*` are all detected too — connecting either Vercel integration is enough. |
+| `ZAI_API_KEY` | — | Enables the coach. `Z_AI_API_KEY`, `GLM_API_KEY`, and `ZHIPU_API_KEY` also work. |
+| `ZAI_MODEL` | `glm-5.2` | Coach model. Falls back to the free `glm-4.7-flash` if the preferred model rejects a call. |
+| `ZAI_BASE_URL` | `https://api.z.ai/api/paas/v4` | Point at a different OpenAI-compatible endpoint. |
+| `HABIT_KEY` | — | Shared secret. When set, every write needs `?key=…` — including the plugin's heartbeat, so nobody can forge "the hardware is live". |
+| `HOME_TZ` | `America/New_York` | Default timezone for coach passes. The timezone in ⚙️ Settings overrides it. |
+| `CRON_SECRET` | — | Locks the two cron routes. |
 
----
+> Environment variables bind at deploy time. After adding one in Vercel, redeploy (any push)
+> before the functions can see it.
+
+## API
+
+Everything is a plain HTTP endpoint — usable from a browser, `curl`, a shortcut, a watch
+complication, or anything else that can make a request.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/log?habit=NAME[&note=…][&key=…]` | Log a tap. Returns plain text, so it's testable in a browser. |
+| `GET /api/log?slot=N` | Log whatever the coach currently has in slot *N* (1–4). |
+| `GET /api/slots[?tz=…][&track=1]` | Current assignments, today's per-habit progress, and optionally the behavioral scorecard. Read by the plugin and the dashboard. |
+| `GET /api/data` | Every tap, as JSON. Feeds the dashboard. |
+| `GET /api/habits` · `POST /api/habits` | The live habit list, plus the coach's inventions with their behavioral stats. |
+| `POST /api/suggest` (or `GET ?run=1`) | Full slot refresh. 30 s cooldown. |
+| `GET /api/nudge[?run=1]` | Nudge state and gate evaluation; `?run=1` forces a pass. |
+| `GET /api/roster[?run=1]` · `POST /api/roster` | Pending roster proposals and the retirement archive; POST approves, dismisses, or restores. |
+| `GET /api/mind` | Everything the Mind page renders, in one call. |
+| `GET /api/profile[?set=1&…]` | Name, timezone, and the free-text "about you" the coach reads each pass. |
+| `GET /api/health` | Storage + AI wiring, and when a *physical* deck last polled. Returns variable **names** only, never values — safe to leave public. |
+| `GET /api/experiment?run=1&models=a,b&n=3` | Replay captured coach contexts against several models and score them. |
+
+Reads are open-CORS; writes honor `HABIT_KEY` when it's set.
+
+## The web app
+
+| Page | What it's for |
+|---|---|
+| [`/`](https://stream-deck-habit-tracker.vercel.app) | Dashboard — counts, a 7-day chart, recent taps, the coach's slots and daily note, and deck liveness |
+| [`/deck.html`](https://stream-deck-habit-tracker.vercel.app/deck.html) | Virtual deck — the 15-key device in a browser tab |
+| [`/habits.html`](https://stream-deck-habit-tracker.vercel.app/habits.html) | Habit manager — edit the list, review roster proposals, promote the coach's inventions to fixed keys |
+| [`/mind.html`](https://stream-deck-habit-tracker.vercel.app/mind.html) | Inside the coach — memories, intuitions, confidence, reflections |
+
+Edits on the Habits page go live everywhere, including physical key faces, within ~15 s.
+Single static HTML files, no framework, no build step.
+
+## The Stream Deck plugin
+
+`Habit Tracker AI` is a Node-runtime plugin (Stream Deck ≥ 7.1 spawns it under its bundled
+Node 24). It ships two actions:
+
+- **Habit Key** — resolves the habit at a given grid position from live server state, so
+  edits in the habit manager repaint the key without a re-import.
+- **AI Slot Key** — renders whatever the coach has assigned to that slot right now.
+
+Both draw their faces from a single `/api/slots` poll and resolve taps server-side. Faces are
+rendered as SVG data URIs in the [Nocturne Ritual](design/PHILOSOPHY.md) style — one hue per
+habit, derived from its name and kept for life; violet is reserved for the machine mind.
+
+Wondering whether the hardware is actually talking to the backend? The dashboard's AI Coach
+section reports **Physical deck: live / stale / never seen** along with the plugin version and
+key count, and `GET /api/health` returns the same under `deck`.
+
+<details>
+<summary>Icons and key art</summary>
+
+Two committed sets: [`icons/animated/`](icons/animated/) (looping GIFs, 24 frames, 1.92 s;
+embedded in the profile by default) and [`icons/`](icons/) (still PNGs, 576×576; used with
+`--static`, or drag one onto a key manually).
+
+PNG for stills and GIF for animation is a deliberate choice: the art is color-emoji glyphs,
+which render inconsistently as SVG text and gain nothing from vectors at 72–96 px, and GIF is
+the most widely supported animated format on keys. If an imported profile ever shows only the
+first frame, drag the `.gif` from `icons/animated/` onto the key — the app plays dragged GIFs.
+
+</details>
+
+## Development
+
+```
+api/          Vercel Node functions (log, slots, suggest, nudge, roster, mind, …)
+lib/          coach, Mastra agent, store, roster rules, scorer, quality scoring
+public/       dashboard, virtual deck, habit manager, mind page, setup.ps1, downloads
+streamdeck-plugin/   plugin source (src/) + the .sdPlugin package
+tools/        icon, animation, profile, and plugin-package generators
+tests/        unit (zero-dep) + e2e (Chromium and a mock Stream Deck)
+config/       seed habit list for icon and profile generation
+design/       Nocturne Ritual design philosophy and key specimen
+```
+
+```bash
+# Tests. Unit tests are zero-dependency by design.
+npm test          # unit suite
+npm run test:e2e  # habit-manager flows in Chromium + the real plugin against
+                  # a mock Stream Deck WebSocket server
+
+# Tool dependencies are intentionally not in package.json — runtime deps stay
+# lean so Vercel's build stays trivial. Install them once per machine:
+npm i playwright-core pngjs gifenc esbuild @elgato/streamdeck --no-save
+```
+
+Both suites run in CI on every pull request, alongside a `node --check` pass over every
+tracked `.js`/`.mjs` file. New UI behavior ships with a regression test.
+
+### Regenerating artifacts
+
+Built artifacts are committed, and nothing rebuilds them automatically:
+
+```bash
+node tools/make-icons.mjs        # still PNGs      -> icons/
+node tools/make-animations.mjs   # looping GIFs    -> icons/animated/
+node tools/bundle-plugin.mjs     # src/            -> bin/plugin.js
+node tools/build-plugin.mjs      # full .streamDeckPlugin package
+node tools/generate.mjs "<base-url>" --plugin --static   # .streamDeckProfile
+```
+
+The generators read the **live** habit list from `/api/habits`, falling back loudly to
+`config/habits.json` when the deployment is unreachable.
 
 ## Troubleshooting
-- **`503 Storage not connected yet`:** finish Step 1 (connect Upstash/KV).
-- **Button does nothing:** open its URL in a browser. `Logged: …` = working;
-  `Unauthorized` = URL missing `&key=…` while `HABIT_KEY` is set; `Missing
-  habit` = the `?habit=` part got dropped.
-- **Profile won't import:** Stream Deck's profile format varies by version — use
-  the manual URLs in `dist/urls.txt` instead. Same result.
-- **Wrong day boundaries:** the dashboard groups by *your browser's* local day,
-  so days roll over at your local midnight automatically.
+
+| Symptom | Fix |
+|---|---|
+| `503 Storage not connected yet` | Connect Upstash or KV in Vercel, then redeploy. |
+| A key does nothing | Open its URL in a browser. `Logged: …` = working. `Unauthorized` = the URL is missing `&key=…` while `HABIT_KEY` is set. `Missing habit` = the `?habit=` part got dropped. |
+| Physical faces look stale | Check `GET /api/health` → `deck`. `null` means the plugin has never connected — that's a plugin problem, not a backend one. |
+| Profile won't import | Stream Deck's profile format varies by version. Use the plain URLs in `dist/urls.txt` from the generator and paste them into keys manually — same result. |
+| Days roll over at the wrong time | They don't: the dashboard groups by *your browser's* local day. Set the coach's timezone in ⚙️ Settings. |
+| Nothing happens after a plugin change | Run `node tools/bundle-plugin.mjs`. `bin/plugin.js` is a committed build artifact — an un-rebuilt change ships stale. |
 
 ## Alternative: Google Sheets instead of Vercel
-Prefer your data in a Google Sheet? [`apps-script/Code.gs`](apps-script/Code.gs)
-is a drop-in Apps Script logger — paste it into **Extensions → Apps Script** on
-your sheet, deploy as a Web app ("Execute as: Me", "Who has access: Anyone"),
-and point the generator at the `/exec` URL instead. Trades the Vercel dashboard
-for a spreadsheet you already know. See [`sheet/dashboard.md`](sheet/dashboard.md)
-for sheet formulas.
+
+Prefer your data in a spreadsheet? [`apps-script/Code.gs`](apps-script/Code.gs) is a drop-in
+Apps Script logger — paste it into **Extensions → Apps Script**, deploy as a Web app
+("Execute as: Me", "Who has access: Anyone"), and point the generator at the `/exec` URL
+instead. You trade the dashboard and the coach for a sheet you already know how to use. See
+[`sheet/dashboard.md`](sheet/dashboard.md) for the formulas.
+
+## Design
+
+The whole surface — key faces, dashboard, virtual deck — follows one design philosophy:
+[**Nocturne Ritual**](design/PHILOSOPHY.md). Luminous glyphs on deep night surfaces, one hue
+per habit derived from its name and kept for life, and violet reserved for the machine mind.
+Violet always means *the coach is speaking*.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+</content>
