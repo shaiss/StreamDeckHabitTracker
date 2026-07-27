@@ -17485,6 +17485,7 @@ try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
 }
+var PROFILE_NAME = "profiles/Habit Tracker AI";
 var keys = /* @__PURE__ */ new Map();
 var slotCache = null;
 var coachCache = null;
@@ -17522,15 +17523,26 @@ function pump() {
 function escalate(now) {
   if (!slotCache) return;
   for (const k of keys.values()) {
-    if (k.kind !== "slot" || !k.isNudge) continue;
-    const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
-    if (!def || !def.nudge) continue;
-    if (urgencyStep(def, now) === k.urgencyStep) continue;
-    try {
-      render(k);
-    } catch {
+    if (k.kind === "slot" && k.isNudge) {
+      const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
+      if (!def || !def.nudge) continue;
+      if (urgencyStep(def, now) === k.urgencyStep) continue;
+      try {
+        render(k);
+      } catch {
+      }
+    } else if (k.kind === "coach") {
+      const def = liveNudge(now);
+      if (!def || urgencyStep(def, now) === k.urgencyStep) continue;
+      try {
+        render(k);
+      } catch {
+      }
     }
   }
+}
+function liveNudge(now = Date.now()) {
+  return (slotCache || []).find((s) => s && s.nudge && (!s.expiresAt || s.expiresAt > now)) || null;
 }
 function refreshSlots(now) {
   let base = null, secret = null;
@@ -17573,8 +17585,41 @@ function refreshSlots(now) {
     if (sched.pollSettled(seq)) inflightCtrl = null;
   });
 }
+function renderCoach(k) {
+  const now = Date.now();
+  const nudge = liveNudge(now);
+  const asking = (slotCache || []).find((s) => s && s.qid && (!s.expiresAt || s.expiresAt > now));
+  k.urgencyStep = nudge ? urgencyStep(nudge, now) : void 0;
+  if (nudge) {
+    k.action.setImage(face(nudge.emoji || "\u{1F9ED}", "Coach", NUDGE_HUE, "\u2757", 90, { urgency: nudgeUrgency(nudge, now) }));
+  } else if (asking) {
+    k.action.setImage(face("\u{1F9ED}", "Coach", QUESTION_HUE, "\u2753", 78));
+  } else if (slotCache) {
+    k.action.setImage(face("\u{1F9ED}", "Coach", VIOLET_HUE, ""));
+  } else {
+    k.action.setImage(face("\u{1F9ED}", "\u2026", SILVER_HUE, "", 22));
+  }
+}
+function coachNavigate(k) {
+  const raw = parseInt(k.settings.coachPage, 10);
+  const page = Number.isInteger(raw) && raw >= 0 ? raw : 1;
+  if (!k.deviceId) {
+    k.action.showAlert();
+    return;
+  }
+  Promise.resolve(plugin_default.profiles.switchToProfile(k.deviceId, PROFILE_NAME, page)).catch(() => {
+    try {
+      k.action.showAlert();
+    } catch {
+    }
+  });
+}
 function render(k) {
   const s = k.settings;
+  if (k.kind === "coach") {
+    renderCoach(k);
+    return;
+  }
   if (k.kind === "habit") {
     const idx = +s.index || 0;
     const def2 = habitCache ? habitCache[idx] : null;
@@ -17667,6 +17712,10 @@ function dismissQuestion(k) {
 function dispatch({ id, gesture }) {
   const k = keys.get(id);
   if (!k) return;
+  if (k.kind === "coach") {
+    coachNavigate(k);
+    return;
+  }
   if (gesture === "longpress") {
     if (k.isQuestion) dismissQuestion(k);
     else if (k.isNudge) dismissNudge(k);
@@ -17701,8 +17750,14 @@ function defineAction(uuid3, kind) {
     }
   }
   inst.onWillAppear = (ev) => {
-    keys.set(ev.action.id, { kind, settings: ev.payload && ev.payload.settings || {}, action: ev.action });
-    gest.register(ev.action.id, { doubleTap: true });
+    keys.set(ev.action.id, {
+      kind,
+      settings: ev.payload && ev.payload.settings || {},
+      action: ev.action,
+      // switchToProfile needs the device (#53); the SDK stamps it on the action.
+      deviceId: ev.action.device && ev.action.device.id || void 0
+    });
+    gest.register(ev.action.id, { doubleTap: kind !== "coach" });
     render(keys.get(ev.action.id));
     startClock();
     sched.forcePoll();
@@ -17737,6 +17792,7 @@ function defineAction(uuid3, kind) {
 }
 plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.habit", "habit"));
 plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.slot", "slot"));
+plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.coach", "coach"));
 try {
   plugin_default.system.onSystemDidWakeUp(() => {
     sched.forcePoll();

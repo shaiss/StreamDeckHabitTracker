@@ -1,9 +1,15 @@
 // Habit Tracker AI — Stream Deck plugin (Node runtime).
 //
-// Two actions:
+// Three actions:
 //  - …habit  settings: { base, index (0-based position), key? }
 //  - …slot   settings: { base, slot (1-16), key? } — 1-4 render from the
 //    front slots array, 5-16 from the coach page (#52)
+//  - …coach  settings: { base, coachPage (default 1), key? } — a persistent
+//    key with a live attention face (silent / asking / nudging); tap jumps
+//    to the Coach page of the bundled profile (#53, needs #50)
+//
+// Generated keys also carry { page: N } so the appeared-key set derives which
+// page of our profile is visible — see visibility.mjs (#53).
 //
 // Everything renders from live server state: one poll of <base>/api/slots
 // carries both the habit list and the AI slot assignments, so habit-manager
@@ -24,6 +30,7 @@ import streamDeck, { SingletonAction, action } from '@elgato/streamdeck';
 import { face, hueFor } from './faces.mjs';
 import { createScheduler } from './scheduler.mjs';
 import { createGestures } from './gestures.mjs';
+import { deriveVisibility } from './visibility.mjs';
 // The escalation curve lives beside NUDGE_TTL_MS on the server (lib/nudge.js,
 // dependency-free and unit-pinned) so the deck and the backend cannot disagree
 // about how loud a nudge should be. esbuild bundles it in.
@@ -53,7 +60,12 @@ const SILVER_HUE = 222;   // neutral / pending
 let VERSION = '2.5.0';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
-const keys = new Map();   // action instance id -> { kind: 'habit'|'slot', settings, action }
+// The bundled profile's manifest name (#50) — the ONLY profile
+// switchToProfile can ever reach, per the SDK: plugins "may only switch to
+// profiles distributed with the plugin, as defined within the manifest".
+const PROFILE_NAME = 'profiles/Habit Tracker AI';
+
+const keys = new Map();   // action instance id -> { kind: 'habit'|'slot'|'coach', settings, action, deviceId }
 let slotCache = null;     // latest slots array from the server
 let coachCache = null;    // latest coach-page array (#52) — slots 5..16 render from it
 let habitCache = null;    // latest habit list from the server (live-editable)
@@ -103,12 +115,33 @@ function pump() {
 function escalate(now) {
   if (!slotCache) return;
   for (const k of keys.values()) {
-    if (k.kind !== 'slot' || !k.isNudge) continue;
-    const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
-    if (!def || !def.nudge) continue;
-    if (urgencyStep(def, now) === k.urgencyStep) continue;
-    try { render(k); } catch { /* next tick retries */ }
+    if (k.kind === 'slot' && k.isNudge) {
+      const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
+      if (!def || !def.nudge) continue;
+      if (urgencyStep(def, now) === k.urgencyStep) continue;
+      try { render(k); } catch { /* next tick retries */ }
+    } else if (k.kind === 'coach') {
+      // The coach face mirrors the loudest live nudge, so it escalates on
+      // the same quantized steps as the nudge key itself (#53).
+      const def = liveNudge(now);
+      if (!def || urgencyStep(def, now) === k.urgencyStep) continue;
+      try { render(k); } catch { /* next tick retries */ }
+    }
   }
+}
+
+// The live nudge on the FRONT page, if any — nudges never land on the coach
+// page (#52), so the front array is the whole search space.
+function liveNudge(now = Date.now()) {
+  return (slotCache || []).find((s) => s && s.nudge && (!s.expiresAt || s.expiresAt > now)) || null;
+}
+
+// Which page of our profile is on the glass right now, and whether any of it
+// is (#53). Derived purely from the appeared-key set; #54's takeover gate
+// reads this — if anyVisible is false, our profile isn't on screen and
+// navigation is refused.
+function visibility() {
+  return deriveVisibility([...keys.values()].map((k) => k.settings));
 }
 
 function refreshSlots(now) {
@@ -163,8 +196,39 @@ function refreshSlots(now) {
     });
 }
 
+// The coach key's attention face (#53): silent, asking (a live question
+// pair), or nudging — mirroring the loudest thing on the front page so the
+// coach has an ambient presence that consumes no slot.
+function renderCoach(k) {
+  const now = Date.now();
+  const nudge = liveNudge(now);
+  const asking = (slotCache || []).find((s) => s && s.qid && (!s.expiresAt || s.expiresAt > now));
+  k.urgencyStep = nudge ? urgencyStep(nudge, now) : undefined;
+  if (nudge) {
+    k.action.setImage(face(nudge.emoji || '🧭', 'Coach', NUDGE_HUE, '❗', 90, { urgency: nudgeUrgency(nudge, now) }));
+  } else if (asking) {
+    k.action.setImage(face('🧭', 'Coach', QUESTION_HUE, '❓', 78));
+  } else if (slotCache) {
+    k.action.setImage(face('🧭', 'Coach', VIOLET_HUE, ''));
+  } else {
+    k.action.setImage(face('🧭', '…', SILVER_HUE, '', 22));   // first poll pending
+  }
+}
+
+// Tap on the coach key: jump to the Coach page of the bundled profile. Only
+// reachable because the profile ships in the manifest (#50); page is a
+// positional index into Pages.Pages, which is why the profile is Readonly.
+function coachNavigate(k) {
+  const raw = parseInt(k.settings.coachPage, 10);
+  const page = Number.isInteger(raw) && raw >= 0 ? raw : 1;
+  if (!k.deviceId) { k.action.showAlert(); return; }
+  Promise.resolve(streamDeck.profiles.switchToProfile(k.deviceId, PROFILE_NAME, page))
+    .catch(() => { try { k.action.showAlert(); } catch { /* key gone */ } });
+}
+
 function render(k) {
   const s = k.settings;
+  if (k.kind === 'coach') { renderCoach(k); return; }
   if (k.kind === 'habit') {
     const idx = +s.index || 0;
     const def = habitCache ? habitCache[idx] : null;
@@ -288,6 +352,12 @@ function dismissQuestion(k) {
 function dispatch({ id, gesture }) {
   const k = keys.get(id);
   if (!k) return;                                  // key vanished mid-gesture
+  if (k.kind === 'coach') {
+    // The coach key logs nothing: every gesture is navigation (#53). #54
+    // gives the long press its own meaning (the takeover kill switch).
+    coachNavigate(k);
+    return;
+  }
   if (gesture === 'longpress') {
     if (k.isQuestion) dismissQuestion(k);
     else if (k.isNudge) dismissNudge(k);
@@ -320,10 +390,17 @@ function defineAction(uuid, kind) {
     try { inst.manifestId = uuid; } catch { Object.defineProperty(inst, 'manifestId', { value: uuid }); }
   }
   inst.onWillAppear = (ev) => {
-    keys.set(ev.action.id, { kind, settings: (ev.payload && ev.payload.settings) || {}, action: ev.action });
+    keys.set(ev.action.id, {
+      kind,
+      settings: (ev.payload && ev.payload.settings) || {},
+      action: ev.action,
+      // switchToProfile needs the device (#53); the SDK stamps it on the action.
+      deviceId: (ev.action.device && ev.action.device.id) || undefined
+    });
     // Habit and slot keys both log something undoable and quantifiable, so
-    // both answer to all three gestures.
-    gest.register(ev.action.id, { doubleTap: true });
+    // both answer to all three gestures. The coach key logs nothing — a
+    // double-tap would only defer its single meaning (navigate).
+    gest.register(ev.action.id, { doubleTap: kind !== 'coach' });
     render(keys.get(ev.action.id));
     startClock();
     sched.forcePoll();   // a key just appeared — refresh on this pump
@@ -355,6 +432,7 @@ function defineAction(uuid, kind) {
 
 streamDeck.actions.registerAction(defineAction('com.shaiss.habit-tracker.habit', 'habit'));
 streamDeck.actions.registerAction(defineAction('com.shaiss.habit-tracker.slot', 'slot'));
+streamDeck.actions.registerAction(defineAction('com.shaiss.habit-tracker.coach', 'coach'));
 
 // System wake / device reconnect = faces are certainly stale. Guarded: these
 // namespaces vary across SDK minors, and losing them only costs a faster

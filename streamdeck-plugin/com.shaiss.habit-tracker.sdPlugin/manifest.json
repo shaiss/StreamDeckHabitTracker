@@ -40,6 +40,14 @@
       "Icon": "images/slot_action",
       "SupportedInMultiActions": false,
       "States": [{ "Image": "images/slot_key" }]
+    },
+    {
+      "UUID": "com.shaiss.habit-tracker.coach",
+      "Name": "Coach",
+      "Tooltip": "The AI coach's own key: its face shows whether the coach is silent, asking, or nudging. Tap to jump to the Coach page.",
+      "Icon": "images/coach_action",
+      "SupportedInMultiActions": false,
+      "States": [{ "Image": "images/coach_key" }]
     }
   ]
 }

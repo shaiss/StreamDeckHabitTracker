@@ -68,6 +68,7 @@ if (!dashboardUrl && !noDashboard) {
 const usePlugin = args.includes('--plugin');
 const PLUGIN_HABIT = 'com.shaiss.habit-tracker.habit';
 const PLUGIN_SLOT = 'com.shaiss.habit-tracker.slot';
+const PLUGIN_COACH = 'com.shaiss.habit-tracker.coach';
 const siteOrigin = (() => { try { return new URL(execBase).origin; } catch { return ''; } })();
 
 // AI slot keys: fill whatever key cells remain after habits + Stats, up to 4.
@@ -132,9 +133,12 @@ const buildSlotUrl = (n) => {
   return `${execBase}?${q.toString()}`;
 };
 
+// Multi-page plugin layouts get a Coach key on page 0 (#53): an ambient
+// attention face that consumes no slot, whose tap jumps to the Coach page.
+const coachKeyCount = usePlugin && pageCount > 1 ? 1 : 0;
 const slotCount = slotsOpt !== undefined
   ? Math.max(0, Math.min(4, parseInt(slotsOpt, 10) || 0))
-  : Math.max(0, Math.min(4, capacity - habits.length - (dashboardUrl ? 1 : 0)));
+  : Math.max(0, Math.min(4, capacity - habits.length - (dashboardUrl ? 1 : 0) - coachKeyCount));
 
 // ---- 1) urls.txt (guaranteed manual path) ---------------------------------
 mkdirSync(join(ROOT, 'dist'), { recursive: true });
@@ -232,7 +236,8 @@ habits.forEach((h, i) => {
           Name: 'Habit Key',
           // index = position: the plugin resolves the CURRENT habit at this
           // position from /api/slots, so habit-manager edits repaint the key.
-          Settings: { base: siteOrigin, index: i, ...(key ? { key } : {}) },
+          // page tags feed the visibility inference (#53).
+          Settings: { base: siteOrigin, index: i, page: 0, ...(key ? { key } : {}) },
           Resources: null,
           State: 0,
           States: liveStates(),
@@ -273,7 +278,7 @@ for (let n = 1; n <= slotCount; n++) {
           ActionID: randomUUID().toUpperCase(),
           LinkedTitle: true,
           Name: 'AI Slot Key',
-          Settings: { base: siteOrigin, slot: n, ...(key ? { key } : {}) },
+          Settings: { base: siteOrigin, slot: n, page: 0, ...(key ? { key } : {}) },
           Resources: null,
           State: 0,
           States: liveStates(),
@@ -292,6 +297,21 @@ for (let n = 1; n <= slotCount; n++) {
   );
 }
 
+// Coach key (#53): lives on the front page, paints its attention state from
+// the same /api/slots poll, and jumps to the Coach page (index 1) on tap.
+if (coachKeyCount) {
+  place({
+    ActionID: randomUUID().toUpperCase(),
+    LinkedTitle: true,
+    Name: 'Coach',
+    Settings: { base: siteOrigin, coachPage: 1, page: 0, ...(key ? { key } : {}) },
+    Resources: null,
+    State: 0,
+    States: liveStates(),
+    UUID: PLUGIN_COACH
+  });
+}
+
 // Coach pages (pages 1+): the wider slot range, numbered on from the front
 // four. /api/log resolves 5..16 against habits:coach:page (issue #52), so key
 // numbering is one integer namespace across pages. Image-less states on every
@@ -305,7 +325,7 @@ for (let p = 1; p < pageCount; p++) {
           ActionID: randomUUID().toUpperCase(),
           LinkedTitle: true,
           Name: 'AI Slot Key',
-          Settings: { base: siteOrigin, slot: n, ...(key ? { key } : {}) },
+          Settings: { base: siteOrigin, slot: n, page: p, ...(key ? { key } : {}) },
           Resources: null,
           State: 0,
           States: liveStates(),
