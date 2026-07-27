@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, relative } from 'node:path';
 import { chromium } from 'playwright-core';
 import { zip } from './lib-zip.mjs';
+import { bundlePlugin } from './bundle-plugin.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -55,6 +56,9 @@ for (const a of assets) {
   console.log('  rendered images/' + a.file);
 }
 await browser.close();
+
+await bundlePlugin();
+console.log('  bundled bin/plugin.js');
 
 // Package: zip everything under the .sdPlugin folder, folder name included.
 function walk(dir) {

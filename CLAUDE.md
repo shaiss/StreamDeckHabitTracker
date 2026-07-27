@@ -23,14 +23,18 @@ to this repo — **every push to the default branch deploys production**).
 # runtime deps are kept lean on purpose so Vercel's build stays trivial, but
 # they are NOT just @vercel/functions: the coach runs on a Mastra agent, so
 # @vercel/functions, @mastra/core, @ai-sdk/openai-compatible, and zod are all
-# load-bearing runtime deps and belong in package.json; do not prune them):
-npm i playwright-core pngjs gifenc --no-save
+# load-bearing runtime deps and belong in package.json; do not prune them.
+# esbuild + @elgato/streamdeck are BUILD-time deps of the Stream Deck plugin —
+# the SDK is bundled into bin/plugin.js, never installed at runtime):
+npm i playwright-core pngjs gifenc esbuild @elgato/streamdeck --no-save
 
 # Regenerate still icons (icons/) and animated GIFs (icons/animated/):
 node tools/make-icons.mjs
 node tools/make-animations.mjs
 
-# Rebuild the Stream Deck plugin package into public/downloads/:
+# Rebuild the Stream Deck plugin package into public/downloads/ (renders
+# manifest images, bundles src/ -> bin/plugin.js, zips). Bundle-only rebuild:
+# node tools/bundle-plugin.mjs
 node tools/build-plugin.mjs
 
 # Regenerate the hosted profile (single-user build: 15-key, plugin flavor only):
@@ -39,7 +43,9 @@ node tools/generate.mjs "https://stream-deck-habit-tracker.vercel.app/api/log" -
 # Tests — run before every PR (the ship skill enforces this):
 npm test          # unit suite, zero-dep (glob form is required on this Node —
                   # `node --test tests/unit/` fails, the script uses the glob)
-npm run test:e2e  # browser tests vs a mock server (needs playwright-core + Chromium)
+npm run test:e2e  # habit-manager suites drive Chromium; the plugin suite spawns
+                  # the real Node plugin against a mock Stream Deck WebSocket
+                  # (needs playwright-core + Chromium + @elgato/streamdeck + esbuild)
 
 # Plus: node --check every touched .js/.mjs file. Final verification is still
 # against the live deployment (see below).
@@ -121,52 +127,51 @@ Vercel MCP `web_fetch_vercel_url` tool to probe the live site.
 - `api/log.js` — resolves `?slot=N` to the *current* assignment at tap time and
   stores the habit name+emoji in the entry, so history stays truthful after
   swaps. Responds before the reactive pass runs.
-- CORS is open (`*`) on read/log endpoints because the Stream Deck plugin
-  fetches from a CEF page.
+- CORS is open (`*`) on read/log endpoints for the dashboard and any legacy
+  in-browser callers (the Node plugin itself doesn't need CORS).
 
 **Frontend** (`public/index.html`) — single static file, no framework, no build
 step. Dashboard + AI Coach section; polls every 20s.
 
-**Stream Deck plugin** (`streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/`)
-— classic SDKVersion-2 JS plugin (WebSocket, `connectElgatoStreamDeckSocket`
-global). Two actions, both live: `…habit` ({base, index} — resolves the habit
-at that position from `/api/slots`) and `…slot` ({base, slot}); faces are
-canvas-rendered from one `/api/slots` poll, so habit-manager edits and coach
-swaps repaint physical keys. Taps resolve server-side (`?hkey=`/`?slot=`). No
-property inspector, no hardcoded server — per-key Settings come from the
-generator.
+**Stream Deck plugin** (`streamdeck-plugin/`) — a **Node.js-runtime** plugin:
+Stream Deck ≥7.1 spawns `bin/plugin.js` under its bundled Node 24. The legacy
+HTML/QtWebEngine runtime — and its whole hidden-page pathology (timer
+throttling, the Worker-kills-the-renderer "code 18" crash-loop, the
+`streamdeck-timerfix` beat) — is gone; see git history if archaeology calls.
+Source is `src/` (plain ESM, no TypeScript, no property inspector):
+- `src/faces.mjs` — key faces as SVG data URIs (Nocturne Ritual look). Hue
+  comes from the shared `tools/lib-hue.mjs`; the unit drift guard asserts the
+  import so the formula can't fork. Colors are pre-baked to hex (SVG
+  rasterizers disagree on `hsl()`), and every AI-supplied string is
+  XML-escaped.
+- `src/scheduler.mjs` — the pure wall-clock poll scheduler. Kept from the HTML
+  era **on purpose**: it defends against a *hung backend*, not a throttled
+  page. The single-flight guard is a deadline (`POLL_TIMEOUT_MS`); an expired
+  poll is aborted and retried immediately, and a sequence number orphans its
+  late settle so it can't clear the retry's guard.
+- `src/plugin.mjs` — wires both into `@elgato/streamdeck` (2.x). Two actions,
+  both live: `…habit` ({base, index} — resolves the habit at that position
+  from `/api/slots`) and `…slot` ({base, slot}); faces render from one
+  `/api/slots` poll, taps resolve server-side (`?hkey=`/`?slot=`). Timing is
+  env-overridable (`HT_POLL_MS`, `HT_TICK_MS`, `HT_POLL_TIMEOUT_MS`,
+  `HT_RECHECK_MS`) so e2e runs in seconds; production defaults are 15s poll /
+  3s tick / 10s timeout / 2,5,9,15,25s rechecks.
 
-⚠️ **The plugin page is a CEF page that is never visible, so page timers cannot
-be trusted.** Chromium throttles `setInterval`/`setTimeout` on hidden pages
-(~1/min under intensive throttling; page freezing can stop them outright), which
-is why a plain 15s poll kept the *virtual* deck current but let *physical* faces
-go stale (issue #5). Do not "simplify" the clock in `app.js` back to a bare
-interval. Four layers, and the fix depends on all of them:
-1. `ticker.js` — a Web Worker beat (3s), off-thread where throttling doesn't
-   apply. Same workaround Elgato shipped as `streamdeck-timerfix`.
-   ⚠️ **CEF only.** Stream Deck 7.x runs legacy HTML plugins under
-   **QtWebEngine**, and constructing a Worker there (sibling script OR blob)
-   **kills the renderer process** — not a catchable JS error. The plugin
-   crash-loops on a 10s cadence ("terminated with status 1 and code 18" in
-   `%APPDATA%\Elgato\StreamDeck\logs\StreamDeck.log`) until the app disables
-   it ("Plugin is unstable and was disabled") — keys then show the yellow
-   triangle on tap. `startClock()` gates all worker creation behind
-   `isQtWebEngine()` (UA sniff); under QtWebEngine the page `setInterval` is
-   the clock, which that embedder keeps serviceable. Never remove that gate.
-2. Wall-clock **deadlines** (`nextPollAt`, `rechecks[]`) re-evaluated on every
-   wake instead of trusted to fire on time, so a throttled clock converges late
-   rather than dropping work. `pump()` is the only scheduler; it's idempotent
-   and rate-limited by `nextPollAt` + the single-flight guard. That guard
-   (`inflightAt`) is itself a **deadline, not a boolean** — a silent backend
-   would otherwise wedge every layer at once, since `pump()` short-circuits
-   while a poll is in flight. `pump()` expires a stuck poll after
-   `POLL_TIMEOUT_MS`, aborts it, and bumps `pollSeq` so its late rejection
-   can't clear the guard belonging to the retry. Don't reach for `setTimeout`
-   here — page timers are the thing that doesn't fire.
-3. Every inbound Stream Deck WebSocket event calls `pump()`. That socket is a
-   native push channel throttling can't touch, so any keypress/wake/device
-   reconnect un-sticks a frozen page.
-4. A page `setInterval` backstop, for a CEF build where `Worker` fails.
+⚠️ Hard-won SD 7.x facts, each verified on hardware:
+- **A profile-baked `States[].Image` silently vetoes plugin `setImage`** — the
+  app treats it as a user customization. That's why `generate.mjs` emits
+  image-less states (`liveStates()`) for plugin-flavor keys; the manifest's
+  default action images cover the seconds before the first poll paints. Never
+  re-add images to plugin profile keys, or physical faces will never repaint
+  again (they were live-verified dead this way).
+- The SDK reads `manifest.json` from `process.cwd()` (the app launches the
+  plugin from inside the `.sdPlugin` folder) and **routes errors to a file
+  logger** (`logs/` under cwd) — a broken plugin exits code 0 with silent
+  stdio. When "nothing happens", read those logs, not the console.
+- Action events are refused for devices the SDK doesn't know — the mock app in
+  e2e must announce the device in the registration `-info` payload.
+- In plain JS the `@action` decorator is applied as a function
+  (`action({ UUID })(class …)`), stamping `manifestId` for `registerAction`.
 
 Taps push a **chain** of rechecks (2/5/9/15/25s) because the reactive coach pass
 runs in the background after `/api/log` answers — one recheck often lands before
@@ -179,9 +184,11 @@ write on an otherwise read-only, open-CORS endpoint**, so it honors the same
 live". `plugin` is query-string input all the way to the dashboard: stripped of
 non-`[\w.+-]` on write and `esc()`d again at render. Don't drop either end — the
 server's 20-char truncation is *not* a defense (`<svg onload=alert()>` is exactly
-20). `tests/e2e/plugin.e2e.mjs` loads the real `app.js` against a mock
-Stream Deck socket with page timers stubbed to no-ops — that suite is what keeps
-the throttling fix honest.
+20). `bin/plugin.js` is an **esbuild bundle and a committed artifact** —
+rebuild with `node tools/bundle-plugin.mjs` after any `src/` change, or ship a
+stale plugin. `tests/e2e/plugin.e2e.mjs` spawns the real entry against a mock
+Stream Deck WebSocket server + mock backend (no Chromium for this suite) and
+includes a bundle boot smoke.
 
 **Asset pipeline** (`tools/`): generators read the LIVE habit list from
 `/api/habits` (tools/lib-habits.mjs), falling back loudly to
@@ -216,7 +223,8 @@ gitignored scratch, `public/downloads/` is the published copy).
 
 ## Conventions & gotchas
 
-- ESM everywhere (`"type": "module"`); plugin `app.js` is browser ES5-ish.
+- ESM everywhere (`"type": "module"`); the plugin's `src/` is Node ESM like
+  the rest of the repo (the browser-ES5 `app.js` died with the HTML runtime).
 - API functions read `config/habits.json` via `createRequire` (`lib/ai.js`
   exports `BASE_HABITS`) so Vercel's bundler traces it.
 - `Date.now()` timestamps (epoch ms) everywhere; the dashboard groups days in
