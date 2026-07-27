@@ -14,6 +14,18 @@ test('clamps to at most 4 slots, keeping the first four', () => {
   assert.deepEqual(out.map((s) => s.habit), ['H0', 'H1', 'H2', 'H3']);
 });
 
+test('max option widens the cap for the coach page (#52) without touching the default', () => {
+  const items = Array.from({ length: 14 }, (_, i) => ({ habit: `H${i}`, emoji: '🟢', label: `l${i}` }));
+  const wide = sanitize(items, { max: 12 });
+  assert.equal(wide.length, 12);
+  assert.deepEqual(wide.map((s) => s.habit), items.slice(0, 12).map((i) => i.habit));
+  // the default stays the 4-slot wire contract
+  assert.equal(sanitize(items).length, 4);
+  // and max composes with the other options
+  const reserved = sanitize(items, { max: 2, reserved: ['h0'] });
+  assert.deepEqual(reserved.map((s) => s.habit), ['H1', 'H2']);
+});
+
 test('strips non [A-Za-z0-9_-] from habit and caps at 24 chars', () => {
   const out = sanitize([{ habit: 'Food Good! 🍽', emoji: '👍', label: 'x' }]);
   assert.equal(out[0].habit, 'FoodGood');

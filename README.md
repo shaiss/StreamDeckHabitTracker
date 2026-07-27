@@ -88,15 +88,20 @@ leaves a stale plugin behind. No repo clone, no Node, nothing else on your machi
 <details>
 <summary>Manual install / macOS</summary>
 
-Download and double-click the two artifacts below — **plugin first, then profile**. Note
-that the manual path does *not* remove old copies, so upgrades can leave a stale plugin or
-duplicate profiles behind.
+Download and double-click the plugin below. The Habit Tracker AI profile ships **inside**
+the plugin (`AutoInstall`), so there is no separate profile to import — the Stream Deck app
+installs it automatically. Note that the manual path does *not* remove old copies, so
+upgrades can leave a stale plugin or a previously *imported* profile behind.
 
 | File | What it is |
 |---|---|
 | [`setup.ps1`](https://stream-deck-habit-tracker.vercel.app/setup.ps1) | the Windows bootstrap above |
-| [`com.shaiss.habit-tracker.streamDeckPlugin`](https://stream-deck-habit-tracker.vercel.app/downloads/com.shaiss.habit-tracker.streamDeckPlugin) | the plugin — live habit keys + live AI slot keys |
-| [`HabitTracker-MK2.streamDeckProfile`](https://stream-deck-habit-tracker.vercel.app/downloads/HabitTracker-MK2.streamDeckProfile) | 15-key layout: habit keys + Stats + up to 4 AI slots |
+| [`com.shaiss.habit-tracker.streamDeckPlugin`](https://stream-deck-habit-tracker.vercel.app/downloads/com.shaiss.habit-tracker.streamDeckPlugin) | the plugin — live habit keys + live AI slot keys, with the bundled profile |
+
+⚠️ Because the profile is bundled, **uninstalling the plugin now removes the profile too**
+— that is the trade for a zero-prompt install. The bundled profile is also read-only in the
+Stream Deck app (page order is a navigation contract; reordering pages would silently drift
+every coach navigation target).
 
 Other deck models can be generated on demand — see [Regenerating artifacts](#regenerating-artifacts).
 
@@ -189,21 +194,22 @@ Verify with `https://YOUR-APP.vercel.app/api/log?habit=Test` in a browser. You s
 **Settings → Environment Variables**, then redeploy. Without it, everything except the AI
 slots works normally.
 
-**4. Generate your own deck artifacts.** The hosted plugin and profile point at the reference
-deployment, so build ones that point at yours:
+**4. Generate your own deck artifacts.** The hosted plugin (and the profile bundled inside
+it) points at the reference deployment, so build ones that point at yours:
 
 ```bash
 node tools/generate.mjs "https://YOUR-APP.vercel.app/api/log" \
-  --plugin --static \
-  --outfile=public/downloads/HabitTracker-MK2.streamDeckProfile \
+  --plugin --static --pages=2 \
+  --outfile="streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/profiles/Habit Tracker AI.streamDeckProfile" \
   --name="Habit Tracker AI"
+node tools/build-plugin.mjs   # repackage the plugin with the fresh bundled profile
 ```
 
 Add `--model=mk2|neo|xl|mini|original` for a different device, `--key=SECRET` if you set
-`HABIT_KEY`, and `--slots=N` to change how many AI slots to reserve. If you plan to use the
-one-liner installer, also point `$base` in [`public/setup.ps1`](public/setup.ps1) at your
-deployment. Then commit the rebuilt artifacts — Vercel runs no build step, so
-`public/downloads/` is the published copy.
+`HABIT_KEY`, `--pages=N` for a multi-page layout, and `--slots=N` to change how many AI
+slots to reserve. If you plan to use the one-liner installer, also point `$base` in
+[`public/setup.ps1`](public/setup.ps1) at your deployment. Then commit the rebuilt
+artifacts — Vercel runs no build step, so `public/downloads/` is the published copy.
 
 ### Configuration
 
@@ -332,8 +338,10 @@ Built artifacts are committed, and nothing rebuilds them automatically:
 node tools/make-icons.mjs        # still PNGs      -> icons/
 node tools/make-animations.mjs   # looping GIFs    -> icons/animated/
 node tools/bundle-plugin.mjs     # src/            -> bin/plugin.js
-node tools/build-plugin.mjs      # full .streamDeckPlugin package
-node tools/generate.mjs "<base-url>" --plugin --static   # .streamDeckProfile
+node tools/generate.mjs "<base-url>" --plugin --static --pages=2 \
+  --outfile="streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/profiles/Habit Tracker AI.streamDeckProfile" \
+  --name="Habit Tracker AI"      # bundled .streamDeckProfile
+node tools/build-plugin.mjs      # full .streamDeckPlugin package (packages the profile above)
 node tools/screenshots.mjs        # README screenshots -> docs/screenshots/
 ```
 

@@ -1,14 +1,16 @@
 // GET/POST /api/log?habit=NAME[&note=...][&key=SECRET]  -> logs a fixed habit
 // GET/POST /api/log?slot=N                              -> logs whatever habit
-//   the AI currently has assigned to slot N (1-4); the habit name and emoji
-//   are captured at tap time so history stays truthful after a swap.
+//   the AI currently has assigned to slot N; one integer namespace (#52):
+//   1-4 resolve the front page (habits:slots), 5-16 resolve coach-page index
+//   N-5 (habits:coach:page). The habit name and emoji are captured at tap
+//   time so history stays truthful after a swap.
 // ...&intensity=high|low  -> tags how much of it there was ("big meal" vs
 //   "snack"). The deck's double-tap gesture sends high (issue #33).
 // DELETE /api/log?... (or ...&undo=1) -> removes today's most recent entry for
 //   that key. The long-press "oops" affordance: no dialog, no confirmation.
 // Returns plain text (handy when testing in a browser).
 import { waitUntil } from '@vercel/functions';
-import { append, removeLast, getSlots, getProfile, isConfigured } from '../lib/store.js';
+import { append, removeLast, getSlots, getCoachPage, getProfile, isConfigured } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { getHabits } from '../lib/habits.js';
 import { reactTo, answerQuestion } from '../lib/coach.js';
@@ -67,9 +69,14 @@ export default async function handler(req, res) {
       emoji = def.emoji || '';
     }
 
-    if (!habit && slotNum >= 1 && slotNum <= 4) {
-      const { slots } = await getSlots();
-      const def = slots[slotNum - 1];
+    if (!habit && slotNum >= 1 && slotNum <= 16) {
+      // One resolution path for both pages: 1..4 are the front keys, 5..16
+      // index the coach page at N-5 (#52). Resolution happens at tap time and
+      // the name+emoji are stored, so history stays truthful after a swap —
+      // same contract either page.
+      const def = slotNum <= 4
+        ? (await getSlots()).slots[slotNum - 1]
+        : (await getCoachPage()).slots[slotNum - 5];
       if (!def) {
         res.status(409).send(`Slot ${slotNum} is empty — tap ✨ Suggest on the dashboard to let the AI fill it.`);
         return;

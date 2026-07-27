@@ -17452,10 +17452,33 @@ function createGestures({ longPressMs = LONG_PRESS_MS, doubleTapMs = DOUBLE_TAP_
   };
 }
 
+// streamdeck-plugin/src/visibility.mjs
+function deriveVisibility(settingsList) {
+  let any2 = false;
+  const votes = /* @__PURE__ */ new Map();
+  for (const s of settingsList || []) {
+    any2 = true;
+    const page = s == null ? NaN : parseInt(s.page, 10);
+    if (!Number.isInteger(page) || page < 0) continue;
+    votes.set(page, (votes.get(page) || 0) + 1);
+  }
+  let visiblePage = null;
+  let best = 0;
+  for (const [page, n] of votes) {
+    if (n > best || n === best && visiblePage !== null && page < visiblePage) {
+      best = n;
+      visiblePage = page;
+    }
+  }
+  return { anyVisible: any2, visiblePage };
+}
+
 // lib/nudge.js
 var CHECK_EVERY_MS = 20 * 6e4;
 var MIN_GAP_MS = 2 * 36e5;
 var RECENT_TAP_MS = 45 * 6e4;
+var QUIET_END_HOUR = 8;
+var QUIET_START_HOUR = 22;
 var NUDGE_TTL_MS = 60 * 6e4;
 var DISMISS_QUIET_MS = 4 * 36e5;
 function nudgeUrgency(def, now = Date.now()) {
@@ -17469,7 +17492,49 @@ function urgencyStep(def, now = Date.now()) {
   return Math.round(nudgeUrgency(def, now) * URGENCY_STEPS);
 }
 
+// lib/takeover.js
+var CONSENT_LEVELS = ["off", "nudge-only", "may-navigate"];
+function normalizeConsent(v) {
+  return CONSENT_LEVELS.includes(v) ? v : "off";
+}
+var HUMAN_LOCK_MS = 10 * 6e4;
+var RESTORE_MS = 9e4;
+var SUPPRESS_MS = 24 * 36e5;
+function takeoverDue({
+  now,
+  hour,
+  day = "",
+  consent = "off",
+  nudge = null,
+  visible = false,
+  lastKeypressAt: lastKeypressAt2 = 0,
+  lastPageChangeAt: lastPageChangeAt2 = 0,
+  takeoverDay = "",
+  suppressedUntil = 0
+} = {}) {
+  if (!Number.isFinite(now) || !Number.isInteger(hour) || hour < 0 || hour > 23 || !day) {
+    return { due: false, reason: "invalid clock context" };
+  }
+  if (normalizeConsent(consent) !== "may-navigate") return { due: false, reason: "consent withheld" };
+  if (suppressedUntil && now < suppressedUntil) return { due: false, reason: "kill switch engaged" };
+  if (!nudge || !nudge.nudge || nudge.expiresAt && nudge.expiresAt <= now) {
+    return { due: false, reason: "no live nudge to amplify" };
+  }
+  if (hour < QUIET_END_HOUR || hour >= QUIET_START_HOUR) return { due: false, reason: "quiet hours" };
+  if (!visible) return { due: false, reason: "profile not on screen" };
+  if (lastKeypressAt2 && now - lastKeypressAt2 < HUMAN_LOCK_MS) {
+    return { due: false, reason: "human at the controls" };
+  }
+  if (lastPageChangeAt2 && now - lastPageChangeAt2 < HUMAN_LOCK_MS) {
+    return { due: false, reason: "human just changed pages" };
+  }
+  if (takeoverDay === day) return { due: false, reason: "budget spent" };
+  return { due: true, reason: "ok" };
+}
+
 // streamdeck-plugin/src/plugin.mjs
+var DEFAULT_BASE = "https://stream-deck-habit-tracker.vercel.app";
+var baseOf = (s) => (s && s.base || DEFAULT_BASE).replace(/\/+$/, "");
 var POLL_MS = +(process.env.HT_POLL_MS || 15e3);
 var TICK_MS = +(process.env.HT_TICK_MS || 3e3);
 var POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 1e4);
@@ -17478,15 +17543,28 @@ var VIOLET_HUE = 262;
 var NUDGE_HUE = 38;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
-var VERSION = "2.4.0";
+var VERSION = "2.5.0";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
 }
+var PROFILE_NAME = "profiles/Habit Tracker AI";
 var keys = /* @__PURE__ */ new Map();
 var slotCache = null;
+var coachCache = null;
 var habitCache = null;
 var todayCache = null;
+var consentCache = "off";
+var lastKeypressAt = 0;
+var lastPageChangeAt = 0;
+var lastTakeoverDay = "";
+var suppressedUntilLocal = 0;
+var takeover = null;
+var takeoverPending = false;
+var localDay = (t) => {
+  const d = new Date(t);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+};
 var sched = createScheduler({ pollMs: POLL_MS, timeoutMs: POLL_TIMEOUT_MS, recheckMs: RECHECK_MS });
 var gest = createGestures();
 var inflightCtrl = null;
@@ -17519,26 +17597,52 @@ function pump() {
 function escalate(now) {
   if (!slotCache) return;
   for (const k of keys.values()) {
-    if (k.kind !== "slot" || !k.isNudge) continue;
-    const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
-    if (!def || !def.nudge) continue;
-    if (urgencyStep(def, now) === k.urgencyStep) continue;
-    try {
-      render(k);
-    } catch {
+    if (k.kind === "slot" && k.isNudge) {
+      const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
+      if (!def || !def.nudge) continue;
+      if (urgencyStep(def, now) === k.urgencyStep) continue;
+      try {
+        render(k);
+      } catch {
+      }
+    } else if (k.kind === "coach") {
+      const def = liveNudge(now);
+      if (!def) {
+        if (k.urgencyStep !== void 0) {
+          try {
+            render(k);
+          } catch {
+          }
+        }
+        continue;
+      }
+      if (urgencyStep(def, now) === k.urgencyStep) continue;
+      try {
+        render(k);
+      } catch {
+      }
     }
   }
+}
+function liveNudge(now = Date.now()) {
+  return (slotCache || []).find((s) => s && s.nudge && (!s.expiresAt || s.expiresAt > now)) || null;
+}
+function visibility() {
+  return deriveVisibility([...keys.values()].map((k) => k.settings));
 }
 function refreshSlots(now) {
   let base = null, secret = null;
   for (const k of keys.values()) {
     if (k.settings.base) {
-      base = k.settings.base;
+      base = baseOf(k.settings);
       secret = k.settings.key || null;
       break;
     }
   }
-  if (!base) return;
+  if (!base) {
+    if (keys.size === 0) return;
+    base = DEFAULT_BASE;
+  }
   const seq = sched.pollStarted(now);
   const url2 = base.replace(/\/+$/, "") + "/api/slots?deck=" + encodeURIComponent(VERSION) + "&keys=" + keys.size + "&tz=" + (/* @__PURE__ */ new Date()).getTimezoneOffset() + (secret ? "&key=" + encodeURIComponent(secret) : "");
   inflightCtrl = new AbortController();
@@ -17546,29 +17650,146 @@ function refreshSlots(now) {
     if (!sched.pollSettled(seq)) return;
     inflightCtrl = null;
     const slots = j.slots || [];
+    const coachPage = j.coachPage || [];
     const habits = j.habits || [];
     const today = j.today || {};
-    const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots);
+    consentCache = j.coachNav || "off";
+    const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) || !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage);
     const habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(habits);
     const todayChanged = !todayCache || JSON.stringify(todayCache) !== JSON.stringify(today);
     slotCache = slots;
+    coachCache = coachPage;
     habitCache = habits;
     todayCache = today;
     for (const k of keys.values()) {
       try {
-        if (slotsChanged && k.kind === "slot") render(k);
+        if (slotsChanged && (k.kind === "slot" || k.kind === "coach")) render(k);
         if (k.kind === "habit" && (habitsChanged || todayChanged)) render(k);
       } catch {
       }
     }
+    maybeTakeover();
   }).catch(() => {
     if (sched.pollSettled(seq)) inflightCtrl = null;
   });
 }
+function renderCoach(k) {
+  const now = Date.now();
+  const nudge = liveNudge(now);
+  const asking = (slotCache || []).find((s) => s && s.qid && (!s.expiresAt || s.expiresAt > now));
+  k.urgencyStep = nudge ? urgencyStep(nudge, now) : void 0;
+  if (nudge) {
+    k.action.setImage(face(nudge.emoji || "\u{1F9ED}", "Coach", NUDGE_HUE, "\u2757", 90, { urgency: nudgeUrgency(nudge, now) }));
+  } else if (asking) {
+    k.action.setImage(face("\u{1F9ED}", "Coach", QUESTION_HUE, "\u2753", 78));
+  } else if (slotCache) {
+    k.action.setImage(face("\u{1F9ED}", "Coach", VIOLET_HUE, ""));
+  } else {
+    k.action.setImage(face("\u{1F9ED}", "\u2026", SILVER_HUE, "", 22));
+  }
+}
+function coachNavigate(k) {
+  const raw = parseInt(k.settings.coachPage, 10);
+  const page = Number.isInteger(raw) && raw >= 0 ? raw : 1;
+  if (!k.deviceId) {
+    k.action.showAlert();
+    return;
+  }
+  Promise.resolve(plugin_default.profiles.switchToProfile(k.deviceId, PROFILE_NAME, page)).catch(() => {
+    try {
+      k.action.showAlert();
+    } catch {
+    }
+  });
+}
+function restoreTakeover() {
+  if (!takeover) return;
+  const t = takeover;
+  takeover = null;
+  if (t.timer) clearTimeout(t.timer);
+  Promise.resolve(plugin_default.profiles.switchToProfile(t.deviceId, PROFILE_NAME, t.returnPage)).catch(() => {
+  });
+}
+function maybeTakeover() {
+  if (takeover || takeoverPending) return;
+  const now = Date.now();
+  const vis = visibility();
+  const gate = takeoverDue({
+    now,
+    hour: new Date(now).getHours(),
+    // host-local: the deck sits next to its human
+    day: localDay(now),
+    consent: consentCache,
+    nudge: liveNudge(now),
+    // "Visible" must mean OUR profile is on screen, not merely our keys:
+    // hand-placed keys (#55) live in FOREIGN profiles and carry no page tag,
+    // so they read visiblePage: null — navigating on that signal would yank
+    // the human out of another room. Only a page-tagged key (which exists
+    // only in our generated profile) proves the room is ours.
+    visible: vis.anyVisible && Number.isInteger(vis.visiblePage),
+    lastKeypressAt,
+    lastPageChangeAt,
+    takeoverDay: lastTakeoverDay,
+    suppressedUntil: suppressedUntilLocal
+  });
+  if (!gate.due) return;
+  if (vis.visiblePage === 0) return;
+  const dev = [...keys.values()].map((k) => k.deviceId).find(Boolean);
+  if (!dev) return;
+  let base = DEFAULT_BASE, secret = null;
+  for (const k of keys.values()) {
+    if (k.settings.base) {
+      base = baseOf(k.settings);
+      secret = k.settings.key || null;
+      break;
+    }
+  }
+  takeoverPending = true;
+  const ctrl = new AbortController();
+  const deadline = setTimeout(() => {
+    try {
+      ctrl.abort();
+    } catch {
+    }
+  }, POLL_TIMEOUT_MS);
+  if (deadline.unref) deadline.unref();
+  fetch(
+    base + "/api/nudge?takeover=1" + (secret ? "&key=" + encodeURIComponent(secret) : ""),
+    { method: "POST", signal: ctrl.signal }
+  ).then((r) => {
+    if (!r.ok) return;
+    lastTakeoverDay = localDay(Date.now());
+    const returnPage = vis.visiblePage == null ? 1 : vis.visiblePage;
+    return Promise.resolve(plugin_default.profiles.switchToProfile(dev, PROFILE_NAME, 0)).then(() => {
+      const timer = setTimeout(restoreTakeover, RESTORE_MS);
+      if (timer.unref) timer.unref();
+      takeover = { deviceId: dev, returnPage, timer };
+      log.info("takeover: navigated to the nudge; restoring to page " + returnPage + " in " + RESTORE_MS + "ms");
+    }).catch(() => {
+    });
+  }).catch(() => {
+  }).finally(() => {
+    clearTimeout(deadline);
+    takeoverPending = false;
+  });
+}
+function suppressTakeovers(k) {
+  const s = k.settings;
+  const url2 = baseOf(s) + "/api/nudge?suppress=1" + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  fetch(url2, { method: "POST" }).then((r) => {
+    if (r.ok) {
+      suppressedUntilLocal = Date.now() + SUPPRESS_MS;
+      restoreTakeover();
+      k.action.showOk();
+    } else {
+      k.action.showAlert();
+    }
+  }).catch(() => k.action.showAlert());
+}
 function render(k) {
   const s = k.settings;
-  if (!s.base) {
-    k.action.setImage(face("\u2699\uFE0F", "setup", SILVER_HUE, ""));
+  if (k.kind === "coach") {
+    renderCoach(k);
     return;
   }
   if (k.kind === "habit") {
@@ -17582,7 +17803,7 @@ function render(k) {
     return;
   }
   const n = parseInt(s.slot, 10) || 1;
-  const def = slotCache ? slotCache[n - 1] : null;
+  const def = n <= 4 ? slotCache ? slotCache[n - 1] : null : coachCache ? coachCache[n - 5] : null;
   const was = [k.isNudge, k.isQuestion];
   k.isNudge = !!(def && def.nudge);
   k.isQuestion = !!(def && def.qid);
@@ -17610,13 +17831,9 @@ function render(k) {
 function logUrl(k, extra = "") {
   const s = k.settings;
   const q = k.kind === "slot" ? "slot=" + encodeURIComponent(s.slot || 1) : "hkey=" + encodeURIComponent((+s.index || 0) + 1);
-  return s.base.replace(/\/+$/, "") + "/api/log?" + q + extra + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  return baseOf(s) + "/api/log?" + q + extra + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
 }
 function tap(k, { intensity = "" } = {}) {
-  if (!k.settings.base) {
-    k.action.showAlert();
-    return;
-  }
   fetch(logUrl(k, intensity ? "&intensity=" + encodeURIComponent(intensity) : "")).then((r) => {
     if (r.ok) {
       k.action.showOk();
@@ -17628,10 +17845,6 @@ function tap(k, { intensity = "" } = {}) {
   }).catch(() => k.action.showAlert());
 }
 function undo(k) {
-  if (!k.settings.base) {
-    k.action.showAlert();
-    return;
-  }
   fetch(logUrl(k), { method: "DELETE" }).then((r) => {
     if (r.ok) {
       k.action.showOk();
@@ -17644,11 +17857,7 @@ function undo(k) {
 }
 function dismissNudge(k) {
   const s = k.settings;
-  if (!s.base) {
-    k.action.showAlert();
-    return;
-  }
-  const url2 = s.base.replace(/\/+$/, "") + "/api/nudge?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  const url2 = baseOf(s) + "/api/nudge?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
   fetch(url2, { method: "POST" }).then((r) => {
     if (r.ok) {
       k.action.showOk();
@@ -17661,11 +17870,7 @@ function dismissNudge(k) {
 }
 function dismissQuestion(k) {
   const s = k.settings;
-  if (!s.base) {
-    k.action.showAlert();
-    return;
-  }
-  const url2 = s.base.replace(/\/+$/, "") + "/api/question?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  const url2 = baseOf(s) + "/api/question?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
   fetch(url2, { method: "POST" }).then((r) => {
     if (r.ok) {
       k.action.showOk();
@@ -17679,6 +17884,11 @@ function dismissQuestion(k) {
 function dispatch({ id, gesture }) {
   const k = keys.get(id);
   if (!k) return;
+  if (k.kind === "coach") {
+    if (gesture === "longpress") suppressTakeovers(k);
+    else coachNavigate(k);
+    return;
+  }
   if (gesture === "longpress") {
     if (k.isQuestion) dismissQuestion(k);
     else if (k.isNudge) dismissNudge(k);
@@ -17713,8 +17923,15 @@ function defineAction(uuid3, kind) {
     }
   }
   inst.onWillAppear = (ev) => {
-    keys.set(ev.action.id, { kind, settings: ev.payload && ev.payload.settings || {}, action: ev.action });
-    gest.register(ev.action.id, { doubleTap: true });
+    keys.set(ev.action.id, {
+      kind,
+      settings: ev.payload && ev.payload.settings || {},
+      action: ev.action,
+      // switchToProfile needs the device (#53); the SDK stamps it on the action.
+      deviceId: ev.action.device && ev.action.device.id || void 0
+    });
+    gest.register(ev.action.id, { doubleTap: kind !== "coach" });
+    lastPageChangeAt = Date.now();
     render(keys.get(ev.action.id));
     startClock();
     sched.forcePoll();
@@ -17731,17 +17948,20 @@ function defineAction(uuid3, kind) {
   inst.onWillDisappear = (ev) => {
     keys.delete(ev.action.id);
     gest.forget(ev.action.id);
+    lastPageChangeAt = Date.now();
   };
   inst.onKeyDown = (ev) => {
     if (!keys.has(ev.action.id)) {
       ev.action.showAlert();
       return;
     }
+    lastKeypressAt = Date.now();
     gest.down(ev.action.id, Date.now());
     armGestures();
   };
   inst.onKeyUp = (ev) => {
     if (!keys.has(ev.action.id)) return;
+    if (takeover) restoreTakeover();
     for (const g of gest.up(ev.action.id, Date.now())) dispatch(g);
     armGestures();
   };
@@ -17749,6 +17969,7 @@ function defineAction(uuid3, kind) {
 }
 plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.habit", "habit"));
 plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.slot", "slot"));
+plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.coach", "coach"));
 try {
   plugin_default.system.onSystemDidWakeUp(() => {
     sched.forcePoll();

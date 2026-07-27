@@ -62,9 +62,12 @@ cp icons/animated/*.gif public/icons/animated/
 # 4) Plugin package (renders manifest images, zips the .sdPlugin folder)
 node tools/build-plugin.mjs
 
-# 5) Hosted profile (single-user build: 15-key, plugin flavor only)
+# 5) Bundled profile (single-user build: 15-key, plugin flavor, 2 pages) —
+#    lives INSIDE the .sdPlugin (manifest Profiles[] AutoInstall, issue #50),
+#    so regenerate it BEFORE step 4's build-plugin.mjs packaging (or re-run
+#    build-plugin.mjs after).
 BASE="https://stream-deck-habit-tracker.vercel.app/api/log"
-node tools/generate.mjs "$BASE" --plugin --static --outfile=public/downloads/HabitTracker-MK2.streamDeckProfile --name="Habit Tracker AI"
+node tools/generate.mjs "$BASE" --plugin --static --pages=2 --outfile="streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/profiles/Habit Tracker AI.streamDeckProfile" --name="Habit Tracker AI"
 ```
 
 If `HABIT_KEY` is ever set in Vercel, add `--key=<value>` to every generate call
@@ -74,7 +77,7 @@ If `HABIT_KEY` is ever set in Vercel, add `--key=<value>` to every generate call
 
 - `unzip -l public/downloads/com.shaiss.habit-tracker.streamDeckPlugin`
   — expect the `com.shaiss.habit-tracker.sdPlugin/` prefix on all files.
-- `unzip -p "public/downloads/HabitTracker-MK2.streamDeckProfile" "*/Profiles/*/manifest.json" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{for(const line of s.split(/(?<=\})\s*(?=\{)/)){if(!line.trim())continue;const m=JSON.parse(line);const a=m.Controllers?.[0]?.Actions;if(a){console.log(Object.keys(a));break;}}})"`
+- `unzip -p "streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/profiles/Habit Tracker AI.streamDeckProfile" "*/Profiles/*/manifest.json" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{for(const line of s.split(/(?<=\})\s*(?=\{)/)){if(!line.trim())continue;const m=JSON.parse(line);const a=m.Controllers?.[0]?.Actions;if(a){console.log(Object.keys(a));break;}}})"`
   — expect habit keys, the Stats key, and AI slot keys at the right cells (v3.0 page manifest; the empty Default page has `Actions:null` and is skipped).
 - Visually spot-check a rendered icon (Read one PNG / a probe frame) if icon
   code changed — the generators can succeed while producing wrong art (it has

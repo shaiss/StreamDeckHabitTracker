@@ -75,7 +75,7 @@
     .settings.open { display:block; }
     .settings h3 { margin:0 0 12px; font-size:14px; }
     .settings label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
-    .settings input, .settings textarea { width:100%; box-sizing:border-box; background:var(--bg); color:var(--fg);
+    .settings input, .settings textarea, .settings select { width:100%; box-sizing:border-box; background:var(--bg); color:var(--fg);
       border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; font-size:14px; }
     .settings textarea { min-height:70px; resize:vertical; }
     .settings .row2 { display:flex; gap:10px; align-items:center; margin-top:14px; }
@@ -101,6 +101,12 @@
       <datalist id="tzList"></datalist>
       <label for="setAbout">About you — anything the coach should know</label>
       <textarea id="setAbout" maxlength="1000" placeholder="Night owl. Desk job. Trying to drink more water and stop late-night snacking."></textarea>
+      <label for="setCoachNav">Coach navigation — may an urgent nudge flip your deck to its page?</label>
+      <select id="setCoachNav">
+        <option value="off">Off — never navigate (default)</option>
+        <option value="nudge-only">Nudge only — repaint a key, never move pages</option>
+        <option value="may-navigate">May navigate — at most once a day, only inside its own profile, auto-returns</option>
+      </select>
       <div class="row2">
         <button class="btn" id="saveProfile">Save</button>
         <span class="status" id="profileStatus"></span>
@@ -310,6 +316,7 @@
           document.getElementById('setName').value = p.name || '';
           document.getElementById('setTz').value = p.tz || p.effectiveTz || '';
           document.getElementById('setAbout').value = p.about || '';
+          document.getElementById('setCoachNav').value = p.coachNav || 'off';
           document.getElementById('profileStatus').textContent =
             p.effectiveTz ? `Coach currently reads your day as ${p.effectiveTz}` : '';
         }).catch(()=>{});
@@ -327,7 +334,8 @@
         body: JSON.stringify({
           name: document.getElementById('setName').value.trim(),
           tz: document.getElementById('setTz').value.trim(),
-          about: document.getElementById('setAbout').value.trim()
+          about: document.getElementById('setAbout').value.trim(),
+          coachNav: document.getElementById('setCoachNav').value
         })
       }).then(r=>r.json()).then(j => {
         st.textContent = j.ok ? 'Saved — the coach will use this on its next pass.' : (j.error || 'Save failed');
