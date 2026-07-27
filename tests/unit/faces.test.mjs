@@ -84,3 +84,35 @@ test('living faces: a goal above 8 renders the count as a number, not dots', () 
   assert.ok(!svg.includes('r="2.6"'), 'no dot clutter above 8');
   assert.ok(svg.includes('>4<'), 'the tally shows as a number');
 });
+
+// --- nudge escalation (#35) ---
+
+const svgOf = (uri) => Buffer.from(uri.split(',')[1], 'base64').toString('utf8');
+const haloOpacity = (svg) => +svg.match(/id="h"[\s\S]*?stop-opacity="([\d.]+)"/)[1];
+const borderWidth = (svg) => +svg.match(/rx="17"[^>]*stroke-width="([\d.]+)"/)[1];
+
+test('a face with no urgency is byte-identical to before escalation existed', () => {
+  const plain = svgOf(face('💧', 'Water', 38, 'AI 1', 90));
+  assert.match(plain, /stop-opacity="0.62"/, 'the original halo opacity');
+  assert.match(plain, /stroke-opacity="0.30" stroke-width="1.5"/, 'the original hairline ring');
+  assert.equal(svgOf(face('💧', 'Water', 38, 'AI 1', 90, null)), plain, 'null state changes nothing');
+  assert.equal(svgOf(face('💧', 'Water', 38, 'AI 1', 90, { doneToday: false })), plain,
+    'a state object without urgency changes nothing');
+});
+
+test('urgency brightens the halo and firms the border, monotonically', () => {
+  const at = (u) => svgOf(face('💧', 'Water?', 38, '❗ 1', 90, { urgency: u }));
+  const halos = [0, 0.5, 1].map((u) => haloOpacity(at(u)));
+  const borders = [0, 0.5, 1].map((u) => borderWidth(at(u)));
+  assert.ok(halos[0] < halos[1] && halos[1] < halos[2], 'halo opacity rises: ' + halos.join(','));
+  assert.ok(borders[0] < borders[1] && borders[1] < borders[2], 'border thickens: ' + borders.join(','));
+  assert.ok(halos[2] <= 1, 'and never becomes an invalid opacity');
+});
+
+test('urgency is clamped, so bad input cannot emit invalid SVG', () => {
+  for (const u of [-5, 5, 1.0001]) {
+    const svg = svgOf(face('💧', 'Water?', 38, '❗ 1', 90, { urgency: u }));
+    const o = haloOpacity(svg);
+    assert.ok(o >= 0 && o <= 1, `opacity ${o} out of range for urgency ${u}`);
+  }
+});

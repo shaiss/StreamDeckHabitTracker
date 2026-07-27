@@ -23,6 +23,10 @@ import streamDeck, { SingletonAction, action } from '@elgato/streamdeck';
 import { face, hueFor } from './faces.mjs';
 import { createScheduler } from './scheduler.mjs';
 import { createGestures } from './gestures.mjs';
+// The escalation curve lives beside NUDGE_TTL_MS on the server (lib/nudge.js,
+// dependency-free and unit-pinned) so the deck and the backend cannot disagree
+// about how loud a nudge should be. esbuild bundles it in.
+import { nudgeUrgency, urgencyStep } from '../../lib/nudge.js';
 
 const POLL_MS = +(process.env.HT_POLL_MS || 15000);
 const TICK_MS = +(process.env.HT_TICK_MS || 3000);
@@ -37,7 +41,7 @@ const SILVER_HUE = 222;   // neutral / pending
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.2.0';
+let VERSION = '2.3.0';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 const keys = new Map();   // action instance id -> { kind: 'habit'|'slot', settings, action }
@@ -79,6 +83,22 @@ function pump() {
     inflightCtrl = null;
   }
   if (poll) refreshSlots(now);
+  escalate(now);
+}
+
+// A nudge's face has to change as its TTL burns down, but the poll payload
+// does NOT change while that happens — so change-detection on the payload
+// would never repaint, and repainting every tick would be invisible churn.
+// Repaint only when the quantized urgency step moves.
+function escalate(now) {
+  if (!slotCache) return;
+  for (const k of keys.values()) {
+    if (k.kind !== 'slot' || !k.isNudge) continue;
+    const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
+    if (!def || !def.nudge) continue;
+    if (urgencyStep(def, now) === k.urgencyStep) continue;
+    try { render(k); } catch { /* next tick retries */ }
+  }
 }
 
 function refreshSlots(now) {
@@ -142,9 +162,17 @@ function render(k) {
   }
   const n = parseInt(s.slot, 10) || 1;
   const def = slotCache ? slotCache[n - 1] : null;
+  // A nudge answers a hold with "not today", not with undo — and registers no
+  // double-tap, so its taps stay immediate on release (#35).
+  const wasNudge = k.isNudge;
+  k.isNudge = !!(def && def.nudge);
+  if (k.isNudge !== wasNudge) gest.register(k.action.id, { doubleTap: !k.isNudge });
   if (def && def.nudge) {
-    // Proactive nudge: amber halo + ❗ so the poke reads across the room.
-    k.action.setImage(face(def.emoji || '✨', def.label || def.habit, NUDGE_HUE, '❗ ' + n, 90));
+    // Proactive nudge: amber halo + ❗ so the poke reads across the room, and
+    // it brightens as its TTL runs down.
+    k.urgencyStep = urgencyStep(def);
+    k.action.setImage(face(def.emoji || '✨', def.label || def.habit, NUDGE_HUE, '❗ ' + n, 90,
+      { urgency: nudgeUrgency(def) }));
   } else if (def) {
     k.action.setImage(face(def.emoji || '✨', def.label || def.habit, VIOLET_HUE, 'AI ' + n));
   } else {
@@ -193,10 +221,29 @@ function undo(k) {
     .catch(() => k.action.showAlert());
 }
 
+// Long-press on a NUDGE means "not today" — an explicit dismissal, which the
+// scorer records as something other than never having noticed it (#35). The
+// key is a poke, not a log, so there is nothing to undo here.
+function dismissNudge(k) {
+  const s = k.settings;
+  if (!s.base) { k.action.showAlert(); return; }
+  const url = s.base.replace(/\/+$/, '') + '/api/nudge?dismiss=1&slot=' +
+    encodeURIComponent(s.slot || 1) + (s.key ? '&key=' + encodeURIComponent(s.key) : '');
+  fetch(url, { method: 'POST' })
+    .then((r) => {
+      if (r.ok) {
+        k.action.showOk();
+        sched.forcePoll();   // the slot is empty now — repaint on this pump
+        pump();
+      } else { k.action.showAlert(); }
+    })
+    .catch(() => k.action.showAlert());
+}
+
 function dispatch({ id, gesture }) {
   const k = keys.get(id);
   if (!k) return;                                  // key vanished mid-gesture
-  if (gesture === 'longpress') undo(k);
+  if (gesture === 'longpress') (k.isNudge ? dismissNudge : undo)(k);
   else if (gesture === 'doubletap') tap(k, { intensity: 'high' });
   else tap(k);
 }

@@ -16,8 +16,9 @@ const ROOT = fileURLToPath(new URL('../../public', import.meta.url));
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.gif': 'image/gif', '.png': 'image/png' };
 
 let server, browser, page, port;
-let calls = [];        // every /api/log request, as "METHOD url"
+let calls = [];        // every /api/log + /api/nudge request, as "METHOD url"
 let logStatus = 200;
+let nudgeFraction = null;   // null = slot 1 holds a plain suggestion
 
 before(async () => {
   server = createServer((req, res) => {
@@ -28,12 +29,28 @@ before(async () => {
       res.end(logStatus === 200 ? 'Logged: Drink' : 'Nothing to undo');
       return;
     }
+    if (url === '/api/nudge') {
+      calls.push(req.method + ' ' + req.url);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ dismissed: true }));
+      return;
+    }
     if (url === '/api/slots') {
+      const now = Date.now();
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
-        configured: true, aiReady: true, suggestedAt: Date.now(),
+        configured: true, aiReady: true, suggestedAt: now,
         habits: [{ name: 'Drink', emoji: '💧', label: 'Drink' }],
-        slots: [{ habit: 'Flow', emoji: '🌊', label: 'Flow', assignedAt: 1 }, null, null, null],
+        slots: [
+          nudgeFraction === null
+            ? { habit: 'Flow', emoji: '🌊', label: 'Flow', assignedAt: 1 }
+            : {
+                habit: 'Water', emoji: '💧', label: 'Water?', nudge: true,
+                assignedAt: now - 3600_000 * nudgeFraction,
+                expiresAt: now + 3600_000 * (1 - nudgeFraction)
+              },
+          null, null, null
+        ],
         today: {}
       }));
       return;
@@ -55,9 +72,10 @@ before(async () => {
 after(async () => { await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open() {
+async function open({ nudge = null } = {}) {
   calls = [];
   logStatus = 200;
+  nudgeFraction = nudge;
   await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.k[data-habit="0"]');
   return page.locator('.k[data-habit="0"]');
@@ -107,6 +125,37 @@ test('nothing to undo surfaces the server message instead of a silent no-op', as
   await key.click({ delay: 700 });
   await settle();
   assert.match(await page.$eval('#hint', (e) => e.textContent), /Nothing to undo/);
+});
+
+// --- nudge escalation + dismissal (#35) ---
+
+test('a hold on a nudge dismisses it instead of undoing a log', async () => {
+  await open({ nudge: 0.5 });
+  await page.waitForFunction(() => !!document.querySelector('.nudgeface'));
+  calls = [];
+  await page.locator('.k[data-slot="1"]').click({ delay: 700 });
+  await page.waitForTimeout(500);
+  assert.match(calls[0], /^POST \/api\/nudge\?dismiss=1&slot=1/);
+  assert.ok(!calls.some((c) => c.startsWith('DELETE')), 'a poke has no log entry to undo');
+  assert.match(await page.$eval('#hint', (e) => e.textContent), /not today/i);
+});
+
+test('a nudge face escalates as its TTL runs down', async () => {
+  const urg = () => page.$eval('.nudgeface', (e) => parseFloat(e.style.getPropertyValue('--urg')));
+  await open({ nudge: 0.05 });
+  await page.waitForFunction(() => !!document.querySelector('.nudgeface'));
+  const fresh = await urg();
+  await open({ nudge: 0.95 });
+  await page.waitForFunction(() => !!document.querySelector('.nudgeface'));
+  const late = await urg();
+  assert.ok(fresh < 0.2 && late > 0.8, `urgency should track the TTL: ${fresh} -> ${late}`);
+});
+
+test('a plain suggestion slot still undoes on hold, not dismisses', async () => {
+  await open({ nudge: null });
+  await page.locator('.k[data-slot="1"]').click({ delay: 700 });
+  await settle();
+  assert.match(calls[0], /^DELETE \/api\/log\?slot=1/, 'nudge-ness is resolved at press time');
 });
 
 test('the Stats key still opens the dashboard on a plain tap', async () => {
