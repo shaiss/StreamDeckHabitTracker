@@ -236,10 +236,17 @@ removes prior installs (both plugin ids — `com.shaiss.…` and the legacy
 **both** `ProfilesV2` (SD 6.x) and `ProfilesV3` (SD 7.x) by manifest Name),
 copies the staged plugin into `%APPDATA%\Elgato\StreamDeck\Plugins` (silent —
 no app prompt, no "already installed" refusal), and relaunches the app (which
-also re-enables a plugin SD had marked unstable). There is no import step:
-the profile ships inside the `.sdPlugin` (manifest `Profiles[]` with
-`AutoInstall: true`, issue #50), so the run ends with **zero prompts** —
-but uninstalling the plugin removes the profile with it. Keep the script
+also re-enables a plugin SD had marked unstable). The profile ships inside the
+`.sdPlugin` (manifest `Profiles[]` with `AutoInstall: true`, issue #50), but
+**AutoInstall only fires on the FIRST install of a plugin UUID — never on an
+upgrade** of one the app already knows (its install record lives outside the
+plugin folder). So a fresh machine ends with zero prompts, while an upgrade —
+where step 5 just cleared the old copy — would be left with no profile; the
+final step therefore scans `ProfilesV2`/`V3` by manifest Name and, if none is
+present, imports the bundled `.streamDeckProfile` itself (one confirm prompt on
+upgrades). The bundled profile's fixed UUID makes a stray double-install
+collapse rather than duplicate. Uninstalling the plugin removes the bundled
+profile with it. Keep the script
 PowerShell-5.1-safe and `irm | iex`-safe:
 no `$PSScriptRoot`, no param blocks, no pwsh-7-only syntax, **pure ASCII**
 (irm decodes charset-less text as ISO-8859-1).

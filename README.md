@@ -78,9 +78,11 @@ irm https://stream-deck-habit-tracker.vercel.app/setup.ps1 | iex
 That's the whole install. The script installs the Elgato Stream Deck app if it's missing
 (via winget), then performs a **clean install**: it downloads, extracts, and validates
 everything *before* touching anything on disk, then removes any previous copy of the plugin
-(including the legacy `com.kalmansforge` build) and any imported `Habit Tracker*` profiles,
-drops the plugin straight into the plugins folder with no prompt, and imports the fresh
-profile — the one prompt you'll confirm.
+(including the legacy `com.kalmansforge` build) and any `Habit Tracker*` profiles, and drops
+the plugin straight into the plugins folder with no prompt. On a **fresh** install the app
+then auto-installs the bundled profile with no prompt at all. On an **upgrade** — where
+Stream Deck won't re-run its one-time auto-install for a plugin it already knows — the script
+imports the profile for you, the one prompt you'll confirm.
 
 **Re-running the one-liner is the upgrade path.** It never stacks duplicate profiles or
 leaves a stale plugin behind. No repo clone, no Node, nothing else on your machine.
@@ -89,9 +91,11 @@ leaves a stale plugin behind. No repo clone, no Node, nothing else on your machi
 <summary>Manual install / macOS</summary>
 
 Download and double-click the plugin below. The Habit Tracker AI profile ships **inside**
-the plugin (`AutoInstall`), so there is no separate profile to import — the Stream Deck app
-installs it automatically. Note that the manual path does *not* remove old copies, so
-upgrades can leave a stale plugin or a previously *imported* profile behind.
+the plugin (`AutoInstall`), so on a **first** install the Stream Deck app installs it
+automatically. If you're **upgrading** (the app already knows the plugin), its one-time
+auto-install won't re-fire — double-click `profiles/Habit Tracker AI.streamDeckProfile`
+inside the installed plugin folder to import it. The manual path also does *not* remove old
+copies, so upgrades can leave a stale plugin or a previously *imported* profile behind.
 
 | File | What it is |
 |---|---|
