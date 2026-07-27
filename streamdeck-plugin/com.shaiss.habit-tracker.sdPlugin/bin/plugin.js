@@ -17476,8 +17476,9 @@ var POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 1e4);
 var RECHECK_MS = (process.env.HT_RECHECK_MS || "2000,5000,9000,15000,25000").split(",").map(Number);
 var VIOLET_HUE = 262;
 var NUDGE_HUE = 38;
+var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
-var VERSION = "2.3.0";
+var VERSION = "2.4.0";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -17582,10 +17583,15 @@ function render(k) {
   }
   const n = parseInt(s.slot, 10) || 1;
   const def = slotCache ? slotCache[n - 1] : null;
-  const wasNudge = k.isNudge;
+  const was = [k.isNudge, k.isQuestion];
   k.isNudge = !!(def && def.nudge);
-  if (k.isNudge !== wasNudge) gest.register(k.action.id, { doubleTap: !k.isNudge });
-  if (def && def.nudge) {
+  k.isQuestion = !!(def && def.qid);
+  if (was[0] !== k.isNudge || was[1] !== k.isQuestion) {
+    gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
+  }
+  if (def && def.qid) {
+    k.action.setImage(face(def.emoji || "\u2753", def.label || def.habit, QUESTION_HUE, "\u2753 " + n, 78));
+  } else if (def && def.nudge) {
     k.urgencyStep = urgencyStep(def);
     k.action.setImage(face(
       def.emoji || "\u2728",
@@ -17653,11 +17659,31 @@ function dismissNudge(k) {
     }
   }).catch(() => k.action.showAlert());
 }
+function dismissQuestion(k) {
+  const s = k.settings;
+  if (!s.base) {
+    k.action.showAlert();
+    return;
+  }
+  const url2 = s.base.replace(/\/+$/, "") + "/api/question?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  fetch(url2, { method: "POST" }).then((r) => {
+    if (r.ok) {
+      k.action.showOk();
+      sched.forcePoll();
+      pump();
+    } else {
+      k.action.showAlert();
+    }
+  }).catch(() => k.action.showAlert());
+}
 function dispatch({ id, gesture }) {
   const k = keys.get(id);
   if (!k) return;
-  if (gesture === "longpress") (k.isNudge ? dismissNudge : undo)(k);
-  else if (gesture === "doubletap") tap(k, { intensity: "high" });
+  if (gesture === "longpress") {
+    if (k.isQuestion) dismissQuestion(k);
+    else if (k.isNudge) dismissNudge(k);
+    else undo(k);
+  } else if (gesture === "doubletap") tap(k, { intensity: "high" });
   else tap(k);
 }
 function armGestures() {

@@ -63,6 +63,13 @@ before(async () => {
       res.end(logNotFound ? 'Nothing to undo' : 'ok');
       return;
     }
+    if (url === '/api/question') {
+      // A hold on a question is a refusal to answer (#34).
+      logUrls.push(req.method + ' ' + req.url);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ dismissed: true }));
+      return;
+    }
     if (url === '/api/nudge') {
       // A hold on a nudge is a dismissal, not an undo (#35).
       logUrls.push(req.method + ' ' + req.url);
@@ -321,6 +328,64 @@ test('a nudge key registers no double-tap, so its taps stay immediate', async ()
     await until(() => logUrls.length >= 2, { label: 'two independent taps' });
     assert.equal(logUrls.length, 2, 'two quick taps on a nudge are two logs, not one double-tap');
     assert.ok(!logUrls.some((u) => u.includes('intensity=')), 'and neither carries an intensity');
+  } finally { p.done(); }
+});
+
+// --- coach question pairs (#34) ---
+
+// Two linked keys sharing a qid, differing only in `answer`.
+const QUESTION = ['yes', 'no'].map((answer) => ({
+  habit: 'LunchSat', emoji: answer === 'yes' ? '👍' : '👎', label: answer === 'yes' ? 'Good' : 'Rough',
+  question: 'Did lunch sit well?', reason: 'Did lunch sit well?', qid: 'qtest',
+  answer, assignedAt: Date.now(), expiresAt: Date.now() + 3600_000
+}));
+
+test('a question key paints as its own kind of key, not a suggestion', async () => {
+  const p = await boot();
+  try {
+    slots = [QUESTION[0], QUESTION[1], null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>Good<')), { label: 'the question face' });
+    const svg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Good<')));
+    assert.match(svg, />❓ 1</, 'badged as a question, not "AI 1"');
+    assert.doesNotMatch(svg, />AI 1</);
+  } finally { p.done(); }
+});
+
+test('answering goes through /api/log so it stays a real logged row', async () => {
+  const p = await boot();
+  try {
+    slots = [QUESTION[0], QUESTION[1], null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>Good<')), { label: 'the question face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => logUrls.length >= 1, { label: 'the answer' });
+    assert.match(logUrls[0], /^GET \/api\/log\?slot=1\b/, 'the server resolves which half was tapped');
+  } finally { p.done(); }
+});
+
+test('a hold on a question refuses it — POST /api/question, not /api/nudge', async () => {
+  const p = await boot();
+  try {
+    slots = [QUESTION[0], QUESTION[1], null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>Good<')), { label: 'the question face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot', 700);
+    await until(() => logUrls.length >= 1, { label: 'the refusal' });
+    assert.match(logUrls[0], /^POST \/api\/question\?dismiss=1&slot=1\b/);
+    assert.ok(!logUrls.some((u) => u.startsWith('DELETE')), 'an answer is not something to undo');
+  } finally { p.done(); }
+});
+
+test('a question key registers no double-tap — an answer is one act', async () => {
+  const p = await boot();
+  try {
+    slots = [QUESTION[0], QUESTION[1], null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>Good<')), { label: 'the question face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => logUrls.length >= 2, { label: 'two immediate taps' });
+    assert.ok(!logUrls.some((u) => u.includes('intensity=')), 'never an intensity on an answer');
   } finally { p.done(); }
 });
 
