@@ -136,9 +136,13 @@ const buildSlotUrl = (n) => {
 // Multi-page plugin layouts get a Coach key on page 0 (#53): an ambient
 // attention face that consumes no slot, whose tap jumps to the Coach page.
 const coachKeyCount = usePlugin && pageCount > 1 ? 1 : 0;
+// Page 0 also loses its bottom-right cell to the built-in "next page" key on
+// multi-page layouts (reservedFor(0)) — that cell is not available to fills.
+const navKeyCount = pageCount > 1 ? 1 : 0;
 const slotCount = slotsOpt !== undefined
   ? Math.max(0, Math.min(4, parseInt(slotsOpt, 10) || 0))
-  : Math.max(0, Math.min(4, capacity - habits.length - (dashboardUrl ? 1 : 0) - coachKeyCount));
+  : Math.max(0, Math.min(4, capacity - habits.length - (dashboardUrl ? 1 : 0) - coachKeyCount - navKeyCount));
+
 
 // ---- 1) urls.txt (guaranteed manual path) ---------------------------------
 mkdirSync(join(ROOT, 'dist'), { recursive: true });
@@ -186,7 +190,10 @@ const reservedFor = (p) => {
   if (p < pageCount - 1) r.add(cellAt(cols - 1, rows - 1)); // next
   return r;
 };
-const place = (action, page = 0) => {
+// `label` marks a key that must not vanish silently: a dropped habit key is
+// a habit that becomes untappable from the hardware without anyone noticing.
+// The coach-page fill passes no label — a full page there just spills over.
+const place = (action, page = 0, label = '') => {
   const reserved = reservedFor(page);
   while (cursors[page] < capacity) {
     const cell = cellAt(cursors[page] % cols, Math.floor(cursors[page] / cols));
@@ -195,7 +202,8 @@ const place = (action, page = 0) => {
     pageActions[page][cell] = action;
     return true;
   }
-  return false; // page full — caller decides whether that matters
+  if (label) console.warn(`⚠  page ${page} is full — dropped ${label}`);
+  return false;
 };
 
 // Built-in page navigation. Exact shape lifted from a real ProfilesV3 profile
@@ -252,7 +260,9 @@ habits.forEach((h, i) => {
           State: 0,
           States: states(h.name, `${h.emoji} ${h.label}`),
           UUID: 'gg.datagram.web-requests.http'
-        }
+        },
+    0,
+    `habit key ${h.name}`
   );
 });
 
@@ -267,7 +277,7 @@ if (dashboardUrl) {
     State: 0,
     States: states('_dashboard', '📊 Stats'),
     UUID: 'com.elgato.streamdeck.system.website'
-  });
+  }, 0, 'the Stats key');
 }
 
 // AI slot keys.
@@ -293,7 +303,9 @@ for (let n = 1; n <= slotCount; n++) {
           State: 0,
           States: states(`Slot${n}`, `✨ AI ${n}`),
           UUID: 'gg.datagram.web-requests.http'
-        }
+        },
+    0,
+    `AI slot key ${n}`
   );
 }
 
@@ -309,7 +321,7 @@ if (coachKeyCount) {
     State: 0,
     States: liveStates(),
     UUID: PLUGIN_COACH
-  });
+  }, 0, 'the Coach key');
 }
 
 // Coach pages (pages 1+): the wider slot range, numbered on from the front

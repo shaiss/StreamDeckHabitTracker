@@ -23,7 +23,10 @@
 // LOWER page so a dead heat reads as "still where you were". Keys with no
 // usable page tag (hand-placed, pre-#53 profiles) count toward anyVisible
 // but abstain from the page vote; if nobody votes, visiblePage is null —
-// visible, location unknown.
+// visible, location unknown. Location-unknown matters: hand-placed keys can
+// live in FOREIGN profiles, so navigation (#54) must treat visiblePage: null
+// as "not provably our profile" and refuse — only a page-tagged key proves
+// the visible room is ours.
 export function deriveVisibility(settingsList) {
   let any = false;
   const votes = new Map();

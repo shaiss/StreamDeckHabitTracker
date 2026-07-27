@@ -21,7 +21,7 @@
 //                              can never double-spend. 409 = refused.
 import {
   getNudgeState, setNudgeState, getSlots, setSlots, all, getProfile, isConfigured,
-  appendDismissal, getDismissals, getSlotHistory
+  appendDismissal, getDismissals, getSlotHistory, claimTakeover
 } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { tzHelpers } from '../lib/tz.js';
@@ -74,8 +74,14 @@ export default async function handler(req, res) {
       return;
     }
 
-    // The kill switch and the budget claim are writes — same HABIT_KEY gate.
+    // The kill switch and the budget claim are writes — same HABIT_KEY gate,
+    // and POST-only: a GET with side effects is one link prefetch away from
+    // silencing the coach for a day.
     if (q.suppress === '1' || q.takeover === '1') {
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'POST required.' });
+        return;
+      }
       const secret = process.env.HABIT_KEY;
       if (secret && q.key !== secret) {
         res.status(401).json({ error: 'Unauthorized' });
@@ -89,15 +95,17 @@ export default async function handler(req, res) {
         res.status(200).json({ suppressed: true, until });
         return;
       }
-      // takeover claim: budget + kill switch live here, beside the rest of
-      // the nudge state, so they survive plugin restarts.
+      // takeover claim: the kill switch lives in the nudge state; the budget
+      // itself is a SET NX in Redis (claimTakeover) so exactly one concurrent
+      // claimer per day is granted — the state fields mirror it for
+      // observability and plugin restarts.
       if (state.suppressedUntil && now < state.suppressedUntil) {
         res.status(409).json({ error: 'Kill switch engaged.', until: state.suppressedUntil });
         return;
       }
       const profile = await getProfile().catch(() => null);
       const day = tzHelpers(profile?.tz).day(now);
-      if (state.takeoverDay === day) {
+      if (state.takeoverDay === day || !(await claimTakeover(day))) {
         res.status(409).json({ error: 'Takeover budget spent for today.' });
         return;
       }

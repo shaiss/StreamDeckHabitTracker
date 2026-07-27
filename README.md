@@ -338,8 +338,10 @@ Built artifacts are committed, and nothing rebuilds them automatically:
 node tools/make-icons.mjs        # still PNGs      -> icons/
 node tools/make-animations.mjs   # looping GIFs    -> icons/animated/
 node tools/bundle-plugin.mjs     # src/            -> bin/plugin.js
-node tools/build-plugin.mjs      # full .streamDeckPlugin package
-node tools/generate.mjs "<base-url>" --plugin --static --pages=2   # bundled .streamDeckProfile
+node tools/generate.mjs "<base-url>" --plugin --static --pages=2 \
+  --outfile="streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/profiles/Habit Tracker AI.streamDeckProfile" \
+  --name="Habit Tracker AI"      # bundled .streamDeckProfile
+node tools/build-plugin.mjs      # full .streamDeckPlugin package (packages the profile above)
 node tools/screenshots.mjs        # README screenshots -> docs/screenshots/
 ```
 

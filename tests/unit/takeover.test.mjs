@@ -29,6 +29,15 @@ test('no arguments at all means no: every default is the silent reading', () => 
   assert.equal(takeoverDue({}).due, false);
 });
 
+test('a broken clock fails closed before any other rule is consulted', () => {
+  // Without now/hour/day the expiry, quiet-hour, human-lock and budget
+  // checks would all fall through open — so they must never be reached.
+  assert.equal(takeoverDue({ ...OK, now: undefined }).reason, 'invalid clock context');
+  assert.equal(takeoverDue({ ...OK, hour: undefined }).reason, 'invalid clock context');
+  assert.equal(takeoverDue({ ...OK, hour: 24 }).reason, 'invalid clock context');
+  assert.equal(takeoverDue({ ...OK, day: '' }).reason, 'invalid clock context');
+});
+
 test('consent is default-off and unknown values normalize to off', () => {
   assert.deepEqual(CONSENT_LEVELS, ['off', 'nudge-only', 'may-navigate']);
   assert.equal(normalizeConsent(undefined), 'off');

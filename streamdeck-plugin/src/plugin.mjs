@@ -84,6 +84,8 @@ let lastPageChangeAt = 0;        // …and last page change (appeared-key churn)
 let lastTakeoverDay = '';        // local memory of a spent budget
 let suppressedUntilLocal = 0;    // local memory of the kill switch
 let takeover = null;             // { deviceId, returnPage, timer } while we hold the glass
+let takeoverPending = false;     // set synchronously before the claim POST — two poll
+                                 // settles must not race into two claims
 
 const localDay = (t) => {
   const d = new Date(t);
@@ -141,9 +143,17 @@ function escalate(now) {
       try { render(k); } catch { /* next tick retries */ }
     } else if (k.kind === 'coach') {
       // The coach face mirrors the loudest live nudge, so it escalates on
-      // the same quantized steps as the nudge key itself (#53).
+      // the same quantized steps as the nudge key itself (#53). When the
+      // nudge expires CLIENT-side the poll payload doesn't change, so the
+      // one repaint that drops the ❗ face has to happen here too.
       const def = liveNudge(now);
-      if (!def || urgencyStep(def, now) === k.urgencyStep) continue;
+      if (!def) {
+        if (k.urgencyStep !== undefined) {
+          try { render(k); } catch { /* next tick retries */ }   // clears urgencyStep
+        }
+        continue;
+      }
+      if (urgencyStep(def, now) === k.urgencyStep) continue;
       try { render(k); } catch { /* next tick retries */ }
     }
   }
@@ -264,7 +274,7 @@ function restoreTakeover() {
 }
 
 function maybeTakeover() {
-  if (takeover) return;                          // already holding the glass
+  if (takeover || takeoverPending) return;       // already holding, or mid-claim
   const now = Date.now();
   const vis = visibility();
   const gate = takeoverDue({
@@ -273,7 +283,12 @@ function maybeTakeover() {
     day: localDay(now),
     consent: consentCache,
     nudge: liveNudge(now),
-    visible: vis.anyVisible,
+    // "Visible" must mean OUR profile is on screen, not merely our keys:
+    // hand-placed keys (#55) live in FOREIGN profiles and carry no page tag,
+    // so they read visiblePage: null — navigating on that signal would yank
+    // the human out of another room. Only a page-tagged key (which exists
+    // only in our generated profile) proves the room is ours.
+    visible: vis.anyVisible && Number.isInteger(vis.visiblePage),
     lastKeypressAt,
     lastPageChangeAt,
     takeoverDay: lastTakeoverDay,
@@ -288,13 +303,21 @@ function maybeTakeover() {
     if (k.settings.base) { base = baseOf(k.settings); secret = k.settings.key || null; break; }
   }
   // Claim the day's budget server-side FIRST — a refusal (budget spent on a
-  // previous process, kill switch engaged) means stay silent.
-  fetch(base + '/api/nudge?takeover=1' + (secret ? '&key=' + encodeURIComponent(secret) : ''), { method: 'POST' })
+  // previous process, kill switch engaged) means stay silent. The pending
+  // flag is set synchronously and released only after the whole chain
+  // settles, so an overlapping poll settle can never double-claim; the
+  // abort deadline keeps a hung claim from wedging takeovers forever.
+  takeoverPending = true;
+  const ctrl = new AbortController();
+  const deadline = setTimeout(() => { try { ctrl.abort(); } catch { /* settled */ } }, POLL_TIMEOUT_MS);
+  if (deadline.unref) deadline.unref();
+  fetch(base + '/api/nudge?takeover=1' + (secret ? '&key=' + encodeURIComponent(secret) : ''),
+    { method: 'POST', signal: ctrl.signal })
     .then((r) => {
       if (!r.ok) return;
       lastTakeoverDay = localDay(Date.now());
       const returnPage = vis.visiblePage == null ? 1 : vis.visiblePage;
-      Promise.resolve(streamDeck.profiles.switchToProfile(dev, PROFILE_NAME, 0))
+      return Promise.resolve(streamDeck.profiles.switchToProfile(dev, PROFILE_NAME, 0))
         .then(() => {
           // Auto-restore: give the page back after RESTORE_MS or on any tap
           // (see onKeyUp). Never strand someone on a page they didn't choose.
@@ -305,7 +328,8 @@ function maybeTakeover() {
         })
         .catch(() => { /* navigation refused — nothing to restore */ });
     })
-    .catch(() => { /* offline: no claim, no navigation */ });
+    .catch(() => { /* offline or timed out: no claim, no navigation */ })
+    .finally(() => { clearTimeout(deadline); takeoverPending = false; });
 }
 
 // Long-press on the Coach key: the hardware kill switch (#54). Saying "not

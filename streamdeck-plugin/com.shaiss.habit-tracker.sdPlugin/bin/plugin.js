@@ -17512,6 +17512,9 @@ function takeoverDue({
   takeoverDay = "",
   suppressedUntil = 0
 } = {}) {
+  if (!Number.isFinite(now) || !Number.isInteger(hour) || hour < 0 || hour > 23 || !day) {
+    return { due: false, reason: "invalid clock context" };
+  }
   if (normalizeConsent(consent) !== "may-navigate") return { due: false, reason: "consent withheld" };
   if (suppressedUntil && now < suppressedUntil) return { due: false, reason: "kill switch engaged" };
   if (!nudge || !nudge.nudge || nudge.expiresAt && nudge.expiresAt <= now) {
@@ -17525,7 +17528,7 @@ function takeoverDue({
   if (lastPageChangeAt2 && now - lastPageChangeAt2 < HUMAN_LOCK_MS) {
     return { due: false, reason: "human just changed pages" };
   }
-  if (day && takeoverDay === day) return { due: false, reason: "budget spent" };
+  if (takeoverDay === day) return { due: false, reason: "budget spent" };
   return { due: true, reason: "ok" };
 }
 
@@ -17557,6 +17560,7 @@ var lastPageChangeAt = 0;
 var lastTakeoverDay = "";
 var suppressedUntilLocal = 0;
 var takeover = null;
+var takeoverPending = false;
 var localDay = (t) => {
   const d = new Date(t);
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
@@ -17603,7 +17607,16 @@ function escalate(now) {
       }
     } else if (k.kind === "coach") {
       const def = liveNudge(now);
-      if (!def || urgencyStep(def, now) === k.urgencyStep) continue;
+      if (!def) {
+        if (k.urgencyStep !== void 0) {
+          try {
+            render(k);
+          } catch {
+          }
+        }
+        continue;
+      }
+      if (urgencyStep(def, now) === k.urgencyStep) continue;
       try {
         render(k);
       } catch {
@@ -17698,7 +17711,7 @@ function restoreTakeover() {
   });
 }
 function maybeTakeover() {
-  if (takeover) return;
+  if (takeover || takeoverPending) return;
   const now = Date.now();
   const vis = visibility();
   const gate = takeoverDue({
@@ -17708,7 +17721,12 @@ function maybeTakeover() {
     day: localDay(now),
     consent: consentCache,
     nudge: liveNudge(now),
-    visible: vis.anyVisible,
+    // "Visible" must mean OUR profile is on screen, not merely our keys:
+    // hand-placed keys (#55) live in FOREIGN profiles and carry no page tag,
+    // so they read visiblePage: null — navigating on that signal would yank
+    // the human out of another room. Only a page-tagged key (which exists
+    // only in our generated profile) proves the room is ours.
+    visible: vis.anyVisible && Number.isInteger(vis.visiblePage),
     lastKeypressAt,
     lastPageChangeAt,
     takeoverDay: lastTakeoverDay,
@@ -17726,11 +17744,23 @@ function maybeTakeover() {
       break;
     }
   }
-  fetch(base + "/api/nudge?takeover=1" + (secret ? "&key=" + encodeURIComponent(secret) : ""), { method: "POST" }).then((r) => {
+  takeoverPending = true;
+  const ctrl = new AbortController();
+  const deadline = setTimeout(() => {
+    try {
+      ctrl.abort();
+    } catch {
+    }
+  }, POLL_TIMEOUT_MS);
+  if (deadline.unref) deadline.unref();
+  fetch(
+    base + "/api/nudge?takeover=1" + (secret ? "&key=" + encodeURIComponent(secret) : ""),
+    { method: "POST", signal: ctrl.signal }
+  ).then((r) => {
     if (!r.ok) return;
     lastTakeoverDay = localDay(Date.now());
     const returnPage = vis.visiblePage == null ? 1 : vis.visiblePage;
-    Promise.resolve(plugin_default.profiles.switchToProfile(dev, PROFILE_NAME, 0)).then(() => {
+    return Promise.resolve(plugin_default.profiles.switchToProfile(dev, PROFILE_NAME, 0)).then(() => {
       const timer = setTimeout(restoreTakeover, RESTORE_MS);
       if (timer.unref) timer.unref();
       takeover = { deviceId: dev, returnPage, timer };
@@ -17738,6 +17768,9 @@ function maybeTakeover() {
     }).catch(() => {
     });
   }).catch(() => {
+  }).finally(() => {
+    clearTimeout(deadline);
+    takeoverPending = false;
   });
 }
 function suppressTakeovers(k) {
