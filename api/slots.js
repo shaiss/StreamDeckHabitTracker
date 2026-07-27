@@ -1,4 +1,4 @@
-// GET /api/slots -> { configured, aiReady, model, suggestedAt, slots: [def|null x4], today, track?, deck? }
+// GET /api/slots -> { configured, aiReady, model, suggestedAt, slots: [def|null x4], coachPage: [def|null x12], today, track?, deck? }
 // def = { habit, emoji, label, reason, assignedAt }
 // today = { [habitName]: { count, goal, doneToday, streak, ringFill } } (living key faces, #32)
 // Query: ?tz=<minutes> (viewer getTimezoneOffset; default 0=UTC) sets the day
@@ -6,7 +6,7 @@
 // heartbeat; ?deck=<pluginVersion> records the physical deck's own poll.
 // Read by the dashboard and by the Stream Deck plugin (CORS open, read-only).
 import { waitUntil } from '@vercel/functions';
-import { getSlots, isConfigured, getSlotHistory, all, getDeckState, setDeckState } from '../lib/store.js';
+import { getSlots, getCoachPage, isConfigured, getSlotHistory, all, getDeckState, setDeckState } from '../lib/store.js';
 import { zaiKey, zaiModel } from '../lib/ai.js';
 import { getHabits } from '../lib/habits.js';
 import { scoreSuggestions } from '../lib/scorer.js';
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
       return;
     }
     const q = req.query || {};
-    const doc = await getSlots();
+    const [doc, coachPage] = await Promise.all([getSlots(), getCoachPage()]);
     // Living key faces (#32): per-habit today state for the deck. tz is the
     // viewer's getTimezoneOffset() in minutes (UTC-5 → 300); default UTC. We
     // fetch entries once and reuse them for ?track=1 below (no extra round-trip).
@@ -39,7 +39,9 @@ export default async function handler(req, res) {
     const tzOffsetMs = (Number.isFinite(tzMin) ? tzMin : 0) * 60_000;
     const entries = await all();
     const today = computeToday(base.habits, entries, Date.now(), tzOffsetMs);
-    const out = { ...base, suggestedAt: doc.suggestedAt, slots: doc.slots, today };
+    // coachPage: the wider slot array behind the Coach page (#52); the plugin
+    // renders keys with slot=5..16 from it (index slot-5).
+    const out = { ...base, suggestedAt: doc.suggestedAt, slots: doc.slots, coachPage: coachPage.slots, today };
     // ?track=1 (dashboard only — keeps the plugin's poll light): behavioral
     // scorecard of past suggestions vs actual taps, plus the hardware
     // heartbeat so the dashboard can report whether a physical deck is live.

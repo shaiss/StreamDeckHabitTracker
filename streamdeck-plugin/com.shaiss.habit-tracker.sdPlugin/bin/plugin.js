@@ -17487,6 +17487,7 @@ try {
 }
 var keys = /* @__PURE__ */ new Map();
 var slotCache = null;
+var coachCache = null;
 var habitCache = null;
 var todayCache = null;
 var sched = createScheduler({ pollMs: POLL_MS, timeoutMs: POLL_TIMEOUT_MS, recheckMs: RECHECK_MS });
@@ -17551,12 +17552,14 @@ function refreshSlots(now) {
     if (!sched.pollSettled(seq)) return;
     inflightCtrl = null;
     const slots = j.slots || [];
+    const coachPage = j.coachPage || [];
     const habits = j.habits || [];
     const today = j.today || {};
-    const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots);
+    const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) || !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage);
     const habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(habits);
     const todayChanged = !todayCache || JSON.stringify(todayCache) !== JSON.stringify(today);
     slotCache = slots;
+    coachCache = coachPage;
     habitCache = habits;
     todayCache = today;
     for (const k of keys.values()) {
@@ -17583,7 +17586,7 @@ function render(k) {
     return;
   }
   const n = parseInt(s.slot, 10) || 1;
-  const def = slotCache ? slotCache[n - 1] : null;
+  const def = n <= 4 ? slotCache ? slotCache[n - 1] : null : coachCache ? coachCache[n - 5] : null;
   const was = [k.isNudge, k.isQuestion];
   k.isNudge = !!(def && def.nudge);
   k.isQuestion = !!(def && def.qid);

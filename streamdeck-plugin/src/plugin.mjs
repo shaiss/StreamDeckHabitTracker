@@ -2,7 +2,8 @@
 //
 // Two actions:
 //  - …habit  settings: { base, index (0-based position), key? }
-//  - …slot   settings: { base, slot (1-4), key? }
+//  - …slot   settings: { base, slot (1-16), key? } — 1-4 render from the
+//    front slots array, 5-16 from the coach page (#52)
 //
 // Everything renders from live server state: one poll of <base>/api/slots
 // carries both the habit list and the AI slot assignments, so habit-manager
@@ -54,6 +55,7 @@ try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no regis
 
 const keys = new Map();   // action instance id -> { kind: 'habit'|'slot', settings, action }
 let slotCache = null;     // latest slots array from the server
+let coachCache = null;    // latest coach-page array (#52) — slots 5..16 render from it
 let habitCache = null;    // latest habit list from the server (live-editable)
 let todayCache = null;    // { habitName: {count, goal, doneToday, streak, ringFill} } (#32)
 
@@ -137,12 +139,15 @@ function refreshSlots(now) {
       if (!sched.pollSettled(seq)) return;   // pump() already orphaned this poll
       inflightCtrl = null;
       const slots = j.slots || [];
+      const coachPage = j.coachPage || [];
       const habits = j.habits || [];
       const today = j.today || {};
-      const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots);
+      const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) ||
+        !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage);
       const habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(habits);
       const todayChanged = !todayCache || JSON.stringify(todayCache) !== JSON.stringify(today);
       slotCache = slots;
+      coachCache = coachPage;
       habitCache = habits;
       todayCache = today;
       for (const k of keys.values()) {
@@ -172,8 +177,13 @@ function render(k) {
     else k.action.setImage(face('⏳', '…', SILVER_HUE, '', 22));                     // first poll pending
     return;
   }
+  // One integer namespace across pages (#52): 1..4 are the front keys,
+  // 5..16 index the coach page at n-5. Taps stay ?slot=n either way —
+  // the server owns the same split.
   const n = parseInt(s.slot, 10) || 1;
-  const def = slotCache ? slotCache[n - 1] : null;
+  const def = n <= 4
+    ? (slotCache ? slotCache[n - 1] : null)
+    : (coachCache ? coachCache[n - 5] : null);
   // Nudges and questions both answer a hold with a refusal rather than an undo,
   // and neither registers a double-tap: a poke and an answer are single,
   // immediate acts, so their taps stay instant on release (#35, #34).
