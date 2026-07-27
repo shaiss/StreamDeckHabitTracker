@@ -101,6 +101,24 @@
     .habitface { background:
       radial-gradient(circle at 50% 36%, hsla(var(--hue,222),72%,58%,.62) 0%, transparent 68%),
       linear-gradient(180deg,#141827,#0a0c13); }
+    /* Living key faces (#32): streak ring, dim-when-done, count dots. */
+    .habitface .ring {
+      position: absolute; inset: 5px; border-radius: 14px;
+      background: conic-gradient(hsla(var(--hue,222),85%,72%,.95) calc(var(--ring-pct,0)*1%), hsla(var(--hue,222),45%,45%,.18) 0);
+      -webkit-mask: radial-gradient(circle, transparent 64%, #000 66%);
+              mask: radial-gradient(circle, transparent 64%, #000 66%);
+      pointer-events: none;
+    }
+    .habitface.dim { filter: saturate(.55) brightness(.92); }
+    .habitface .check { position: absolute; top: 5px; right: 8px;
+      font-size: calc(var(--key) * .10); font-weight: 700; color: hsla(var(--hue,222),80%,80%,.95); }
+    .habitface .dots { position: absolute; bottom: 5px; left: 0; right: 0;
+      display: flex; justify-content: center; gap: 4px; }
+    .habitface .dots span { width: 6px; height: 6px; border-radius: 50%;
+      background: hsla(var(--hue,222),45%,45%,.3); }
+    .habitface .dots span.on { background: hsla(var(--hue,222),85%,72%,.95); }
+    .habitface .count { position: absolute; bottom: 5px; right: 8px;
+      font-size: calc(var(--key) * .085); font-weight: 700; color: hsla(var(--hue,222),80%,80%,.95); }
     .emptyface { background:
       radial-gradient(circle at 50% 36%, hsla(222,20%,55%,.35) 0%, transparent 66%),
       linear-gradient(180deg,#12151f,#0a0c13); }
@@ -143,6 +161,7 @@
     const hint = document.getElementById('hint');
     let slots = [null, null, null, null];
     let habits = [];
+    let today = {};   // habitName -> {count, goal, doneToday, streak, ringFill} (#32)
     let built = false;
 
     // 5x3 grid mirroring the generated MK.2 profile:
@@ -155,15 +174,13 @@
           title: h.emoji + ' ' + h.label,
           onTap: (e2) => tap(e2, '/api/log?hkey=' + (i + 1))
         });
+        el.dataset.habit = i;          // position index, for paintHabits()
+        el.dataset.hname = h.name;     // identity for today-state lookup
         // New habits (added via the manager) have no baked icon yet — draw a
-        // CSS face with the emoji + label instead of a broken image.
+        // CSS face with the emoji + label instead of a broken image. (Living
+        // key faces repaint these with state too — see paintHabits().)
         el.querySelector('img')?.addEventListener('error', () => {
-          let hh = 2166136261;
-          for (let c = 0; c < h.name.length; c++) { hh ^= h.name.charCodeAt(c); hh = Math.imul(hh, 16777619) >>> 0; }
-          let hue = hh % 320; if (hue >= 245) hue += 40;
-          el.innerHTML = '<span class="facecss habitface" style="--hue:' + hue + '"><span class="em">' + h.emoji +
-            '</span><span class="lb">' + esc(h.label) + '</span></span>' +
-            '<span class="glass"></span><span class="flash"></span>';
+          el.innerHTML = habitStateHtml(h, today[h.name] || null);
         });
         face.appendChild(el);
       });
@@ -214,6 +231,51 @@
     }
     const esc = (s) => String(s).replace(/</g, '&lt;');
 
+    // Same FNV-1a → hue as the plugin (hueFor in app.js) and tools/make-icons:
+    // a habit keeps its color for life, across icons and live-rendered faces.
+    function hueFor(name) {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+      let hue = h % 320; if (hue >= 245) hue += 40; return hue;
+    }
+
+    // Living key faces (#32): habit key as a CSS face carrying today's state.
+    // Parity with the plugin's canvas face() — streak ring, dim-when-done + ✓,
+    // count dots (or a number when goal > 8). The virtual deck swaps a habit's
+    // GIF for this face on first repaint so it stays an honest preview of the
+    // physical deck (whose canvas faces are static).
+    function habitStateHtml(def, st) {
+      const hue = hueFor(def.name);
+      const done = st && st.doneToday;
+      const goal = (st && st.goal) || 1;
+      const pct = st ? Math.round((st.ringFill || 0) * 100) : 0;
+      let extras = '<span class="ring" style="--ring-pct:' + pct + '"></span>';
+      if (done) extras += '<span class="check">✓</span>';
+      if (goal > 1 && st && typeof st.count === 'number') {
+        if (goal > 8) {
+          extras += '<span class="count">' + st.count + '</span>';
+        } else {
+          let dots = '';
+          for (let i = 0; i < goal; i++) dots += '<span class="' + (i < st.count ? 'on' : '') + '"></span>';
+          extras += '<span class="dots">' + dots + '</span>';
+        }
+      }
+      return '<span class="facecss habitface ' + (done ? 'dim' : '') + '" style="--hue:' + hue + '">' +
+        extras + '<span class="em">' + (def.emoji || '•') + '</span>' +
+        '<span class="lb">' + esc(def.label || def.name) + '</span></span>' +
+        '<span class="glass"></span><span class="flash"></span>';
+    }
+
+    function paintHabits() {
+      if (!built) return;
+      document.querySelectorAll('.k[data-habit]').forEach((el) => {
+        const i = +el.dataset.habit;
+        const def = habits[i];
+        if (!def) return;
+        el.innerHTML = habitStateHtml(def, today[def.name] || null);
+      });
+    }
+
     function paintSlots() {
       if (!built) return;
       document.querySelectorAll('.k[data-slot]').forEach((el) => {
@@ -249,11 +311,16 @@
     }
 
     function refresh() {
-      fetch('/api/slots').then((r) => r.json()).then((j) => {
+      // ?tz= lets the server bucket "today" in the viewer's timezone (matches
+      // the dashboard), so living key faces read the right day (#32).
+      const tz = new Date().getTimezoneOffset(); // minutes; UTC-5 → 300
+      fetch('/api/slots?tz=' + tz).then((r) => r.json()).then((j) => {
         habits = j.habits || habits;
         slots = j.slots || slots;
+        today = j.today || {};
         if (!built && habits.length) build();
         paintSlots();
+        paintHabits();
         if (hint.textContent === 'Loading keys…') {
           hint.innerHTML = 'Tap a key — it logs exactly like the hardware. The <b>✨ AI keys</b> repaint themselves when the coach changes its mind.';
         }
