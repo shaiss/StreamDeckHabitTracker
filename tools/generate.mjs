@@ -7,6 +7,7 @@
 //   node tools/generate.mjs "https://script.google.com/macros/s/XXXX/exec"
 //   node tools/generate.mjs "https://.../exec" --key=k9x2q      # if you set a SECRET
 //   node tools/generate.mjs "https://.../exec" --model=xl       # deck model (see below)
+//   node tools/generate.mjs "https://.../exec" --pages=2        # multi-page profile (#51)
 //
 // Zero dependencies. Needs only Node 16+.
 
@@ -73,6 +74,14 @@ const siteOrigin = (() => { try { return new URL(execBase).origin; } catch { ret
 // Override with --slots=N (0 disables). Computed after habits load.
 const slotsOpt = getOpt('slots');
 const capacity = cols * rows;
+
+// --pages=N (default 1, so existing invocations are unchanged): emit a
+// multi-page profile (issue #51). Page 0 keeps today's layout; pages 1+ are
+// Coach pages filled with the wider slot range (5..16 — see issue #52; the
+// server resolves those against habits:coach:page). Navigation is entirely
+// built-in Elgato actions, no plugin code — shapes verified on hardware by
+// tools/spike-multipage.mjs (#42).
+const pageCount = Math.max(1, Math.min(4, parseInt(getOpt('pages'), 10) || 1));
 
 // --outfile / --name: write the profile somewhere specific (used to publish
 // hosted artifacts into public/downloads/).
@@ -154,20 +163,48 @@ writeFileSync(join(ROOT, 'dist/urls.txt'), urlsTxt);
 // On-disk page folders are uppercase UUIDs; the outer manifest cites them
 // in lowercase, matching how Stream Deck itself writes profiles.
 const profileUuid = randomUUID().toUpperCase();
-const pageUuid = randomUUID().toUpperCase();
+const pageUuids = Array.from({ length: pageCount }, () => randomUUID().toUpperCase());
 const defaultPageUuid = randomUUID().toUpperCase();
 const folder = `${profileUuid}.sdProfile`;
 
 // v3.0 page Controllers[].Actions is keyed "col,row" (column first). Habits
 // fill row-major, top-left first, matching how the keys read on the deck.
-const actions = {};
-let cell = 0;
-const place = (action) => {
-  const col = cell % cols;
-  const row = Math.floor(cell / cols);
-  actions[`${col},${row}`] = action;
-  cell++;
+// One cursor PER PAGE (issue #51); on multi-page layouts the bottom-row outer
+// corners are reserved for navigation — 0,rows-1 previous and cols-1,rows-1
+// next, matching the muscle memory of the owner's Default Profile.
+const pageActions = pageUuids.map(() => ({}));
+const cursors = pageUuids.map(() => 0);
+const cellAt = (col, row) => `${col},${row}`;
+const reservedFor = (p) => {
+  const r = new Set();
+  if (pageCount === 1) return r;
+  if (p > 0) r.add(cellAt(0, rows - 1));                 // previous
+  if (p < pageCount - 1) r.add(cellAt(cols - 1, rows - 1)); // next
+  return r;
 };
+const place = (action, page = 0) => {
+  const reserved = reservedFor(page);
+  while (cursors[page] < capacity) {
+    const cell = cellAt(cursors[page] % cols, Math.floor(cursors[page] / cols));
+    cursors[page]++;
+    if (reserved.has(cell) || pageActions[page][cell]) continue;
+    pageActions[page][cell] = action;
+    return true;
+  }
+  return false; // page full — caller decides whether that matters
+};
+
+// Built-in page navigation. Exact shape lifted from a real ProfilesV3 profile
+// (see tools/spike-multipage.mjs): Settings is empty, States is a single EMPTY
+// object (the app supplies the chevron art itself), plus a Plugin block naming
+// the Pages plugin. No plugin code of ours is involved in navigation at all.
+const navKey = (dir) => ({
+  ActionID: randomUUID().toUpperCase(), LinkedTitle: true,
+  Name: dir === 'next' ? 'Next Page' : 'Previous Page',
+  Plugin: { Name: 'Pages', UUID: 'com.elgato.streamdeck.page', Version: '1.0' },
+  Resources: null, Settings: {}, State: 0, States: [{}],
+  UUID: `com.elgato.streamdeck.page.${dir}`
+});
 // Build a single state. `imgName` is an icon name (resolved to an Images/
 // ref via iconImage); pass null when the key has no icon (title-only state).
 const states = (imgName, title) => {
@@ -255,45 +292,88 @@ for (let n = 1; n <= slotCount; n++) {
   );
 }
 
+// Coach pages (pages 1+): the wider slot range, numbered on from the front
+// four. /api/log resolves 5..16 against habits:coach:page (issue #52), so key
+// numbering is one integer namespace across pages. Image-less states on every
+// page — the setImage veto applies per key, not per profile.
+let coachSlot = 5;
+for (let p = 1; p < pageCount; p++) {
+  while (coachSlot <= 16) {
+    const n = coachSlot;
+    const action = usePlugin
+      ? {
+          ActionID: randomUUID().toUpperCase(),
+          LinkedTitle: true,
+          Name: 'AI Slot Key',
+          Settings: { base: siteOrigin, slot: n, ...(key ? { key } : {}) },
+          Resources: null,
+          State: 0,
+          States: liveStates(),
+          UUID: PLUGIN_SLOT
+        }
+      : {
+          ActionID: randomUUID().toUpperCase(),
+          LinkedTitle: true,
+          Name: 'HTTP Request',
+          Settings: { url: buildSlotUrl(n), method: 'GET', contentType: '', headers: '', body: '' },
+          Resources: null,
+          State: 0,
+          States: states(null, `✨ AI ${n}`),
+          UUID: 'gg.datagram.web-requests.http'
+        };
+    if (!place(action, p)) break; // page full — spill to the next page
+    coachSlot++;
+  }
+}
+
+// Navigation keys land on the reserved corners last, so fills can't take them.
+for (let p = 0; p < pageCount; p++) {
+  if (p > 0) pageActions[p][cellAt(0, rows - 1)] = navKey('previous');
+  if (p < pageCount - 1) pageActions[p][cellAt(cols - 1, rows - 1)] = navKey('next');
+}
+
 // ---- v3.0 manifests -------------------------------------------------------
 // Outer: Device object + Pages (Current is a real page; Default is the empty
-// fallback page). Version MUST be "3.0" or the app's v1.0 importer chokes on
-// the (intentionally absent) top-level Actions key.
+// fallback page, deliberately NOT listed in Pages.Pages). Version MUST be
+// "3.0" or the app's v1.0 importer chokes on the (intentionally absent)
+// top-level Actions key.
 const outerManifest = {
   Device: { Model: deviceModel, UUID: '' },
   Name: profileName,
   Pages: {
-    Current: pageUuid.toLowerCase(),
+    Current: pageUuids[0].toLowerCase(),
     Default: defaultPageUuid.toLowerCase(),
-    Pages: [pageUuid.toLowerCase()]
+    Pages: pageUuids.map((u) => u.toLowerCase())
   },
   Version: '3.0'
 };
-// Page: actions live inside Controllers[].Actions, keyed "row,col". An empty
+// Page: actions live inside Controllers[].Actions, keyed "col,row". An empty
 // page (the Default fallback) uses Actions: null.
-const pageManifest = {
+const pageManifest = (actions) => ({
   Controllers: [{ Actions: actions, Type: 'Keypad' }],
   Icon: '',
   Name: ''
-};
+});
 const defaultPageManifest = {
   Controllers: [{ Actions: null, Type: 'Keypad' }],
   Icon: '',
   Name: ''
 };
 
-// Icon files: one PNG per referenced icon name, inside the page's Images/.
+// Icon files: one PNG per referenced icon name, inside page 0's Images/ —
+// coach pages carry only image-less plugin keys or title-only states, so
+// icons never appear beyond the front page.
 const imageFiles = [...ICON_REFS.values()].map((e) => ({
-  name: `${folder}/Profiles/${pageUuid}/Images/${e.ref.split('/').pop()}`,
+  name: `${folder}/Profiles/${pageUuids[0]}/Images/${e.ref.split('/').pop()}`,
   data: e.buffer
 }));
 
 const files = [
   { name: `${folder}/manifest.json`, data: Buffer.from(JSON.stringify(outerManifest, null, 2)) },
-  {
-    name: `${folder}/Profiles/${pageUuid}/manifest.json`,
-    data: Buffer.from(JSON.stringify(pageManifest, null, 2))
-  },
+  ...pageUuids.map((u, p) => ({
+    name: `${folder}/Profiles/${u}/manifest.json`,
+    data: Buffer.from(JSON.stringify(pageManifest(pageActions[p]), null, 2))
+  })),
   ...imageFiles,
   {
     name: `${folder}/Profiles/${defaultPageUuid}/manifest.json`,
@@ -313,8 +393,11 @@ const animCount = useStatic
   ? 0
   : habits.filter((h) => existsSync(join(ROOT, 'icons/animated', `${h.name}.gif`))).length;
 console.log(
-  `Habits   : ${habits.length}   Deck: ${modelArg} (${cols}x${rows})   Flavor: ${usePlugin ? 'HabitTrackerAI plugin' : 'Web Requests plugin'}   Key: ${key ? 'yes' : 'none'}`
+  `Habits   : ${habits.length}   Deck: ${modelArg} (${cols}x${rows})   Pages: ${pageCount}   Flavor: ${usePlugin ? 'HabitTrackerAI plugin' : 'Web Requests plugin'}   Key: ${key ? 'yes' : 'none'}`
 );
+if (pageCount > 1) {
+  pageActions.forEach((a, p) => console.log(`  page ${p}: ${Object.keys(a).length} keys`));
+}
 console.log(
   `Icons    : ${iconsFound}/${habits.length} embedded (${animCount} animated)   AI slots: ${slotCount}   Dashboard key: ${dashboardUrl || 'off'}\n`
 );
