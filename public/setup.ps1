@@ -30,6 +30,9 @@ $pluginsDir = Join-Path $sdData 'Plugins'
 # confuse) the bundled one.
 $profileDirs = @((Join-Path $sdData 'ProfilesV2'), (Join-Path $sdData 'ProfilesV3'))
 $pluginId = 'com.shaiss.habit-tracker.sdPlugin'
+# The bundled profile, relative to the .sdPlugin root - validated while staged,
+# then imported from the installed copy if the app's AutoInstall doesn't cover it.
+$profileRel = 'profiles\Habit Tracker AI.streamDeckProfile'
 
 # Is a "Habit Tracker*" profile already present in either store? Used to tell a
 # fresh install (AutoInstall did the work, no prompt) from an upgrade (we must
@@ -90,6 +93,25 @@ Expand-Archive -Path $zip -DestinationPath $stage -Force
 $stagedPlugin = Join-Path $stage $pluginId
 $stagedManifest = Join-Path $stagedPlugin 'manifest.json'
 if (-not (Test-Path $stagedManifest)) { throw "downloaded plugin package is missing $pluginId/manifest.json - aborting before touching anything." }
+# Validate the bundled profile too - step 5 deletes the existing profile, so a
+# package with a good manifest but a missing/corrupt profile would otherwise
+# strip the deck bare. Open it as a real ZIP and require the .sdProfile
+# manifest entry: a truncated or malformed file (which passes a magic-byte
+# check) fails to open here. Fail closed like the manifest check above.
+$stagedProfile = Join-Path $stagedPlugin $profileRel
+$profileOk = $false
+if (Test-Path $stagedProfile) {
+  try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zipArchive = [System.IO.Compression.ZipFile]::OpenRead($stagedProfile)
+    try {
+      # A real Habit Tracker profile is a zip whose entries include the
+      # <UUID>.sdProfile/manifest.json outer manifest.
+      $profileOk = [bool]($zipArchive.Entries | Where-Object { $_.FullName -like '*.sdProfile/manifest.json' })
+    } finally { $zipArchive.Dispose() }
+  } catch { $profileOk = $false }
+}
+if (-not $profileOk) { throw "downloaded plugin package has a missing, unreadable, or corrupt bundled profile ($profileRel) - aborting before touching anything." }
 $newVersion = (Get-Content $stagedManifest -Raw | ConvertFrom-Json).Version
 Write-Host "      plugin package OK - version $newVersion" -ForegroundColor Green
 
@@ -109,9 +131,18 @@ if ($running) {
 # already staged and validated, so this is the first destructive step.
 Write-Host '[5/7] Removing previous plugin/profile installs (if any)...' -ForegroundColor Yellow
 $removed = @()
+# Track whether OUR plugin UUID was already installed: AutoInstall fires only on
+# a plugin the app has never seen, so if it was present this is an upgrade and
+# there is no point waiting for AutoInstall in step 7 (the legacy id is a
+# different UUID and doesn't count).
+$pluginWasPresent = $false
 foreach ($id in $pluginId, 'com.kalmansforge.habit-tracker.sdPlugin') {
   $p = Join-Path $pluginsDir $id
-  if (Test-Path $p) { Remove-Item $p -Recurse -Force; $removed += "plugin $id" }
+  if (Test-Path $p) {
+    Remove-Item $p -Recurse -Force
+    $removed += "plugin $id"
+    if ($id -eq $pluginId) { $pluginWasPresent = $true }
+  }
 }
 foreach ($profilesDir in $profileDirs) {
   if (-not (Test-Path $profilesDir)) { continue }
@@ -152,12 +183,22 @@ Start-Sleep -Seconds 5
 # prompt). The bundled profile carries a fixed UUID, so if AutoInstall did land
 # a copy, the app treats this as the same profile rather than a duplicate.
 Write-Host '[7/7] Verifying the Habit Tracker AI profile...' -ForegroundColor Yellow
-Start-Sleep -Seconds 6   # give AutoInstall a beat to land on a fresh install
+# On a first install, wait (poll) for AutoInstall to register the profile - a
+# slow launch can take longer than a fixed delay, and we don't want to prompt
+# for an import the app is about to do itself. On an upgrade AutoInstall won't
+# fire at all, so only give it a short grace before importing.
+$pollSeconds = if ($pluginWasPresent) { 4 } else { 25 }
+$haveProfile = $false
+$deadline = (Get-Date).AddSeconds($pollSeconds)
+do {
+  if (& $findHtProfile) { $haveProfile = $true; break }
+  Start-Sleep -Seconds 1
+} while ((Get-Date) -lt $deadline)
 $prompted = $false
-if (& $findHtProfile) {
+if ($haveProfile) {
   Write-Host '      profile installed automatically - no prompt needed.' -ForegroundColor Green
 } else {
-  $installedProfile = Join-Path (Join-Path $pluginsDir $pluginId) 'profiles\Habit Tracker AI.streamDeckProfile'
+  $installedProfile = Join-Path (Join-Path $pluginsDir $pluginId) $profileRel
   if (Test-Path $installedProfile) {
     Write-Host '      importing the bundled profile - confirm the one prompt...' -ForegroundColor Yellow
     Start-Process $installedProfile
