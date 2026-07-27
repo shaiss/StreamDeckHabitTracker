@@ -49,6 +49,14 @@ let clock = null;
 
 const log = streamDeck.logger.createScope('habit-tracker');
 
+// A rejected fire-and-forget send (setImage/showOk while the app's socket
+// drops) must not kill the process — the old runtime's sync ws.send couldn't.
+// Stream Deck would restart us, but a restart drops the poll caches and reads
+// as flicker on the deck. Log it; the next poll converges.
+process.on('unhandledRejection', (err) => {
+  try { log.error('unhandled rejection: ' + (err && err.message ? err.message : err)); } catch { /* logger gone */ }
+});
+
 function startClock() {
   if (!clock) clock = setInterval(pump, TICK_MS);
 }

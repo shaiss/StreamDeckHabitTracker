@@ -17364,6 +17364,12 @@ var sched = createScheduler({ pollMs: POLL_MS, timeoutMs: POLL_TIMEOUT_MS, reche
 var inflightCtrl = null;
 var clock = null;
 var log = plugin_default.logger.createScope("habit-tracker");
+process.on("unhandledRejection", (err) => {
+  try {
+    log.error("unhandled rejection: " + (err && err.message ? err.message : err));
+  } catch {
+  }
+});
 function startClock() {
   if (!clock) clock = setInterval(pump, TICK_MS);
 }
