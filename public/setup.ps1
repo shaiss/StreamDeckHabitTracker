@@ -95,21 +95,23 @@ $stagedManifest = Join-Path $stagedPlugin 'manifest.json'
 if (-not (Test-Path $stagedManifest)) { throw "downloaded plugin package is missing $pluginId/manifest.json - aborting before touching anything." }
 # Validate the bundled profile too - step 5 deletes the existing profile, so a
 # package with a good manifest but a missing/corrupt profile would otherwise
-# strip the deck bare. Require the file to be present AND a real zip (PK magic)
-# before anything destructive runs; fail closed like the manifest check above.
+# strip the deck bare. Open it as a real ZIP and require the .sdProfile
+# manifest entry: a truncated or malformed file (which passes a magic-byte
+# check) fails to open here. Fail closed like the manifest check above.
 $stagedProfile = Join-Path $stagedPlugin $profileRel
 $profileOk = $false
 if (Test-Path $stagedProfile) {
   try {
-    $fs = [System.IO.File]::OpenRead($stagedProfile)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zipArchive = [System.IO.Compression.ZipFile]::OpenRead($stagedProfile)
     try {
-      $sig = New-Object byte[] 2
-      $null = $fs.Read($sig, 0, 2)
-      $profileOk = ($sig[0] -eq 0x50 -and $sig[1] -eq 0x4B)   # 'PK' - a real zip
-    } finally { $fs.Dispose() }
+      # A real Habit Tracker profile is a zip whose entries include the
+      # <UUID>.sdProfile/manifest.json outer manifest.
+      $profileOk = [bool]($zipArchive.Entries | Where-Object { $_.FullName -like '*.sdProfile/manifest.json' })
+    } finally { $zipArchive.Dispose() }
   } catch { $profileOk = $false }
 }
-if (-not $profileOk) { throw "downloaded plugin package is missing or has a corrupt bundled profile ($profileRel) - aborting before touching anything." }
+if (-not $profileOk) { throw "downloaded plugin package has a missing, unreadable, or corrupt bundled profile ($profileRel) - aborting before touching anything." }
 $newVersion = (Get-Content $stagedManifest -Raw | ConvertFrom-Json).Version
 Write-Host "      plugin package OK - version $newVersion" -ForegroundColor Green
 
