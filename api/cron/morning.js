@@ -3,7 +3,7 @@
 // is set; manual trigger: GET ?run=1 (plus &key= if HABIT_KEY is set).
 import { isConfigured } from '../../lib/store.js';
 import { zaiKey } from '../../lib/ai.js';
-import { morningPass, rosterPass } from '../../lib/coach.js';
+import { morningPass, rosterPass, coachPagePass } from '../../lib/coach.js';
 
 export function authorized(req) {
   const cronSecret = process.env.CRON_SECRET;
@@ -29,12 +29,14 @@ export default async function handler(req, res) {
       return;
     }
     const doc = await morningPass();
-    // The roster review is advisory and queues proposals for the human — it
-    // must never be able to fail the pass that sets the day's keys.
+    // The roster review and the coach-page refresh are advisory — neither may
+    // fail the pass that sets the day's front keys, so both are caught.
     const roster = await rosterPass().catch(() => null);
+    const coachPage = await coachPagePass().catch(() => null);
     res.status(200).json({
       ...(doc || { error: 'no usable suggestions' }),
-      rosterProposals: roster ? roster.proposals.length : 0
+      rosterProposals: roster ? roster.proposals.length : 0,
+      coachPageKeys: coachPage ? coachPage.slots.filter(Boolean).length : 0
     });
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });

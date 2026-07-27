@@ -51,3 +51,13 @@ test('roster prompt wants proposals[] and mentions the pending cap', () => {
   assert.match(p, /ONLY JSON/i);
   assert.ok(p.includes('3'), 'references MAX_PENDING (3)');
 });
+
+test('coach-page prompt wants slots[], caps at 12, and stays off the front/fixed keys', () => {
+  const p = PROMPTS.coachPage({ ...baseCtx, currentFrontSlots: 'Flow, Bedtime', currentCoachPage: 'none' });
+  assert.match(p, /"slots"/);
+  assert.match(p, /ONLY JSON/i);
+  assert.match(p, /12/, 'states the 12-key cap');
+  assert.match(p, /front slots/i);
+  assert.match(p, /fixed habit/i);
+  assert.ok(p.includes(JSON.stringify({ ...baseCtx, currentFrontSlots: 'Flow, Bedtime', currentCoachPage: 'none' })), 'context JSON is appended');
+});
