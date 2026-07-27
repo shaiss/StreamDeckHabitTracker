@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { sanitizeProposals, applyDecision, restoreFromArchive, normalizeRoster } from '../../lib/roster.js';
 
+// fileURLToPath, not .pathname: on Windows the latter yields "/C:/..." and
+// every existsSync below silently 404s.
 const ROOT = fileURLToPath(new URL('../../public', import.meta.url));
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.gif': 'image/gif', '.png': 'image/png' };
 
