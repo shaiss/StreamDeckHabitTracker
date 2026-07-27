@@ -33,7 +33,7 @@ const SLOT_A = { habit: 'Flow', emoji: '🌊', label: 'Flow', reason: 'deep work
 const SLOT_B = { habit: 'Walk', emoji: '🚶', label: 'Walk', reason: 'afternoon', assignedAt: 2 };
 
 let http, httpPort;
-let slots, pollUrls, logUrls, hangPolls;
+let slots, today, pollUrls, logUrls, hangPolls;
 const hung = [];
 
 before(async () => {
@@ -43,7 +43,7 @@ before(async () => {
       pollUrls.push(req.url);
       if (hangPolls > 0) { hangPolls--; hung.push(res); return; }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ configured: true, habits: HABITS, suggestedAt: 1, slots }));
+      res.end(JSON.stringify({ configured: true, habits: HABITS, suggestedAt: 1, slots, ...(today ? { today } : {}) }));
       return;
     }
     if (url === '/api/log') {
@@ -76,6 +76,7 @@ async function until(pred, { timeout = 15_000, label = 'condition' } = {}) {
 // Boot one plugin process against a fresh mock Stream Deck app.
 async function boot({ entry = SRC } = {}) {
   slots = [SLOT_A, null, null, null];
+  today = null;
   pollUrls = [];
   logUrls = [];
   hangPolls = 0;
@@ -127,7 +128,15 @@ async function boot({ entry = SRC } = {}) {
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { out += d; });
 
-  await Promise.race([ready, sleep(10_000).then(() => { throw new Error('no registerPlugin. output:\n' + out); })]);
+  // A failed boot must not leak the child or the wss — live handles keep the
+  // test-file process alive and hang the whole runner after the ✖.
+  try {
+    await Promise.race([ready, sleep(10_000).then(() => { throw new Error('no registerPlugin. output:\n' + out); })]);
+  } catch (err) {
+    try { child.kill(); } catch { /* gone */ }
+    wss.close();
+    throw err;
+  }
 
   const emit = (ev) => sock.send(JSON.stringify(ev));
   const appear = (context, actionUuid, settings) => emit({
@@ -176,6 +185,7 @@ test('the poll identifies itself so the backend can report live hardware', async
     for (const u of pollUrls) {
       assert.match(u, /[?&]deck=\d+\.\d+\.\d+/, 'every poll carries ?deck=<version>');
       assert.match(u, /[?&]keys=\d+\b/, 'every poll reports live key count');
+      assert.match(u, /[?&]tz=-?\d+\b/, 'every poll carries the host timezone for day bucketing (#32)');
     }
     await until(() => pollUrls.some((u) => /[?&]keys=2\b/.test(u)), { label: 'a poll reporting 2 keys' });
   } finally { p.done(); }
@@ -209,6 +219,32 @@ test('a hung poll cannot wedge the sync — the guard expires and it retries', a
     await until(() => pollUrls.length > before + 1, { label: 'a retry after expiry', timeout: 20_000 });
     await until(() => p.images().length > 0 && svgOf(p.images().at(-1)).includes('>Walk<'),
       { label: 'the swap to repaint' });
+  } finally { p.done(); }
+});
+
+test('living key faces: today state paints habit keys and repaints on change (#32)', async () => {
+  const p = await boot();
+  try {
+    // First paint has no today map — a plain habit face, no ring arc.
+    await until(() => p.images().some((m) => svgOf(m).includes('>Pee<')), { label: 'initial habit face' });
+    assert.ok(!p.images().map(svgOf).some((f) => f.includes('>Pee<') && f.includes('stroke-dasharray')),
+      'no today state, no ring arc');
+    // The server starts reporting progress — the key grows a ring + dots on
+    // its own poll beat, no tap needed.
+    today = { Pee: { count: 1, goal: 3, doneToday: false, streak: 2, ringFill: 1 / 3 } };
+    await until(() => p.images().some((m) => {
+      const f = svgOf(m);
+      return f.includes('>Pee<') && f.includes('stroke-dasharray');
+    }), { label: 'ring arc after today arrives' });
+    const ringed = p.images().map(svgOf).filter((f) => f.includes('>Pee<') && f.includes('stroke-dasharray')).at(-1);
+    assert.equal((ringed.match(/r="2\.6"/g) || []).length, 3, 'goal of 3 renders 3 count dots');
+    assert.ok(!ringed.includes('>✓<'), 'not done yet — no check');
+    // Goal met → dim + ✓, again purely from the poll.
+    today = { Pee: { count: 3, goal: 3, doneToday: true, streak: 3, ringFill: 1 } };
+    await until(() => p.images().some((m) => {
+      const f = svgOf(m);
+      return f.includes('>Pee<') && f.includes('>✓<');
+    }), { label: 'done repaint with the check' });
   } finally { p.done(); }
 });
 

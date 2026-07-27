@@ -42,3 +42,45 @@ test('hueFor is the shared tools/lib-hue.mjs formula', async () => {
   const lib = await import('../../tools/lib-hue.mjs');
   for (const n of ['Pee', 'Eat', 'Flow', 'Walk']) assert.equal(hueFor(n), lib.hueFor(n));
 });
+
+// Living key faces (#32): habit keys carry a 6th `state` argument
+// {count, goal, doneToday, streak, ringFill}; slot/nudge keys pass none and
+// must render byte-identically to the stateless face.
+
+const state = (over = {}) =>
+  ({ count: 0, goal: 1, doneToday: false, streak: 0, ringFill: 0, ...over });
+
+test('living faces: streak ring track always draws, arc sweeps with ringFill', () => {
+  const third = decode(face('🚽', 'Pee', 20, '', 72, state({ count: 1, goal: 3, ringFill: 1 / 3 })));
+  assert.ok(third.includes('stroke-dasharray'), 'partial fill draws the arc');
+  assert.ok(third.includes('stroke-linecap="round"'), 'arc ends are rounded');
+  const empty = decode(face('🚽', 'Pee', 20, '', 72, state()));
+  assert.ok(!empty.includes('stroke-dasharray'), 'zero fill draws no arc');
+  assert.ok(empty.includes('stroke-opacity="0.18"'), 'the faint track ring still shows');
+  const stateless = decode(face('🚽', 'Pee', 20, ''));
+  assert.ok(!stateless.includes('stroke-dasharray'), 'no state, no ring arc');
+  assert.ok(!stateless.includes('stroke-opacity="0.18"'), 'no state, no ring track');
+});
+
+test('living faces: dim-when-done mutes the halo and shows a check', () => {
+  const halo = (s) => s.match(/<radialGradient[\s\S]*?<\/radialGradient>/)[0];
+  const done = decode(face('🚽', 'Pee', 20, '', 72, state({ count: 1, doneToday: true, ringFill: 1 })));
+  const notYet = decode(face('🚽', 'Pee', 20, '', 72, state({ count: 0 })));
+  assert.ok(done.includes('>✓<'), 'done face carries the ✓');
+  assert.ok(!notYet.includes('>✓<'), 'undone face has no ✓');
+  assert.notEqual(halo(done), halo(notYet), 'done halo is dimmed (lower saturation)');
+});
+
+test('living faces: count dots fill with the day tally', () => {
+  const svg = decode(face('🍽', 'Eat', 90, '', 72, state({ count: 2, goal: 3, ringFill: 2 / 3 })));
+  assert.equal((svg.match(/r="2\.6"/g) || []).length, 3, 'one dot per goal unit');
+  assert.equal((svg.match(/fill-opacity="0\.95"/g) || []).length, 2, 'two dots read filled');
+  const single = decode(face('🍽', 'Eat', 90, '', 72, state({ count: 1, goal: 1, doneToday: true, ringFill: 1 })));
+  assert.ok(!single.includes('r="2.6"'), 'goal of 1 draws no dots');
+});
+
+test('living faces: a goal above 8 renders the count as a number, not dots', () => {
+  const svg = decode(face('💧', 'Water', 200, '', 72, state({ count: 4, goal: 10, ringFill: 0.4 })));
+  assert.ok(!svg.includes('r="2.6"'), 'no dot clutter above 8');
+  assert.ok(svg.includes('>4<'), 'the tally shows as a number');
+});

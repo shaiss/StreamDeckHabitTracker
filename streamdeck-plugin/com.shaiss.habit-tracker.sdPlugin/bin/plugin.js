@@ -17286,7 +17286,9 @@ function hslToHex(h, s, l) {
   const to = (v) => Math.round(v * 255).toString(16).padStart(2, "0");
   return "#" + to(f(0)) + to(f(8)) + to(f(4));
 }
-function face(emoji3, label, hue, badge, sat = 72) {
+function face(emoji3, label, hue, badge, sat = 72, state = null) {
+  const done = !!(state && state.doneToday);
+  if (done) sat = Math.round(sat * 0.55);
   const S = 144;
   const raw = String(label);
   const lbl = esc2(raw.slice(0, 12));
@@ -17295,7 +17297,32 @@ function face(emoji3, label, hue, badge, sat = 72) {
   const haloLo = hslToHex(hue, sat, 45);
   const ring = hslToHex(hue, sat, 65);
   const badgeFill = hslToHex(hue, 80, 80);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="${haloHi}" stop-opacity="0.62"/><stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/><stop offset="1" stop-color="${haloLo}" stop-opacity="0"/></radialGradient></defs><rect width="${S}" height="${S}" fill="url(#b)"/><rect width="${S}" height="${S}" fill="url(#h)"/><rect x="6" y="6" width="${S - 12}" height="${S - 12}" rx="17" fill="none" stroke="${ring}" stroke-opacity="0.30" stroke-width="1.5"/><text x="${S / 2}" y="76" text-anchor="middle" font-size="62" font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc2(emoji3)}</text><text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#000000" fill-opacity="0.55">${lbl}</text><text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#e9edf4">${lbl}</text>` + (badge ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="11" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.9">${esc2(badge)}</text>` : "") + `</svg>`;
+  let streakRing = "";
+  if (state && typeof state.ringFill === "number") {
+    const R = S / 2 - 7;
+    streakRing = `<circle cx="${S / 2}" cy="${S / 2}" r="${R}" fill="none" stroke="${hslToHex(hue, sat, 55)}" stroke-opacity="0.18" stroke-width="3"/>`;
+    if (state.ringFill > 0) {
+      const C = 2 * Math.PI * R;
+      const sweep = (C * Math.min(1, state.ringFill)).toFixed(2);
+      streakRing += `<circle cx="${S / 2}" cy="${S / 2}" r="${R}" fill="none" stroke="${hslToHex(hue, 85, 72)}" stroke-opacity="0.95" stroke-width="3" stroke-linecap="round" stroke-dasharray="${sweep} ${C.toFixed(2)}" transform="rotate(-90 ${S / 2} ${S / 2})"/>`;
+    }
+  }
+  let tally = "";
+  if (state && state.goal > 1 && typeof state.count === "number") {
+    if (state.goal > 8) {
+      tally = `<text x="${S - 10}" y="${S - 10}" text-anchor="end" font-size="12" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.95">${state.count}</text>`;
+    } else {
+      const dots = state.goal, filled = Math.min(state.count, dots);
+      const gap = 9, x0 = (S - (dots - 1) * gap) / 2, y = S - 14;
+      const on = hslToHex(hue, 85, 72), off = hslToHex(hue, sat, 45);
+      for (let i = 0; i < dots; i++) {
+        tally += `<circle cx="${x0 + i * gap}" cy="${y}" r="2.6" fill="${i < filled ? on : off}" fill-opacity="${i < filled ? "0.95" : "0.3"}"/>`;
+      }
+    }
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="${haloHi}" stop-opacity="0.62"/><stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/><stop offset="1" stop-color="${haloLo}" stop-opacity="0"/></radialGradient></defs><rect width="${S}" height="${S}" fill="url(#b)"/><rect width="${S}" height="${S}" fill="url(#h)"/><rect x="6" y="6" width="${S - 12}" height="${S - 12}" rx="17" fill="none" stroke="${ring}" stroke-opacity="0.30" stroke-width="1.5"/>` + streakRing + `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc2(emoji3)}</text><text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#000000" fill-opacity="0.55">${lbl}</text><text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#e9edf4">${lbl}</text>` + tally + // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
+  // the only corner mark a habit face ever shows.
+  (done ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="12" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.95">\u2713</text>` : badge ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="11" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.9">${esc2(badge)}</text>` : "") + `</svg>`;
   return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
 }
 
@@ -17352,7 +17379,7 @@ var RECHECK_MS = (process.env.HT_RECHECK_MS || "2000,5000,9000,15000,25000").spl
 var VIOLET_HUE = 262;
 var NUDGE_HUE = 38;
 var SILVER_HUE = 222;
-var VERSION = "2.0.0";
+var VERSION = "2.1.0";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -17360,6 +17387,7 @@ try {
 var keys = /* @__PURE__ */ new Map();
 var slotCache = null;
 var habitCache = null;
+var todayCache = null;
 var sched = createScheduler({ pollMs: POLL_MS, timeoutMs: POLL_TIMEOUT_MS, recheckMs: RECHECK_MS });
 var inflightCtrl = null;
 var clock = null;
@@ -17397,21 +17425,24 @@ function refreshSlots(now) {
   }
   if (!base) return;
   const seq = sched.pollStarted(now);
-  const url2 = base.replace(/\/+$/, "") + "/api/slots?deck=" + encodeURIComponent(VERSION) + "&keys=" + keys.size + (secret ? "&key=" + encodeURIComponent(secret) : "");
+  const url2 = base.replace(/\/+$/, "") + "/api/slots?deck=" + encodeURIComponent(VERSION) + "&keys=" + keys.size + "&tz=" + (/* @__PURE__ */ new Date()).getTimezoneOffset() + (secret ? "&key=" + encodeURIComponent(secret) : "");
   inflightCtrl = new AbortController();
   fetch(url2, { signal: inflightCtrl.signal }).then((r) => r.json()).then((j) => {
     if (!sched.pollSettled(seq)) return;
     inflightCtrl = null;
     const slots = j.slots || [];
     const habits = j.habits || [];
+    const today = j.today || {};
     const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots);
     const habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(habits);
+    const todayChanged = !todayCache || JSON.stringify(todayCache) !== JSON.stringify(today);
     slotCache = slots;
     habitCache = habits;
+    todayCache = today;
     for (const k of keys.values()) {
       try {
         if (slotsChanged && k.kind === "slot") render(k);
-        if (habitsChanged && k.kind === "habit") render(k);
+        if (k.kind === "habit" && (habitsChanged || todayChanged)) render(k);
       } catch {
       }
     }
@@ -17428,8 +17459,10 @@ function render(k) {
   if (k.kind === "habit") {
     const idx = +s.index || 0;
     const def2 = habitCache ? habitCache[idx] : null;
-    if (def2) k.action.setImage(face(def2.emoji || "\u2022", def2.label || def2.habit, hueFor(def2.name), ""));
-    else if (habitCache) k.action.setImage(face("\xB7", "empty", SILVER_HUE, "", 22));
+    if (def2) {
+      const st = todayCache && todayCache[def2.name] || null;
+      k.action.setImage(face(def2.emoji || "\u2022", def2.label || def2.habit, hueFor(def2.name), "", void 0, st));
+    } else if (habitCache) k.action.setImage(face("\xB7", "empty", SILVER_HUE, "", 22));
     else k.action.setImage(face("\u23F3", "\u2026", SILVER_HUE, "", 22));
     return;
   }

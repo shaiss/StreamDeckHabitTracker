@@ -36,12 +36,13 @@ const SILVER_HUE = 222;   // neutral / pending
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.0.0';
+let VERSION = '2.1.0';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 const keys = new Map();   // action instance id -> { kind: 'habit'|'slot', settings, action }
 let slotCache = null;     // latest slots array from the server
 let habitCache = null;    // latest habit list from the server (live-editable)
+let todayCache = null;    // { habitName: {count, goal, doneToday, streak, ringFill} } (#32)
 
 const sched = createScheduler({ pollMs: POLL_MS, timeoutMs: POLL_TIMEOUT_MS, recheckMs: RECHECK_MS });
 let inflightCtrl = null;
@@ -84,9 +85,12 @@ function refreshSlots(now) {
   // ?deck= marks this as the hardware plugin's poll (not the dashboard's), so
   // the server records a heartbeat and /api/health can say whether a physical
   // deck is live. ?key= rides along because that heartbeat is a write, gated
-  // by HABIT_KEY when it's set.
+  // by HABIT_KEY when it's set. ?tz= is this machine's UTC offset — the deck
+  // sits next to its human, so the host timezone IS the right day boundary
+  // for the `today` map (#32).
   const url = base.replace(/\/+$/, '') + '/api/slots?deck=' + encodeURIComponent(VERSION) +
-    '&keys=' + keys.size + (secret ? '&key=' + encodeURIComponent(secret) : '');
+    '&keys=' + keys.size + '&tz=' + new Date().getTimezoneOffset() +
+    (secret ? '&key=' + encodeURIComponent(secret) : '');
   inflightCtrl = new AbortController();
   fetch(url, { signal: inflightCtrl.signal })
     .then((r) => r.json())
@@ -95,15 +99,18 @@ function refreshSlots(now) {
       inflightCtrl = null;
       const slots = j.slots || [];
       const habits = j.habits || [];
+      const today = j.today || {};
       const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots);
       const habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(habits);
+      const todayChanged = !todayCache || JSON.stringify(todayCache) !== JSON.stringify(today);
       slotCache = slots;
       habitCache = habits;
+      todayCache = today;
       for (const k of keys.values()) {
         // One bad face must not strand the rest of the deck on stale images.
         try {
           if (slotsChanged && k.kind === 'slot') render(k);
-          if (habitsChanged && k.kind === 'habit') render(k);
+          if (k.kind === 'habit' && (habitsChanged || todayChanged)) render(k);
         } catch { /* next poll retries this key */ }
       }
     })
@@ -118,7 +125,11 @@ function render(k) {
   if (k.kind === 'habit') {
     const idx = +s.index || 0;
     const def = habitCache ? habitCache[idx] : null;
-    if (def) k.action.setImage(face(def.emoji || '•', def.label || def.habit, hueFor(def.name), ''));
+    if (def) {
+      // Living key faces (#32): ring/dim/dots from the server's today map.
+      const st = (todayCache && todayCache[def.name]) || null;
+      k.action.setImage(face(def.emoji || '•', def.label || def.habit, hueFor(def.name), '', undefined, st));
+    }
     else if (habitCache) k.action.setImage(face('·', 'empty', SILVER_HUE, '', 22));  // removed in manager
     else k.action.setImage(face('⏳', '…', SILVER_HUE, '', 22));                     // first poll pending
     return;
