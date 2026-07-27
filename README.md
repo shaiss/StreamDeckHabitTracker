@@ -179,10 +179,13 @@ you can see *why* a key is on your deck and whether that instinct has been payin
 
 ### Where the data lives
 
-Three Redis keys carry the whole product: `habits:log` (an append-only list of taps),
+Three Redis keys are the heart of the product: `habits:log` (an append-only list of taps),
 `habits:slots` (the current four front assignments), and `habits:coach:page` (the wider
-Coach-page array). Everything else — the dashboard, the streaks, the scorer, the datasets —
-is derived. Days are grouped in *your* timezone, not the server's.
+Coach-page array). The dashboard, the streaks, the scorer, and the datasets are all derived
+from those. A handful of auxiliary keys persist the rest — the coach's hypothesis memory,
+your profile and navigation consent, nudge state, the deck heartbeat, and the daily
+`habits:takeover:<day>` claim; [CLAUDE.md](CLAUDE.md) is the authoritative map. Days are
+grouped in *your* timezone, not the server's.
 
 ## Deploy your own
 
