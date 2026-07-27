@@ -6,11 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Stream Deck habit tracker with an AI coach. Physical Stream Deck keys hit
 `/api/log` on a Vercel-hosted backend; taps land in Redis and appear on a live
-dashboard. Beyond 5 fixed habits, up to 4 **AI slot keys** are controlled by an
-LLM (z.ai GLM): it assigns habits it wants tracked, reacts to taps in near real
-time (e.g. Eat → food-feedback keys), and a custom Stream Deck plugin repaints
-the physical key faces to match. The slot keys are the AI's interface to its
-human — treat prompt/UX changes with that framing.
+dashboard. Beyond the fixed habits, **AI slot keys** are controlled by an
+LLM (z.ai GLM): 4 front-page slots plus up to 12 more on the Coach page of the
+bundled two-page profile (#52). It assigns habits it wants tracked, reacts to
+taps in near real time (e.g. Eat → food-feedback keys), and a custom Stream
+Deck plugin repaints the physical key faces to match. The slot keys are the
+AI's interface to its human — treat prompt/UX changes with that framing.
 
 Production: https://stream-deck-habit-tracker.vercel.app (project
 `stream-deck-habit-tracker` in the `shaiss-projects` Vercel team, git-connected
@@ -67,12 +68,15 @@ ships with a regression test. After merging, also probe the live deployment:
 - `GET /api/health` — storage + AI wiring (env var names only; never values),
   plus `deck` — when a *physical* Stream Deck last polled (`null` = the plugin
   has never connected). First thing to check when hardware keys look stale.
-- `GET /api/slots` — current AI slot assignments
+- `GET /api/slots` — current AI slot assignments, plus `coachPage` (the wider
+  Coach-page array, #52) and `coachNav` (navigation consent, #54)
 - `GET /api/log?habit=Test` — writes a real row (`?slot=N` for slot keys)
 - `GET /api/suggest?run=1` (or POST) — full AI refresh; 30s cooldown
 - `GET /api/nudge` — proactive-nudge state + gate evaluation (`?run=1` forces
   a nudge pass, bypassing the gates; 30s cooldown, may repaint a slot key —
-  the passive loop rides the plugin's /api/slots poll, no cron)
+  the passive loop rides the plugin's /api/slots poll, no cron). POST-only
+  `?suppress=1` (24h takeover kill switch) and `?takeover=1` (atomic once-a-day
+  budget claim via SET NX) back the coach-navigation guardrails (#54)
 - `GET /api/roster` — pending roster proposals + retirement archive
   (`?run=1` forces a coach roster pass; 30s cooldown)
 - `GET /api/experiment?run=1&models=a,b&n=3` — replay captured coach contexts
@@ -85,9 +89,12 @@ Vercel MCP `web_fetch_vercel_url` tool to probe the live site.
 ## Architecture
 
 **Backend** (`api/*.js`, plain Vercel Node functions, ESM):
-- `lib/store.js` — Redis-over-REST (Upstash/KV env vars auto-detected). Two
-  keys: `habits:log` (RPUSH list of `{h,t,note,e?,slot?}`) and `habits:slots`
-  (`{slots:[def|null x4], suggestedAt, reactedAt, model}`).
+- `lib/store.js` — Redis-over-REST (Upstash/KV env vars auto-detected). Core
+  keys: `habits:log` (RPUSH list of `{h,t,note,e?,slot?}`), `habits:slots`
+  (`{slots:[def|null x4], suggestedAt, reactedAt, model}` — the length-4 front
+  page is load-bearing, do not widen it), and `habits:coach:page`
+  (`[def|null x12]`, the Coach page behind slots 5..16, #52). The once-a-day
+  takeover budget is a `SET NX EX` on `habits:takeover:<day>` (#54).
 - `lib/ai.js` — z.ai OpenAI-compatible client used directly only by
   `/api/experiment` (byte-identical model-vs-model comparison). Model =
   `ZAI_MODEL` env or `glm-5.2`, with automatic fallback to `glm-4.7-flash` on
@@ -151,13 +158,27 @@ Source is `src/` (plain ESM, no TypeScript, no property inspector):
   page. The single-flight guard is a deadline (`POLL_TIMEOUT_MS`); an expired
   poll is aborted and retried immediately, and a sequence number orphans its
   late settle so it can't clear the retry's guard.
-- `src/plugin.mjs` — wires both into `@elgato/streamdeck` (2.x). Two actions,
-  both live: `…habit` ({base, index} — resolves the habit at that position
-  from `/api/slots`) and `…slot` ({base, slot}); faces render from one
-  `/api/slots` poll, taps resolve server-side (`?hkey=`/`?slot=`). Timing is
-  env-overridable (`HT_POLL_MS`, `HT_TICK_MS`, `HT_POLL_TIMEOUT_MS`,
-  `HT_RECHECK_MS`) so e2e runs in seconds; production defaults are 15s poll /
-  3s tick / 10s timeout / 2,5,9,15,25s rechecks.
+- `src/plugin.mjs` — wires it all into `@elgato/streamdeck` (2.x). Three
+  actions, all live: `…habit` ({base, index} — resolves the habit at that
+  position from `/api/slots`), `…slot` ({base, slot 1-16} — 1-4 render from
+  the front array, 5-16 from `coachPage`, #52), and `…coach` (#53 — attention
+  face, tap → `switchToProfile` to the Coach page of the bundled profile,
+  long-press → 24h takeover suppression). Faces render from one `/api/slots`
+  poll, taps resolve server-side (`?hkey=`/`?slot=`). Missing `settings.base`
+  falls back to the compiled-in production origin so hand-placed keys stay
+  alive (#55). Timing is env-overridable (`HT_POLL_MS`, `HT_TICK_MS`,
+  `HT_POLL_TIMEOUT_MS`, `HT_RECHECK_MS`) so e2e runs in seconds; production
+  defaults are 15s poll / 3s tick / 10s timeout / 2,5,9,15,25s rechecks.
+- `src/visibility.mjs` — pure page-visibility inference (#53): generated keys
+  carry `{page: N}`; the appeared-key set derives `visiblePage`/`anyVisible`.
+  A page-tagged key is the only proof our profile is the one on screen —
+  hand-placed keys in foreign profiles abstain, and navigation refuses.
+- Takeover (#54): `lib/takeover.js` is the pure gate (consent default-off,
+  live-nudge-only, quiet hours, 10min human-priority lock, ≤1/day budget,
+  kill switch; fail-closed on a broken clock). The plugin evaluates it on the
+  poll beat; the budget and kill switch are re-checked server-side at claim
+  time so a restarted plugin can't double-spend. Auto-restore after 90s or on
+  any tap.
 
 ⚠️ Hard-won SD 7.x facts, each verified on hardware:
 - **A profile-baked `States[].Image` silently vetoes plugin `setImage`** — the

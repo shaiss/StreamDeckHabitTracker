@@ -161,6 +161,15 @@ persist in Redis so they survive serverless cold starts.
 Reactive feedback keys **expire on their own** (default 2 h; the model can set `ttlMinutes`
 between 15 and 720), so a "was that meal any good?" key doesn't squat a slot all day.
 
+Beyond the four front slots, the bundled profile has a **Coach page** — up to 12 more slot
+keys (5–16) backed by a separate store, so the front page stays the answer to "what does the
+coach want *right now*". The coach also gets its own persistent **Coach key**: a live
+attention face (silent / asking / nudging) whose tap jumps to the Coach page. With consent
+set to *may-navigate* (off by default), an urgent nudge may flip the deck to its page — at
+most once a day, only when the Habit Tracker profile is already on screen, never within 10
+minutes of you touching the deck, auto-returning after 90 s or on any tap. Long-press the
+Coach key to silence takeovers for 24 hours without opening a browser.
+
 The [**Mind page**](https://stream-deck-habit-tracker.vercel.app/mind.html) exposes all of it:
 the coach's current notes, its live intuitions, its behavioral hit rate, and its latest
 reflection. Every suggestion carries the coach's stated reason and its own track record, so
@@ -170,9 +179,10 @@ you can see *why* a key is on your deck and whether that instinct has been payin
 
 ### Where the data lives
 
-Two Redis keys carry the whole product: `habits:log` (an append-only list of taps) and
-`habits:slots` (the current four assignments). Everything else — the dashboard, the streaks,
-the scorer, the datasets — is derived. Days are grouped in *your* timezone, not the server's.
+Three Redis keys carry the whole product: `habits:log` (an append-only list of taps),
+`habits:slots` (the current four front assignments), and `habits:coach:page` (the wider
+Coach-page array). Everything else — the dashboard, the streaks, the scorer, the datasets —
+is derived. Days are grouped in *your* timezone, not the server's.
 
 ## Deploy your own
 
@@ -236,15 +246,16 @@ complication, or anything else that can make a request.
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/log?habit=NAME[&note=…][&key=…]` | Log a tap. Returns plain text, so it's testable in a browser. |
-| `GET /api/log?slot=N` | Log whatever the coach currently has in slot *N* (1–4). |
-| `GET /api/slots[?tz=…][&track=1]` | Current assignments, today's per-habit progress, and optionally the behavioral scorecard. Read by the plugin and the dashboard. |
+| `GET /api/log?slot=N` | Log whatever the coach currently has in slot *N* — one integer namespace: 1–4 are the front-page keys, 5–16 the Coach page. |
+| `GET /api/slots[?tz=…][&track=1]` | Current assignments (front slots + the Coach-page array), navigation consent, today's per-habit progress, and optionally the behavioral scorecard. Read by the plugin and the dashboard. |
 | `GET /api/data` | Every tap, as JSON. Feeds the dashboard. |
 | `GET /api/habits` · `POST /api/habits` | The live habit list, plus the coach's inventions with their behavioral stats. |
 | `POST /api/suggest` (or `GET ?run=1`) | Full slot refresh. 30 s cooldown. |
 | `GET /api/nudge[?run=1]` | Nudge state and gate evaluation; `?run=1` forces a pass. |
+| `POST /api/nudge?suppress=1` · `?takeover=1` | The hardware kill switch (24 h of takeover silence) and the once-a-day takeover budget claim. POST-only. |
 | `GET /api/roster[?run=1]` · `POST /api/roster` | Pending roster proposals and the retirement archive; POST approves, dismisses, or restores. |
 | `GET /api/mind` | Everything the Mind page renders, in one call. |
-| `GET /api/profile[?set=1&…]` | Name, timezone, and the free-text "about you" the coach reads each pass. |
+| `GET /api/profile[?set=1&…]` | Name, timezone, the free-text "about you" the coach reads each pass, and the tri-state navigation consent (`coachNav`: off / nudge-only / may-navigate). |
 | `GET /api/health` | Storage + AI wiring, and when a *physical* deck last polled. Returns variable **names** only, never values — safe to leave public. |
 | `GET /api/experiment?run=1&models=a,b&n=3` | Replay captured coach contexts against several models and score them. |
 
@@ -267,13 +278,20 @@ Single static HTML files, no framework, no build step.
 ## The Stream Deck plugin
 
 `Habit Tracker AI` is a Node-runtime plugin (Stream Deck ≥ 7.1 spawns it under its bundled
-Node 24). It ships two actions:
+Node 24), and it ships with its own two-page profile (auto-installed — see Quick start). It
+has three actions:
 
 - **Habit Key** — resolves the habit at a given grid position from live server state, so
   edits in the habit manager repaint the key without a re-import.
-- **AI Slot Key** — renders whatever the coach has assigned to that slot right now.
+- **AI Slot Key** — renders whatever the coach has assigned to that slot right now
+  (slots 1–4 from the front page, 5–16 from the Coach page).
+- **Coach** — the coach's own key: a live attention face; tap to jump to the Coach page,
+  long-press to silence coach navigation for 24 hours.
 
-Both draw their faces from a single `/api/slots` poll and resolve taps server-side. Faces are
+All three draw their faces from a single `/api/slots` poll and resolve taps server-side.
+Generated keys carry a page tag, so the plugin knows which page of its profile is on screen —
+the fact that makes coach navigation refusable when you're in another profile. Keys dragged
+onto a profile by hand work too: they fall back to the production backend. Faces are
 rendered as SVG data URIs in the [Nocturne Ritual](design/PHILOSOPHY.md) style — one hue per
 habit, derived from its name and kept for life; violet is reserved for the machine mind.
 
