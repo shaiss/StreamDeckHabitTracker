@@ -179,6 +179,12 @@ const states = (imgName, title) => {
   return [state];
 };
 
+// Plugin-flavor keys carry NO baked image: Stream Deck treats a profile image
+// as a user customization and silently vetoes every plugin setImage — the key
+// would never repaint. The plugin paints live faces seconds after connecting;
+// until then the manifest's default action images cover the gap.
+const liveStates = () => [{ ShowTitle: false, TitleAlignment: 'middle', TitleColor: '#ffffff' }];
+
 // Habit keys.
 habits.forEach((h, i) => {
   place(
@@ -192,7 +198,7 @@ habits.forEach((h, i) => {
           Settings: { base: siteOrigin, index: i, ...(key ? { key } : {}) },
           Resources: null,
           State: 0,
-          States: states(h.name, `${h.emoji} ${h.label}`),
+          States: liveStates(),
           UUID: PLUGIN_HABIT
         }
       : {
@@ -233,7 +239,7 @@ for (let n = 1; n <= slotCount; n++) {
           Settings: { base: siteOrigin, slot: n, ...(key ? { key } : {}) },
           Resources: null,
           State: 0,
-          States: states(`Slot${n}`, `✨ AI ${n}`),
+          States: liveStates(),
           UUID: PLUGIN_SLOT
         }
       : {

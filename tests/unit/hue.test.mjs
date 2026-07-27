@@ -16,7 +16,11 @@ test('the five fixed habits stay well separated', () => {
 });
 
 test('plugin and virtual deck embed the identical FNV-1a formula (drift guard)', () => {
-  for (const f of ['streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/app.js', 'public/deck.html', 'tools/lib-hue.mjs']) {
+  // The Node plugin imports the shared module instead of embedding a copy —
+  // assert the import so a future rewrite can't silently fork the formula.
+  const faces = readFileSync(new URL('../../streamdeck-plugin/src/faces.mjs', import.meta.url), 'utf8');
+  assert.ok(faces.includes("from '../../tools/lib-hue.mjs'"), 'faces.mjs must import the shared hue formula');
+  for (const f of ['public/deck.html', 'tools/lib-hue.mjs']) {
     const src = readFileSync(new URL('../../' + f, import.meta.url), 'utf8');
     for (const marker of ['2166136261', '16777619', '% 320', '245']) {
       assert.ok(src.includes(marker), `${f} missing hue-formula marker ${marker}`);
