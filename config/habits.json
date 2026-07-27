@@ -32,6 +32,16 @@
       "emoji": "🌿",
       "label": "Cannabis",
       "name": "Cannabis"
+    },
+    {
+      "emoji": "✨",
+      "label": "Caffeine",
+      "name": "Caffeine"
+    },
+    {
+      "emoji": "🍳",
+      "label": "Cook",
+      "name": "Cook"
     }
   ]
 }
