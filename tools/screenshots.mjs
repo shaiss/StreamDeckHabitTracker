@@ -23,7 +23,18 @@ const MIME = {
   '.gif': 'image/gif', '.png': 'image/png', '.svg': 'image/svg+xml'
 };
 
-const HABITS = JSON.parse(readFileSync(join(REPO, 'config', 'habits.json'), 'utf8')).habits;
+// The demo habit list is defined HERE, not read from config/habits.json.
+// config/habits.json is a real person's habit list; screenshots go in a public
+// README, and those two facts should never be coupled. Editing your own habits
+// must never quietly republish them as documentation. Keep this list generic.
+const HABITS = [
+  { emoji: '🚽', label: 'Pee', name: 'Pee' },
+  { emoji: '💩', label: 'Poop', name: 'Poop' },
+  { emoji: '🍽', label: 'Eat', name: 'Eat' },
+  { emoji: '💧', label: 'Drink', name: 'Drink' },
+  { emoji: '🏃', label: 'Exercise', name: 'Exercise' },
+  { emoji: '💊', label: 'Meds', name: 'Meds' }
+];
 
 // A believable day: taps spread through today plus a few prior days so streaks
 // and progress rings have something to show.
