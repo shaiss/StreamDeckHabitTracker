@@ -140,6 +140,10 @@ The coach is a [Mastra](https://mastra.ai) agent backed by z.ai's GLM models. It
 points, and a two-tool memory loop (`recall_hypotheses` / `update_hypotheses`) whose bytes
 persist in Redis so they survive serverless cold starts.
 
+> 📘 **[How we use Mastra](docs/MASTRA.md)** — the agent wiring, why memory is tools over
+> Redis instead of Mastra's own memory, the `thinking: disabled` guardrail that GLM-5.x
+> requires, the trust boundary around model output, and how to add a seventh pass.
+
 | Pass | Trigger | What it does |
 |---|---|---|
 | **Reactive** | every tap, 45 s cooldown | Sees the tap in context; may repaint slots immediately |
@@ -296,7 +300,15 @@ tools/        icon, animation, profile, and plugin-package generators
 tests/        unit (zero-dep) + e2e (Chromium and a mock Stream Deck)
 config/       seed habit list for icon and profile generation
 design/       Nocturne Ritual design philosophy and key specimen
+docs/         deep dives (see below) + README screenshots
 ```
+
+**Deep dives**
+
+| Doc | What's in it |
+|---|---|
+| [How we use Mastra](docs/MASTRA.md) | Agent wiring, the memory-as-tools decision, the GLM `thinking: disabled` guardrail, the model-output trust boundary, datasets and experiments, how to add a pass |
+| [Nocturne Ritual](design/PHILOSOPHY.md) | The design philosophy every surface follows |
 
 ```bash
 # Tests. Unit tests are zero-dependency by design.
