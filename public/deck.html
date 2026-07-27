@@ -171,8 +171,10 @@
       habits.forEach((h, i) => {
         const el = keyEl({
           img: '/icons/animated/' + h.name + '.gif',
-          title: h.emoji + ' ' + h.label,
-          onTap: (e2) => tap(e2, '/api/log?hkey=' + (i + 1))
+          title: h.emoji + ' ' + h.label + ' — tap to log, hold to undo, double-tap for a big one',
+          onTap: (e2) => tap(e2, '/api/log?hkey=' + (i + 1)),
+          onDouble: (e2) => tap(e2, '/api/log?hkey=' + (i + 1) + '&intensity=high'),
+          onLong: (e2) => undo(e2, '/api/log?hkey=' + (i + 1))
         });
         el.dataset.habit = i;          // position index, for paintHabits()
         el.dataset.hname = h.name;     // identity for today-state lookup
@@ -192,7 +194,9 @@
       for (let n = 1; n <= 4; n++) {
         const el = keyEl({
           title: 'AI slot ' + n,
-          onTap: (e2) => tap(e2, '/api/log?slot=' + n)
+          onTap: (e2) => tap(e2, '/api/log?slot=' + n),
+          onDouble: (e2) => tap(e2, '/api/log?slot=' + n + '&intensity=high'),
+          onLong: (e2) => undo(e2, '/api/log?slot=' + n)
         });
         el.dataset.slot = n;
         face.appendChild(el);
@@ -208,12 +212,43 @@
       paintSlots();
     }
 
-    function keyEl({ img, title, onTap }) {
+    // Gesture parity with the physical deck (#33): tap logs, hold undoes,
+    // double-tap says "big one". Mirrors streamdeck-plugin/src/gestures.mjs —
+    // tests/unit/gestures.test.mjs guards these two copies against drifting.
+    const LONG_PRESS_MS = 500, DOUBLE_TAP_MS = 300;
+
+    function bindGestures(b, { onTap, onLong, onDouble }) {
+      let longTimer = null, pendingTimer = null, longFired = false;
+      const stop = (t) => { if (t) clearTimeout(t); return null; };
+      b.addEventListener('pointerdown', () => {
+        longFired = false;
+        longTimer = stop(longTimer);
+        if (!onLong) return;
+        longTimer = setTimeout(() => {
+          longTimer = null; longFired = true;
+          pendingTimer = stop(pendingTimer);   // a hold outranks a waiting tap
+          onLong(b);
+        }, LONG_PRESS_MS);
+      });
+      b.addEventListener('pointerup', () => {
+        longTimer = stop(longTimer);
+        if (longFired) { longFired = false; return; }   // the hold already acted
+        if (!onDouble) { onTap && onTap(b); return; }   // no window to wait out
+        if (pendingTimer) { pendingTimer = stop(pendingTimer); onDouble(b); return; }
+        pendingTimer = setTimeout(() => { pendingTimer = null; onTap && onTap(b); }, DOUBLE_TAP_MS);
+      });
+      b.addEventListener('pointercancel', () => { longTimer = stop(longTimer); longFired = false; });
+      // A touch long-press would otherwise raise the OS context menu on top of
+      // the undo we just performed.
+      b.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+
+    function keyEl({ img, title, onTap, onLong, onDouble }) {
       const b = document.createElement('button');
       b.className = 'k'; b.title = title || '';
       if (img) b.innerHTML = '<img src="' + img + '" alt="">';
       b.innerHTML += '<span class="glass"></span><span class="flash"></span>';
-      b.addEventListener('click', () => onTap && onTap(b));
+      bindGestures(b, { onTap, onLong, onDouble });
       return b;
     }
 
@@ -304,6 +339,22 @@
             refresh();               // immediate
             setTimeout(refresh, 9000); // catch the coach's reactive repaint
           }
+          return r.text();
+        })
+        .then((t) => { hint.innerHTML = '<b>' + esc(t) + '</b>'; })
+        .catch(() => flash(el, false));
+    }
+
+    // Long-press "oops": take back today's last log for this key. The 404 the
+    // server sends when there is nothing to remove flashes ⚠️ like any other
+    // failure — which is the honest answer.
+    function undo(el, url) {
+      el.classList.add('pressed');
+      setTimeout(() => el.classList.remove('pressed'), 120);
+      fetch(withKey(url), { method: 'DELETE' })
+        .then((r) => {
+          flash(el, r.ok);
+          if (r.ok) refresh();
           return r.text();
         })
         .then((t) => { hint.innerHTML = '<b>' + esc(t) + '</b>'; })

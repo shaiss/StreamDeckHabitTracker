@@ -46,16 +46,26 @@ const assets = [
   { file: 'slot_key.png', size: 144, emoji: '✨', hue: VIOLET, label: 'AI Slot' }
 ];
 
-mkdirSync(IMAGES, { recursive: true });
-const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
-for (const a of assets) {
-  const page = await browser.newPage({ viewport: { width: a.size, height: a.size }, deviceScaleFactor: 1 });
-  await page.setContent(tile(a.emoji, a.hue, a.size, a.label, a.sat ?? 72), { waitUntil: 'load' });
-  await page.screenshot({ path: join(IMAGES, a.file) });
-  await page.close();
-  console.log('  rendered images/' + a.file);
+// --no-images: bundle + repackage WITHOUT re-rendering the manifest art.
+// The committed baseline was rendered against Noto Color Emoji; a machine with
+// Segoe UI Emoji (any Windows box) produces visibly different tiles, so a
+// plugin-code change made there would silently rewrite the art as a side
+// effect. Rebuild images only where the baseline font lives.
+const renderImages = !process.argv.includes('--no-images');
+if (renderImages) {
+  mkdirSync(IMAGES, { recursive: true });
+  const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
+  for (const a of assets) {
+    const page = await browser.newPage({ viewport: { width: a.size, height: a.size }, deviceScaleFactor: 1 });
+    await page.setContent(tile(a.emoji, a.hue, a.size, a.label, a.sat ?? 72), { waitUntil: 'load' });
+    await page.screenshot({ path: join(IMAGES, a.file) });
+    await page.close();
+    console.log('  rendered images/' + a.file);
+  }
+  await browser.close();
+} else {
+  console.log('  skipped image render (--no-images)');
 }
-await browser.close();
 
 await bundlePlugin();
 console.log('  bundled bin/plugin.js');

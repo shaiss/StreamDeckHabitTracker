@@ -22,6 +22,7 @@
 import streamDeck, { SingletonAction, action } from '@elgato/streamdeck';
 import { face, hueFor } from './faces.mjs';
 import { createScheduler } from './scheduler.mjs';
+import { createGestures } from './gestures.mjs';
 
 const POLL_MS = +(process.env.HT_POLL_MS || 15000);
 const TICK_MS = +(process.env.HT_TICK_MS || 3000);
@@ -36,7 +37,7 @@ const SILVER_HUE = 222;   // neutral / pending
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.1.0';
+let VERSION = '2.2.0';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 const keys = new Map();   // action instance id -> { kind: 'habit'|'slot', settings, action }
@@ -45,8 +46,13 @@ let habitCache = null;    // latest habit list from the server (live-editable)
 let todayCache = null;    // { habitName: {count, goal, doneToday, streak, ringFill} } (#32)
 
 const sched = createScheduler({ pollMs: POLL_MS, timeoutMs: POLL_TIMEOUT_MS, recheckMs: RECHECK_MS });
+// Three gestures per key: tap logs, hold undoes, double-tap says "big one".
+// Timings are pinned in gestures.mjs and deliberately NOT env-overridable —
+// they are a shared contract with the nudge keys, not a tuning knob.
+const gest = createGestures();
 let inflightCtrl = null;
 let clock = null;
+let gestTimer = null;
 
 const log = streamDeck.logger.createScope('habit-tracker');
 
@@ -146,15 +152,20 @@ function render(k) {
   }
 }
 
-function tap(k) {
+// Which row on the server this key stands for. The key never names a habit —
+// ?hkey=/?slot= resolve at tap time so history records what the key showed.
+function logUrl(k, extra = '') {
   const s = k.settings;
-  if (!s.base) { k.action.showAlert(); return; }
   const q = k.kind === 'slot'
     ? 'slot=' + encodeURIComponent(s.slot || 1)
     : 'hkey=' + encodeURIComponent((+s.index || 0) + 1);
-  const url = s.base.replace(/\/+$/, '') + '/api/log?' + q +
+  return s.base.replace(/\/+$/, '') + '/api/log?' + q + extra +
     (s.key ? '&key=' + encodeURIComponent(s.key) : '');
-  fetch(url)
+}
+
+function tap(k, { intensity = '' } = {}) {
+  if (!k.settings.base) { k.action.showAlert(); return; }
+  fetch(logUrl(k, intensity ? '&intensity=' + encodeURIComponent(intensity) : ''))
     .then((r) => {
       if (r.ok) {
         k.action.showOk();
@@ -163,6 +174,46 @@ function tap(k) {
       } else { k.action.showAlert(); }
     })
     .catch(() => k.action.showAlert());
+}
+
+// Long-press: take back the last log for this key today. There is no
+// confirmation dialog on purpose — the hold IS the confirmation, and the ⚠️
+// flash when there was nothing to remove is the only "are you sure" a key can
+// honestly offer.
+function undo(k) {
+  if (!k.settings.base) { k.action.showAlert(); return; }
+  fetch(logUrl(k), { method: 'DELETE' })
+    .then((r) => {
+      if (r.ok) {
+        k.action.showOk();
+        sched.tapped(Date.now());   // the ring/streak face is now stale
+        pump();
+      } else { k.action.showAlert(); }
+    })
+    .catch(() => k.action.showAlert());
+}
+
+function dispatch({ id, gesture }) {
+  const k = keys.get(id);
+  if (!k) return;                                  // key vanished mid-gesture
+  if (gesture === 'longpress') undo(k);
+  else if (gesture === 'doubletap') tap(k, { intensity: 'high' });
+  else tap(k);
+}
+
+// One timer, armed for the single soonest gesture deadline — a 3s pump could
+// never resolve a 500ms hold, and a dedicated fast interval would burn CPU
+// whenever nobody is touching the deck.
+function armGestures() {
+  if (gestTimer) { clearTimeout(gestTimer); gestTimer = null; }
+  const at = gest.nextDeadline();
+  if (!at) return;
+  gestTimer = setTimeout(() => {
+    gestTimer = null;
+    for (const g of gest.tick(Date.now())) dispatch(g);
+    armGestures();                                 // a hold may still be held
+  }, Math.max(0, at - Date.now()));
+  if (gestTimer.unref) gestTimer.unref();          // never hold the process open
 }
 
 // Plain-JS equivalent of the @action decorator: apply it as a function so
@@ -175,6 +226,9 @@ function defineAction(uuid, kind) {
   }
   inst.onWillAppear = (ev) => {
     keys.set(ev.action.id, { kind, settings: (ev.payload && ev.payload.settings) || {}, action: ev.action });
+    // Habit and slot keys both log something undoable and quantifiable, so
+    // both answer to all three gestures.
+    gest.register(ev.action.id, { doubleTap: true });
     render(keys.get(ev.action.id));
     startClock();
     sched.forcePoll();   // a key just appeared — refresh on this pump
@@ -185,11 +239,21 @@ function defineAction(uuid, kind) {
     if (k) { k.settings = (ev.payload && ev.payload.settings) || {}; render(k); }
     pump();
   };
-  inst.onWillDisappear = (ev) => { keys.delete(ev.action.id); };
+  inst.onWillDisappear = (ev) => { keys.delete(ev.action.id); gest.forget(ev.action.id); };
+  // Both edges now matter: keyDown starts the hold clock, keyUp resolves the
+  // press. ⚠️ Behavior change from the tap-on-keyDown era — a plain tap on a
+  // double-tap key now lands DOUBLE_TAP_MS after release. That deferral is the
+  // price of clean double-tap detection, and it is why keys that don't need it
+  // (nudges) register without it.
   inst.onKeyDown = (ev) => {
-    const k = keys.get(ev.action.id);
-    if (k) tap(k); else ev.action.showAlert();
-    pump();
+    if (!keys.has(ev.action.id)) { ev.action.showAlert(); return; }
+    gest.down(ev.action.id, Date.now());
+    armGestures();
+  };
+  inst.onKeyUp = (ev) => {
+    if (!keys.has(ev.action.id)) return;
+    for (const g of gest.up(ev.action.id, Date.now())) dispatch(g);
+    armGestures();
   };
   return inst;
 }

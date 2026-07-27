@@ -2,16 +2,34 @@
 // GET/POST /api/log?slot=N                              -> logs whatever habit
 //   the AI currently has assigned to slot N (1-4); the habit name and emoji
 //   are captured at tap time so history stays truthful after a swap.
+// ...&intensity=high|low  -> tags how much of it there was ("big meal" vs
+//   "snack"). The deck's double-tap gesture sends high (issue #33).
+// DELETE /api/log?... (or ...&undo=1) -> removes today's most recent entry for
+//   that key. The long-press "oops" affordance: no dialog, no confirmation.
 // Returns plain text (handy when testing in a browser).
 import { waitUntil } from '@vercel/functions';
-import { append, getSlots, isConfigured } from '../lib/store.js';
+import { append, removeLast, getSlots, getProfile, isConfigured } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { getHabits } from '../lib/habits.js';
 import { reactTo } from '../lib/coach.js';
+import { tzHelpers } from '../lib/tz.js';
+
+// Only two levels, because only two are expressible on a key: a plain tap
+// means "normal" (no field at all) and a double-tap means "big". `low` exists
+// for the virtual deck and future gestures; anything else is dropped rather
+// than stored, so this field never becomes a free-text side channel.
+const INTENSITIES = new Set(['high', 'low']);
 
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Access-Control-Allow-Origin', '*');
+  // Undo is a DELETE, which is not a "simple" cross-origin request — without
+  // these an in-browser caller from another origin gets stopped at preflight.
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
   try {
     const q = req.query || {};
 
@@ -67,11 +85,28 @@ export default async function handler(req, res) {
       return;
     }
 
+    // Undo: drop today's most recent entry for this habit. "Today" is the
+    // human's local day (profile tz), the same boundary the dashboard groups
+    // by — undoing at 11 PM must not reach back into yesterday.
+    if (req.method === 'DELETE' || q.undo === '1') {
+      const tzh = tzHelpers((await getProfile().catch(() => null))?.tz);
+      const today = tzh.day(Date.now());
+      const removed = await removeLast((e) => e.h === habit && tzh.day(e.t) === today);
+      if (!removed) {
+        res.status(404).send('Nothing to undo: no ' + habit + ' logged today.');
+        return;
+      }
+      res.status(200).send('Removed: ' + habit);
+      return;
+    }
+
     const entry = { h: habit, t: Date.now(), note: (q.note || '').toString() };
     if (emoji) entry.e = emoji;
     if (slotField) entry.slot = slotField;
+    const intensity = (q.intensity || '').toString();
+    if (INTENSITIES.has(intensity)) entry.i = intensity;
     await append(entry);
-    res.status(200).send('Logged: ' + habit);
+    res.status(200).send('Logged: ' + habit + (entry.i ? ' (' + entry.i + ')' : ''));
 
     // The coach reacts to the tap in the background (after the response), so
     // the key's OK flash is instant while the AI decides whether to repaint

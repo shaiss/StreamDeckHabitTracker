@@ -33,7 +33,7 @@ const SLOT_A = { habit: 'Flow', emoji: '🌊', label: 'Flow', reason: 'deep work
 const SLOT_B = { habit: 'Walk', emoji: '🚶', label: 'Walk', reason: 'afternoon', assignedAt: 2 };
 
 let http, httpPort;
-let slots, today, pollUrls, logUrls, hangPolls;
+let slots, today, pollUrls, logUrls, hangPolls, logNotFound;
 const hung = [];
 
 before(async () => {
@@ -47,9 +47,10 @@ before(async () => {
       return;
     }
     if (url === '/api/log') {
-      logUrls.push(req.url);
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('ok');
+      // Method matters now: the long-press undo is a DELETE (#33).
+      logUrls.push(req.method + ' ' + req.url);
+      res.writeHead(logNotFound ? 404 : 200, { 'Content-Type': 'text/plain' });
+      res.end(logNotFound ? 'Nothing to undo' : 'ok');
       return;
     }
     res.writeHead(404); res.end();
@@ -80,6 +81,7 @@ async function boot({ entry = SRC } = {}) {
   pollUrls = [];
   logUrls = [];
   hangPolls = 0;
+  logNotFound = false;
 
   const wss = new WebSocketServer({ port: 0 });
   const wsPort = wss.address().port;
@@ -148,7 +150,18 @@ async function boot({ entry = SRC } = {}) {
 
   const images = () => sent.filter((m) => m.event === 'setImage');
   const done = () => { try { child.kill(); } catch { /* gone */ } wss.close(); };
-  return { child, emit, images, sent, done, output: () => out };
+  // Press edges. Real fingers send both; the plugin classifies from the gap
+  // between them (gestures.mjs), so tests drive that gap explicitly.
+  const edge = (event, context, actionUuid) => emit({
+    event, action: actionUuid, context, device: 'dev-1',
+    payload: { settings: {}, coordinates: { column: 0, row: 0 } }
+  });
+  const press = async (context, actionUuid, holdMs = 0) => {
+    edge('keyDown', context, actionUuid);
+    if (holdMs) await sleep(holdMs);
+    edge('keyUp', context, actionUuid);
+  };
+  return { child, emit, press, images, sent, done, output: () => out };
 }
 
 const svgOf = (m) => Buffer.from(m.payload.image.split(',')[1], 'base64').toString('utf8');
@@ -196,14 +209,53 @@ test('a tap logs server-side and rechecks catch the reactive swap', async () => 
   try {
     await until(() => p.images().length >= 2, { label: 'initial faces' });
     const polls = pollUrls.length;
-    p.emit({
-      event: 'keyDown', action: 'com.shaiss.habit-tracker.slot', context: 'ctx-slot-1', device: 'dev-1',
-      payload: { settings: {}, coordinates: { column: 0, row: 0 } }
-    });
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
     await until(() => logUrls.length === 1, { label: 'the tap to log' });
+    assert.match(logUrls[0], /^GET /, 'a plain tap is a GET');
     assert.match(logUrls[0], /[?&]slot=1\b/, 'slot taps resolve server-side');
+    assert.doesNotMatch(logUrls[0], /intensity=/, 'a plain tap carries no intensity');
     await until(() => pollUrls.length > polls + 1, { label: 'post-tap rechecks' });
     await until(() => p.sent.some((m) => m.event === 'showOk'), { label: 'tap acknowledged on the key' });
+  } finally { p.done(); }
+});
+
+// --- gestures (#33): three meanings per key, no extra keys and no typing ---
+
+test('a long press undoes instead of logging — one DELETE, no GET', async () => {
+  const p = await boot();
+  try {
+    await until(() => p.images().length >= 2, { label: 'initial faces' });
+    await p.press('ctx-habit-0', 'com.shaiss.habit-tracker.habit', 700);   // > LONG_PRESS_MS
+    await until(() => logUrls.length >= 1, { label: 'the undo request' });
+    assert.match(logUrls[0], /^DELETE /, 'a hold deletes rather than logs');
+    assert.match(logUrls[0], /[?&]hkey=1\b/, 'undo resolves the same key position');
+    await sleep(500);
+    assert.equal(logUrls.length, 1, 'the release after a hold must not also log a tap');
+  } finally { p.done(); }
+});
+
+test('a double tap logs once, with intensity=high', async () => {
+  const p = await boot();
+  try {
+    await until(() => p.images().length >= 2, { label: 'initial faces' });
+    await p.press('ctx-habit-0', 'com.shaiss.habit-tracker.habit');
+    await sleep(60);                                                       // < DOUBLE_TAP_MS
+    await p.press('ctx-habit-0', 'com.shaiss.habit-tracker.habit');
+    await until(() => logUrls.length >= 1, { label: 'the double tap to log' });
+    await sleep(500);                                                      // let any deferred tap fire
+    assert.equal(logUrls.length, 1, 'a double tap is ONE log, not two');
+    assert.match(logUrls[0], /[?&]intensity=high\b/, '"that one was a big one"');
+  } finally { p.done(); }
+});
+
+test('nothing to undo flashes an alert rather than an OK', async () => {
+  const p = await boot();
+  try {
+    await until(() => p.images().length >= 2, { label: 'initial faces' });
+    logNotFound = true;                                   // server: 404, nothing logged today
+    await p.press('ctx-habit-0', 'com.shaiss.habit-tracker.habit', 700);
+    await until(() => p.sent.some((m) => m.event === 'showAlert'), { label: 'the alert flash' });
+    assert.ok(!p.sent.some((m) => m.event === 'showOk'), 'and never a success flash');
   } finally { p.done(); }
 });
 

@@ -17371,6 +17371,83 @@ function createScheduler({ pollMs, timeoutMs, recheckMs }) {
   };
 }
 
+// streamdeck-plugin/src/gestures.mjs
+var LONG_PRESS_MS = 500;
+var DOUBLE_TAP_MS = 300;
+function createGestures({ longPressMs = LONG_PRESS_MS, doubleTapMs = DOUBLE_TAP_MS } = {}) {
+  const state = /* @__PURE__ */ new Map();
+  const st = (id) => {
+    let s = state.get(id);
+    if (!s) {
+      s = { doubleTap: false, downAt: 0, longFired: false, pendingAt: 0 };
+      state.set(id, s);
+    }
+    return s;
+  };
+  return {
+    // Keys declare which gestures they answer to. A key with NO double-tap
+    // handler gets its tap on release with no deferral — that snappiness is
+    // the whole reason this registration exists (nudge keys rely on it).
+    register(id, { doubleTap = false } = {}) {
+      st(id).doubleTap = doubleTap;
+    },
+    forget(id) {
+      state.delete(id);
+    },
+    down(id, now) {
+      const s = st(id);
+      s.downAt = now;
+      s.longFired = false;
+    },
+    // Release. Returns whatever this edge resolved — possibly nothing, when a
+    // hold already consumed the press or a double-tap window just opened.
+    up(id, now) {
+      const s = st(id);
+      s.downAt = 0;
+      if (s.longFired) {
+        s.longFired = false;
+        return [];
+      }
+      if (!s.doubleTap) return [{ id, gesture: "tap" }];
+      if (s.pendingAt) {
+        s.pendingAt = 0;
+        return [{ id, gesture: "doubletap" }];
+      }
+      s.pendingAt = now;
+      return [];
+    },
+    // Resolve every gesture deadline that has come due. A long-press fires
+    // WHILE the key is still held — the confirmation is the undo happening,
+    // not the finger lifting.
+    tick(now) {
+      const out = [];
+      for (const [id, s] of state) {
+        if (s.downAt && !s.longFired && now - s.downAt >= longPressMs) {
+          s.longFired = true;
+          out.push({ id, gesture: "longpress" });
+        }
+        if (s.pendingAt && now - s.pendingAt >= doubleTapMs) {
+          s.pendingAt = 0;
+          out.push({ id, gesture: "tap" });
+        }
+      }
+      return out;
+    },
+    // Earliest instant any key is waiting on, or 0 when nothing is pending.
+    nextDeadline() {
+      let at = 0;
+      const soonest = (t) => {
+        at = at ? Math.min(at, t) : t;
+      };
+      for (const s of state.values()) {
+        if (s.downAt && !s.longFired) soonest(s.downAt + longPressMs);
+        if (s.pendingAt) soonest(s.pendingAt + doubleTapMs);
+      }
+      return at;
+    }
+  };
+}
+
 // streamdeck-plugin/src/plugin.mjs
 var POLL_MS = +(process.env.HT_POLL_MS || 15e3);
 var TICK_MS = +(process.env.HT_TICK_MS || 3e3);
@@ -17379,7 +17456,7 @@ var RECHECK_MS = (process.env.HT_RECHECK_MS || "2000,5000,9000,15000,25000").spl
 var VIOLET_HUE = 262;
 var NUDGE_HUE = 38;
 var SILVER_HUE = 222;
-var VERSION = "2.1.0";
+var VERSION = "2.2.0";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -17389,8 +17466,10 @@ var slotCache = null;
 var habitCache = null;
 var todayCache = null;
 var sched = createScheduler({ pollMs: POLL_MS, timeoutMs: POLL_TIMEOUT_MS, recheckMs: RECHECK_MS });
+var gest = createGestures();
 var inflightCtrl = null;
 var clock = null;
+var gestTimer = null;
 var log = plugin_default.logger.createScope("habit-tracker");
 process.on("unhandledRejection", (err) => {
   try {
@@ -17476,15 +17555,17 @@ function render(k) {
     k.action.setImage(face("\u2728", "Slot " + n, SILVER_HUE, "AI", 22));
   }
 }
-function tap(k) {
+function logUrl(k, extra = "") {
   const s = k.settings;
-  if (!s.base) {
+  const q = k.kind === "slot" ? "slot=" + encodeURIComponent(s.slot || 1) : "hkey=" + encodeURIComponent((+s.index || 0) + 1);
+  return s.base.replace(/\/+$/, "") + "/api/log?" + q + extra + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+}
+function tap(k, { intensity = "" } = {}) {
+  if (!k.settings.base) {
     k.action.showAlert();
     return;
   }
-  const q = k.kind === "slot" ? "slot=" + encodeURIComponent(s.slot || 1) : "hkey=" + encodeURIComponent((+s.index || 0) + 1);
-  const url2 = s.base.replace(/\/+$/, "") + "/api/log?" + q + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
-  fetch(url2).then((r) => {
+  fetch(logUrl(k, intensity ? "&intensity=" + encodeURIComponent(intensity) : "")).then((r) => {
     if (r.ok) {
       k.action.showOk();
       sched.tapped(Date.now());
@@ -17493,6 +17574,42 @@ function tap(k) {
       k.action.showAlert();
     }
   }).catch(() => k.action.showAlert());
+}
+function undo(k) {
+  if (!k.settings.base) {
+    k.action.showAlert();
+    return;
+  }
+  fetch(logUrl(k), { method: "DELETE" }).then((r) => {
+    if (r.ok) {
+      k.action.showOk();
+      sched.tapped(Date.now());
+      pump();
+    } else {
+      k.action.showAlert();
+    }
+  }).catch(() => k.action.showAlert());
+}
+function dispatch({ id, gesture }) {
+  const k = keys.get(id);
+  if (!k) return;
+  if (gesture === "longpress") undo(k);
+  else if (gesture === "doubletap") tap(k, { intensity: "high" });
+  else tap(k);
+}
+function armGestures() {
+  if (gestTimer) {
+    clearTimeout(gestTimer);
+    gestTimer = null;
+  }
+  const at = gest.nextDeadline();
+  if (!at) return;
+  gestTimer = setTimeout(() => {
+    gestTimer = null;
+    for (const g of gest.tick(Date.now())) dispatch(g);
+    armGestures();
+  }, Math.max(0, at - Date.now()));
+  if (gestTimer.unref) gestTimer.unref();
 }
 function defineAction(uuid3, kind) {
   const wrapped = action({ UUID: uuid3 })(class extends SingletonAction {
@@ -17508,6 +17625,7 @@ function defineAction(uuid3, kind) {
   }
   inst.onWillAppear = (ev) => {
     keys.set(ev.action.id, { kind, settings: ev.payload && ev.payload.settings || {}, action: ev.action });
+    gest.register(ev.action.id, { doubleTap: true });
     render(keys.get(ev.action.id));
     startClock();
     sched.forcePoll();
@@ -17523,12 +17641,20 @@ function defineAction(uuid3, kind) {
   };
   inst.onWillDisappear = (ev) => {
     keys.delete(ev.action.id);
+    gest.forget(ev.action.id);
   };
   inst.onKeyDown = (ev) => {
-    const k = keys.get(ev.action.id);
-    if (k) tap(k);
-    else ev.action.showAlert();
-    pump();
+    if (!keys.has(ev.action.id)) {
+      ev.action.showAlert();
+      return;
+    }
+    gest.down(ev.action.id, Date.now());
+    armGestures();
+  };
+  inst.onKeyUp = (ev) => {
+    if (!keys.has(ev.action.id)) return;
+    for (const g of gest.up(ev.action.id, Date.now())) dispatch(g);
+    armGestures();
   };
   return inst;
 }
