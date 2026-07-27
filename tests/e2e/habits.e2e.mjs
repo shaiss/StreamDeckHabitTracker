@@ -9,10 +9,11 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { sanitizeProposals, applyDecision, restoreFromArchive, normalizeRoster } from '../../lib/roster.js';
 
-const ROOT = new URL('../../public', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../../public', import.meta.url));
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.gif': 'image/gif', '.png': 'image/png' };
 
 let server, browser, page, port;
@@ -168,27 +169,24 @@ test('approving a retire archives the key and Restore brings it back', async () 
 test('a per-habit daily goal round-trips through the manager (living key faces #32)', async () => {
   await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.hrow');
-  // Find the Pee row (robust to whichever position it landed in after prior tests).
-  const peeRow = await page.$$('.hrow').then((rows) => {
-    return Promise.all(rows.map((r) => r.$eval('.name', (el) => el.value).catch(() => ''))).then((vals) => {
-      const idx = vals.indexOf('Pee');
-      return idx >= 0 ? rows[idx] : rows[0];
-    });
-  });
-  await peeRow.$eval('.goal', (el) => { el.value = ''; });
-  await peeRow.type('.goal', '8');
+  // Fill the goal on the Pee row (robust to its position after prior tests
+  // mutate the shared list). Playwright's locator filter scopes to the row
+  // whose name input holds "Pee".
+  const peeGoal = page.locator('.hrow').filter({ has: page.locator('.name[value="Pee"]') }).locator('.goal');
+  await peeGoal.fill('8');
   await page.click('#saveBtn');
   await settled('Saved');
   // The POST must have carried goal:8 for that habit.
   const body = posted.at(-1);
-  const target = body.habits.find((h) => h.name === 'Pee') || body.habits[0];
+  const target = body.habits.find((h) => h.name === 'Pee');
+  assert.ok(target, 'Pee must be in the saved list');
   assert.equal(target.goal, 8, 'POST payload must include goal:8');
   // Reload and confirm the input re-hydrates from the persisted value.
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForSelector('.hrow');
-  const goals = await page.$$eval('.hrow', (rows, name) => {
-    const i = rows.findIndex((r) => r.querySelector('.name')?.value === name);
-    return i >= 0 ? rows[i].querySelector('.goal')?.value : undefined;
-  }, target.name);
-  assert.equal(goals, '8', 'goal input must rehydrate to 8 after reload');
+  const goalVal = await page.$$eval('.hrow', (rows) => {
+    const r = rows.find((rr) => rr.querySelector('.name')?.value === 'Pee');
+    return r?.querySelector('.goal')?.value;
+  });
+  assert.equal(goalVal, '8', 'goal input must rehydrate to 8 after reload');
 });

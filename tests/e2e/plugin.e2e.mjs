@@ -23,12 +23,13 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
-const PLUGIN = new URL(
+const PLUGIN = fileURLToPath(new URL(
   '../../streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin',
   import.meta.url
-).pathname;
+));
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.png': 'image/png' };
 
 const HABITS = [
