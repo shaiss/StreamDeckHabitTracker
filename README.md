@@ -4,7 +4,7 @@
 
 ### A Stream Deck that tracks your habits — and an AI coach that decides what to ask you next.
 
-Tap a physical key, and a timestamped row lands in the cloud. No always-on PC, no phone app,
+Tap a physical key, and a timestamped row lands in the cloud. No server to run, no phone app,
 no friction. Then the coach takes over the spare keys and starts asking better questions.
 
 [**Live app**](https://stream-deck-habit-tracker.vercel.app) ·
@@ -17,7 +17,9 @@ no friction. Then the coach takes over the spare keys and starts asking better q
 ![Node 22+](https://img.shields.io/badge/node-22%2B-5FA04E)
 ![Stream Deck 7.1+](https://img.shields.io/badge/Stream%20Deck-7.1%2B-111)
 
-<img src="design/specimen.png" alt="Habit Tracker key faces: five habit keys in their own hues, a Stats key, and four violet AI slot keys" width="820">
+<img src="docs/screenshots/virtual-deck.png" alt="The virtual deck: six habit keys each in their own hue, a Stats key, and four violet AI slot keys the coach has filled with Stretch, Focus, Sunlight, and a food-feedback key" width="860">
+
+<sub>The virtual deck — a browser twin of the 15-key hardware. The four violet keys are the coach's.</sub>
 
 </div>
 
@@ -31,8 +33,9 @@ one thumb-press away, always visible, and never asks you to context-switch.
 
 Habit Tracker turns that key into a logger. Each press sends a single web request to a
 serverless endpoint; the row lands in Redis and shows up on a live dashboard within seconds.
-Because the endpoint runs on Vercel rather than your desktop, logging works while your machine
-is asleep, rebooting, or three timezones away.
+Nothing runs on your desktop but the Stream Deck app itself — there's no companion service to
+install, no local database, and no sync daemon. Your history lives in the cloud, so the
+dashboard, the coach, and the virtual deck reach it from any device, anywhere.
 
 The other half is the coach. Beyond your fixed habits, up to four keys are **AI slots** — the
 coach reads your real tap history and decides what it wants tracked, then writes those habits
@@ -43,7 +46,7 @@ questions.
 
 | | |
 |---|---|
-| 🔌 **No always-on PC** | The key talks to Vercel, not to your computer. Sleep it, close the lid, log from anywhere. |
+| 🔌 **No server to run** | The backend is serverless and the store is hosted. Nothing to install beyond the Stream Deck app, no local database, no sync daemon. |
 | ✨ **AI slot keys** | An LLM picks up to 4 habits it wants tracked and assigns them to real keys, each with an emoji, label, and a stated reason. |
 | ⚡ **Reactive, not scheduled** | Every tap triggers a background coach pass (45 s cooldown). Tap 🍽 Eat and 👍/👎 food-feedback keys can appear seconds later. |
 | 🎛 **Living key faces** | The bundled Stream Deck plugin polls server state and repaints physical keys — progress rings, streaks, and new AI assignments, no re-import. |
@@ -54,6 +57,17 @@ questions.
 | 🔬 **Evaluated, not vibes** | Every coach pass is captured into a dataset; a replay endpoint scores model-vs-model on your real production contexts. |
 
 ## Quick start
+
+### What you need
+
+An Elgato Stream Deck (7.1+) and the host computer it plugs into. **The deck has no network
+hardware of its own** — it's a USB device, and the Stream Deck app on its host makes the HTTPS
+call, so that machine has to be awake and online for a physical tap to land. What you *don't*
+need is a machine you control staying up to serve anything: the backend is serverless, so the
+dashboard, the coach, and the virtual deck keep working from any device no matter what the
+deck's host is doing.
+
+No deck at all? The [virtual deck](#no-stream-deck) needs nothing but a browser.
 
 ### Have a Stream Deck? (Windows, one line)
 
@@ -140,7 +154,10 @@ between 15 and 720), so a "was that meal any good?" key doesn't squat a slot all
 
 The [**Mind page**](https://stream-deck-habit-tracker.vercel.app/mind.html) exposes all of it:
 the coach's current notes, its live intuitions, its behavioral hit rate, and its latest
-reflection.
+reflection. Every suggestion carries the coach's stated reason and its own track record, so
+you can see *why* a key is on your deck and whether that instinct has been paying off.
+
+<img src="docs/screenshots/coach-mind.png" alt="The Mind page: growth stats, the coach's core memories as glowing notes, its current intuitions with TRUSTED/FORMING confidence labels and landed ratios, and its last reflection" width="860">
 
 ### Where the data lives
 
@@ -235,6 +252,8 @@ Reads are open-CORS; writes honor `HABIT_KEY` when it's set.
 Edits on the Habits page go live everywhere, including physical key faces, within ~15 s.
 Single static HTML files, no framework, no build step.
 
+<img src="docs/screenshots/dashboard.png" alt="The dashboard: per-habit counts with today's deltas, a 7-day taps-per-day chart, the coach's note, its track record, the four current slot assignments with reasons, and the physical deck liveness line" width="860">
+
 ## The Stream Deck plugin
 
 `Habit Tracker AI` is a Node-runtime plugin (Stream Deck ≥ 7.1 spawns it under its bundled
@@ -303,7 +322,12 @@ node tools/make-animations.mjs   # looping GIFs    -> icons/animated/
 node tools/bundle-plugin.mjs     # src/            -> bin/plugin.js
 node tools/build-plugin.mjs      # full .streamDeckPlugin package
 node tools/generate.mjs "<base-url>" --plugin --static   # .streamDeckProfile
+node tools/screenshots.mjs        # README screenshots -> docs/screenshots/
 ```
+
+`tools/screenshots.mjs` renders the real pages from `public/` against a mock backend with demo
+data — the same harness the e2e suite uses — so the screenshots in this README track the UI
+instead of drifting from it.
 
 The generators read the **live** habit list from `/api/habits`, falling back loudly to
 `config/habits.json` when the deployment is unreachable.
@@ -333,6 +357,8 @@ The whole surface — key faces, dashboard, virtual deck — follows one design 
 [**Nocturne Ritual**](design/PHILOSOPHY.md). Luminous glyphs on deep night surfaces, one hue
 per habit derived from its name and kept for life, and violet reserved for the machine mind.
 Violet always means *the coach is speaking*.
+
+<img src="design/specimen.png" alt="Key specimen sheet: ten key faces, each habit in its own hue, the four AI slot keys in violet" width="860">
 
 ## License
 
