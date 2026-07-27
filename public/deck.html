@@ -103,6 +103,11 @@
         hsla(38,90%,45%,.20) 42%, transparent 68%),
       linear-gradient(180deg,#141827,#0a0c13);
       box-shadow: inset 0 0 0 calc(1px + var(--urg,0) * 2px) hsla(38,90%,65%,calc(.3 + var(--urg,0) * .5)); }
+    /* the coach ASKING: a linked yes/no pair, magenta so it is neither a
+       plain suggestion (violet) nor a nudge (amber) — #34 */
+    .qface { background:
+      radial-gradient(circle at 50% 36%, hsla(300,78%,58%,.66) 0%, hsla(300,78%,45%,.20) 42%, transparent 68%),
+      linear-gradient(180deg,#141827,#0a0c13); }
     .habitface { background:
       radial-gradient(circle at 50% 36%, hsla(var(--hue,222),72%,58%,.62) 0%, transparent 68%),
       linear-gradient(180deg,#141827,#0a0c13); }
@@ -204,9 +209,12 @@
           // Nudge-ness is decided by the server and can flip between polls, so
           // resolve it at press time, not when the key was built: a hold on a
           // nudge means "not today", on a suggestion it means undo (#35).
-          onLong: (e2) => (slots[n - 1] && slots[n - 1].nudge)
-            ? dismiss(e2, '/api/nudge?dismiss=1&slot=' + n)
-            : undo(e2, '/api/log?slot=' + n)
+          onLong: (e2) => {
+            const d = slots[n - 1];
+            if (d && d.qid) return dismiss(e2, '/api/question?dismiss=1&slot=' + n, 'Not answering that.');
+            if (d && d.nudge) return dismiss(e2, '/api/nudge?dismiss=1&slot=' + n, 'Dismissed — not today.');
+            return undo(e2, '/api/log?slot=' + n);
+          }
         });
         el.dataset.slot = n;
         face.appendChild(el);
@@ -273,8 +281,8 @@
 
     function slotFaceHtml(def, n) {
       if (def) {
-        const cls = def.nudge ? 'nudgeface' : 'slotface';
-        const badge = def.nudge ? '❗ ' + n : 'AI ' + n;
+        const cls = def.qid ? 'qface' : def.nudge ? 'nudgeface' : 'slotface';
+        const badge = def.qid ? '❓ ' + n : def.nudge ? '❗ ' + n : 'AI ' + n;
         const style = def.nudge ? ' style="--urg:' + urgencyOf(def).toFixed(3) + '"' : '';
         return '<span class="facecss ' + cls + '"' + style + '><span class="badge">' + badge + '</span>' +
           '<span class="em">' + def.emoji + '</span><span class="lb">' + esc(def.label || def.habit) + '</span></span>' +
@@ -337,7 +345,9 @@
         const n = +el.dataset.slot;
         const def = slots[n - 1];
         el.innerHTML = slotFaceHtml(def, n);
-        el.title = def ? (def.emoji + ' ' + def.label + ' — ' + (def.reason || '')) : ('AI slot ' + n + ' — empty');
+        el.title = def
+          ? (def.qid ? '❓ ' + def.question + '  → ' + def.label : def.emoji + ' ' + def.label + ' — ' + (def.reason || ''))
+          : ('AI slot ' + n + ' — empty');
       });
     }
 
@@ -383,14 +393,14 @@
 
     // Long-press on a nudge: "not today". Distinct from ignoring it — the
     // scorer records the two differently (#35).
-    function dismiss(el, url) {
+    function dismiss(el, url, msg) {
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
       fetch(withKey(url), { method: 'POST' })
         .then((r) => {
           flash(el, r.ok);
           if (r.ok) refresh();
-          hint.innerHTML = r.ok ? '<b>Dismissed — not today.</b>' : '<b>Nothing to dismiss.</b>';
+          hint.innerHTML = r.ok ? '<b>' + esc(msg) + '</b>' : '<b>Nothing to dismiss.</b>';
         })
         .catch(() => flash(el, false));
     }

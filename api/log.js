@@ -11,7 +11,7 @@ import { waitUntil } from '@vercel/functions';
 import { append, removeLast, getSlots, getProfile, isConfigured } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { getHabits } from '../lib/habits.js';
-import { reactTo } from '../lib/coach.js';
+import { reactTo, answerQuestion } from '../lib/coach.js';
 import { tzHelpers } from '../lib/tz.js';
 
 // Only two levels, because only two are expressible on a key: a plain tap
@@ -52,6 +52,7 @@ export default async function handler(req, res) {
     let habit = (q.habit || '').toString().trim();
     let emoji = '';
     let slotField;
+    let questionDef = null;   // set when this slot is one half of a 👍/👎 pair
 
     // ?hkey=N: positional habit key — resolve which habit currently lives at
     // that position (habit manager can change it any time), like AI slots.
@@ -76,6 +77,7 @@ export default async function handler(req, res) {
       habit = def.habit;
       emoji = def.emoji || '';
       slotField = slotNum;
+      questionDef = def.qid ? def : null;
     } else if (habit) {
       emoji = (await getHabits()).find((h) => h.name === habit)?.emoji || '';
     }
@@ -105,8 +107,20 @@ export default async function handler(req, res) {
     if (slotField) entry.slot = slotField;
     const intensity = (q.intensity || '').toString();
     if (INTENSITIES.has(intensity)) entry.i = intensity;
+    // Answering the coach's question (#34): the tap is still a real log row,
+    // but it also carries which question it answers and which way.
+    if (questionDef) {
+      entry.q = questionDef.qid;
+      entry.a = questionDef.answer;
+    }
     await append(entry);
     res.status(200).send('Logged: ' + habit + (entry.i ? ' (' + entry.i + ')' : ''));
+
+    // A question is spent once answered: record the verdict and retire BOTH
+    // halves of the pair, so the other key cannot be tapped to "answer" again.
+    if (questionDef) {
+      await answerQuestion(questionDef);
+    }
 
     // The coach reacts to the tap in the background (after the response), so
     // the key's OK flash is instant while the AI decides whether to repaint

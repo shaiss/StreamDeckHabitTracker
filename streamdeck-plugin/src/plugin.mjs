@@ -37,11 +37,12 @@ const RECHECK_MS = (process.env.HT_RECHECK_MS || '2000,5000,9000,15000,25000').s
 
 const VIOLET_HUE = 262;   // reserved: the coach speaking
 const NUDGE_HUE = 38;     // the coach speaking LOUDER — proactive nudge keys
+const QUESTION_HUE = 300; // the coach ASKING — a linked 👍/👎 pair (#34)
 const SILVER_HUE = 222;   // neutral / pending
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.3.0';
+let VERSION = '2.4.0';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 const keys = new Map();   // action instance id -> { kind: 'habit'|'slot', settings, action }
@@ -162,12 +163,20 @@ function render(k) {
   }
   const n = parseInt(s.slot, 10) || 1;
   const def = slotCache ? slotCache[n - 1] : null;
-  // A nudge answers a hold with "not today", not with undo — and registers no
-  // double-tap, so its taps stay immediate on release (#35).
-  const wasNudge = k.isNudge;
+  // Nudges and questions both answer a hold with a refusal rather than an undo,
+  // and neither registers a double-tap: a poke and an answer are single,
+  // immediate acts, so their taps stay instant on release (#35, #34).
+  const was = [k.isNudge, k.isQuestion];
   k.isNudge = !!(def && def.nudge);
-  if (k.isNudge !== wasNudge) gest.register(k.action.id, { doubleTap: !k.isNudge });
-  if (def && def.nudge) {
+  k.isQuestion = !!(def && def.qid);
+  if (was[0] !== k.isNudge || was[1] !== k.isQuestion) {
+    gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
+  }
+  if (def && def.qid) {
+    // One half of a 👍/👎 pair. Both halves share a hue so they read as one
+    // question rather than two unrelated asks.
+    k.action.setImage(face(def.emoji || '❓', def.label || def.habit, QUESTION_HUE, '❓ ' + n, 78));
+  } else if (def && def.nudge) {
     // Proactive nudge: amber halo + ❗ so the poke reads across the room, and
     // it brightens as its TTL runs down.
     k.urgencyStep = urgencyStep(def);
@@ -240,11 +249,33 @@ function dismissNudge(k) {
     .catch(() => k.action.showAlert());
 }
 
+// Long-press on a QUESTION key means "I'm not answering that" — recorded as a
+// refusal, which the coach must be able to tell apart from a question that
+// simply lapsed unseen. Either half of the pair dismisses the whole thing.
+function dismissQuestion(k) {
+  const s = k.settings;
+  if (!s.base) { k.action.showAlert(); return; }
+  const url = s.base.replace(/\/+$/, '') + '/api/question?dismiss=1&slot=' +
+    encodeURIComponent(s.slot || 1) + (s.key ? '&key=' + encodeURIComponent(s.key) : '');
+  fetch(url, { method: 'POST' })
+    .then((r) => {
+      if (r.ok) {
+        k.action.showOk();
+        sched.forcePoll();   // both halves are gone now — repaint this pump
+        pump();
+      } else { k.action.showAlert(); }
+    })
+    .catch(() => k.action.showAlert());
+}
+
 function dispatch({ id, gesture }) {
   const k = keys.get(id);
   if (!k) return;                                  // key vanished mid-gesture
-  if (gesture === 'longpress') (k.isNudge ? dismissNudge : undo)(k);
-  else if (gesture === 'doubletap') tap(k, { intensity: 'high' });
+  if (gesture === 'longpress') {
+    if (k.isQuestion) dismissQuestion(k);
+    else if (k.isNudge) dismissNudge(k);
+    else undo(k);
+  } else if (gesture === 'doubletap') tap(k, { intensity: 'high' });
   else tap(k);
 }
 
