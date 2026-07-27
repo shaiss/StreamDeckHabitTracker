@@ -5021,12 +5021,12 @@ function getElementAtPath(obj, path5) {
   return path5.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
-  const keys = Object.keys(promisesObj);
-  const promises = keys.map((key) => promisesObj[key]);
+  const keys2 = Object.keys(promisesObj);
+  const promises = keys2.map((key) => promisesObj[key]);
   return Promise.all(promises).then((results) => {
     const resolvedObj = {};
-    for (let i = 0; i < keys.length; i++) {
-      resolvedObj[keys[i]] = results[i];
+    for (let i = 0; i < keys2.length; i++) {
+      resolvedObj[keys2[i]] = results[i];
     }
     return resolvedObj;
   });
@@ -6940,8 +6940,8 @@ function handleOptionalObjectResult(result, final, key, input) {
 var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
   $ZodType.init(inst, def);
   const _normalized = cached(() => {
-    const keys = Object.keys(def.shape);
-    for (const k of keys) {
+    const keys2 = Object.keys(def.shape);
+    for (const k of keys2) {
       if (!(def.shape[k] instanceof $ZodType)) {
         throw new Error(`Invalid element at key "${k}": expected a Zod schema`);
       }
@@ -6949,9 +6949,9 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     const okeys = optionalKeys(def.shape);
     return {
       shape: def.shape,
-      keys,
-      keySet: new Set(keys),
-      numKeys: keys.length,
+      keys: keys2,
+      keySet: new Set(keys2),
+      numKeys: keys2.length,
       optionalKeys: new Set(okeys)
     };
   });
@@ -15586,11 +15586,11 @@ var FileTarget = class {
     }
     const logFiles = this.getLogFiles();
     for (let i = logFiles.length - 1; i >= 0; i--) {
-      const log = logFiles[i];
+      const log2 = logFiles[i];
       if (i >= this.#options.maxFileCount - 1) {
-        fs.rmSync(log.path);
+        fs.rmSync(log2.path);
       } else {
-        fs.renameSync(log.path, this.getLogFilePath(i + 1));
+        fs.renameSync(log2.path, this.getLogFilePath(i + 1));
       }
     }
   }
@@ -17263,6 +17263,18 @@ var streamDeck = {
 };
 var plugin_default = streamDeck;
 
+// tools/lib-hue.mjs
+function hueFor(name) {
+  let h = 2166136261;
+  for (let i = 0; i < name.length; i++) {
+    h ^= name.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  let hue = h % 320;
+  if (hue >= 245) hue += 40;
+  return hue;
+}
+
 // streamdeck-plugin/src/faces.mjs
 var esc2 = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]);
 function hslToHex(h, s, l) {
@@ -17287,10 +17299,163 @@ function face(emoji3, label, hue, badge, sat = 72) {
   return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
 }
 
+// streamdeck-plugin/src/scheduler.mjs
+function createScheduler({ pollMs, timeoutMs, recheckMs }) {
+  let nextPollAt = 0;
+  let rechecks = [];
+  let inflightAt = 0;
+  let seq = 0;
+  return {
+    pump(now) {
+      let expired = false;
+      if (inflightAt && now - inflightAt > timeoutMs) {
+        inflightAt = 0;
+        seq++;
+        nextPollAt = 0;
+        expired = true;
+      }
+      let due = now >= nextPollAt;
+      rechecks = rechecks.filter((t) => {
+        if (now >= t) {
+          due = true;
+          return false;
+        }
+        return true;
+      });
+      return { expired, poll: due && !inflightAt };
+    },
+    pollStarted(now) {
+      inflightAt = now;
+      nextPollAt = now + pollMs;
+      return ++seq;
+    },
+    pollSettled(s) {
+      if (s !== seq) return false;
+      inflightAt = 0;
+      return true;
+    },
+    tapped(now) {
+      nextPollAt = 0;
+      for (const d of recheckMs) rechecks.push(now + d);
+    },
+    forcePoll() {
+      nextPollAt = 0;
+    }
+  };
+}
+
 // streamdeck-plugin/src/plugin.mjs
+var POLL_MS = +(process.env.HT_POLL_MS || 15e3);
+var TICK_MS = +(process.env.HT_TICK_MS || 3e3);
+var POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 1e4);
+var RECHECK_MS = (process.env.HT_RECHECK_MS || "2000,5000,9000,15000,25000").split(",").map(Number);
 var VIOLET_HUE = 262;
+var NUDGE_HUE = 38;
 var SILVER_HUE = 222;
-function defineAction(uuid3, handlers) {
+var VERSION = "2.0.0";
+try {
+  VERSION = plugin_default.info.plugin.version || VERSION;
+} catch {
+}
+var keys = /* @__PURE__ */ new Map();
+var slotCache = null;
+var habitCache = null;
+var sched = createScheduler({ pollMs: POLL_MS, timeoutMs: POLL_TIMEOUT_MS, recheckMs: RECHECK_MS });
+var inflightCtrl = null;
+var clock = null;
+var log = plugin_default.logger.createScope("habit-tracker");
+function startClock() {
+  if (!clock) clock = setInterval(pump, TICK_MS);
+}
+function pump() {
+  if (keys.size === 0) return;
+  const now = Date.now();
+  const { expired, poll } = sched.pump(now);
+  if (expired && inflightCtrl) {
+    try {
+      inflightCtrl.abort();
+    } catch {
+    }
+    inflightCtrl = null;
+  }
+  if (poll) refreshSlots(now);
+}
+function refreshSlots(now) {
+  let base = null, secret = null;
+  for (const k of keys.values()) {
+    if (k.settings.base) {
+      base = k.settings.base;
+      secret = k.settings.key || null;
+      break;
+    }
+  }
+  if (!base) return;
+  const seq = sched.pollStarted(now);
+  const url2 = base.replace(/\/+$/, "") + "/api/slots?deck=" + encodeURIComponent(VERSION) + "&keys=" + keys.size + (secret ? "&key=" + encodeURIComponent(secret) : "");
+  inflightCtrl = new AbortController();
+  fetch(url2, { signal: inflightCtrl.signal }).then((r) => r.json()).then((j) => {
+    if (!sched.pollSettled(seq)) return;
+    inflightCtrl = null;
+    const slots = j.slots || [];
+    const habits = j.habits || [];
+    const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots);
+    const habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(habits);
+    slotCache = slots;
+    habitCache = habits;
+    for (const k of keys.values()) {
+      try {
+        if (slotsChanged && k.kind === "slot") render(k);
+        if (habitsChanged && k.kind === "habit") render(k);
+      } catch {
+      }
+    }
+  }).catch(() => {
+    if (sched.pollSettled(seq)) inflightCtrl = null;
+  });
+}
+function render(k) {
+  const s = k.settings;
+  if (!s.base) {
+    k.action.setImage(face("\u2699\uFE0F", "setup", SILVER_HUE, ""));
+    return;
+  }
+  if (k.kind === "habit") {
+    const idx = +s.index || 0;
+    const def2 = habitCache ? habitCache[idx] : null;
+    if (def2) k.action.setImage(face(def2.emoji || "\u2022", def2.label || def2.habit, hueFor(def2.name), ""));
+    else if (habitCache) k.action.setImage(face("\xB7", "empty", SILVER_HUE, "", 22));
+    else k.action.setImage(face("\u23F3", "\u2026", SILVER_HUE, "", 22));
+    return;
+  }
+  const n = parseInt(s.slot, 10) || 1;
+  const def = slotCache ? slotCache[n - 1] : null;
+  if (def && def.nudge) {
+    k.action.setImage(face(def.emoji || "\u2728", def.label || def.habit, NUDGE_HUE, "\u2757 " + n, 90));
+  } else if (def) {
+    k.action.setImage(face(def.emoji || "\u2728", def.label || def.habit, VIOLET_HUE, "AI " + n));
+  } else {
+    k.action.setImage(face("\u2728", "Slot " + n, SILVER_HUE, "AI", 22));
+  }
+}
+function tap(k) {
+  const s = k.settings;
+  if (!s.base) {
+    k.action.showAlert();
+    return;
+  }
+  const q = k.kind === "slot" ? "slot=" + encodeURIComponent(s.slot || 1) : "hkey=" + encodeURIComponent((+s.index || 0) + 1);
+  const url2 = s.base.replace(/\/+$/, "") + "/api/log?" + q + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  fetch(url2).then((r) => {
+    if (r.ok) {
+      k.action.showOk();
+      sched.tapped(Date.now());
+      pump();
+    } else {
+      k.action.showAlert();
+    }
+  }).catch(() => k.action.showAlert());
+}
+function defineAction(uuid3, kind) {
   const wrapped = action({ UUID: uuid3 })(class extends SingletonAction {
   });
   const inst = new (wrapped || class extends SingletonAction {
@@ -17302,19 +17467,50 @@ function defineAction(uuid3, handlers) {
       Object.defineProperty(inst, "manifestId", { value: uuid3 });
     }
   }
-  return Object.assign(inst, handlers);
+  inst.onWillAppear = (ev) => {
+    keys.set(ev.action.id, { kind, settings: ev.payload && ev.payload.settings || {}, action: ev.action });
+    render(keys.get(ev.action.id));
+    startClock();
+    sched.forcePoll();
+    pump();
+  };
+  inst.onDidReceiveSettings = (ev) => {
+    const k = keys.get(ev.action.id);
+    if (k) {
+      k.settings = ev.payload && ev.payload.settings || {};
+      render(k);
+    }
+    pump();
+  };
+  inst.onWillDisappear = (ev) => {
+    keys.delete(ev.action.id);
+  };
+  inst.onKeyDown = (ev) => {
+    const k = keys.get(ev.action.id);
+    if (k) tap(k);
+    else ev.action.showAlert();
+    pump();
+  };
+  return inst;
 }
-var habit = defineAction("com.shaiss.habit-tracker.habit", {
-  onWillAppear: (ev) => ev.action.setImage(face("\u2705", "Node!", SILVER_HUE, "", 26)),
-  onKeyDown: (ev) => ev.action.showOk()
-});
-var slot = defineAction("com.shaiss.habit-tracker.slot", {
-  onWillAppear: (ev) => ev.action.setImage(face("\u{1F30A}", "SVG spike", VIOLET_HUE, "AI")),
-  onKeyDown: (ev) => ev.action.showOk()
-});
-plugin_default.actions.registerAction(habit);
-plugin_default.actions.registerAction(slot);
+plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.habit", "habit"));
+plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.slot", "slot"));
+try {
+  plugin_default.system.onSystemDidWakeUp(() => {
+    sched.forcePoll();
+    pump();
+  });
+} catch {
+}
+try {
+  plugin_default.devices.onDeviceDidConnect(() => {
+    sched.forcePoll();
+    pump();
+  });
+} catch {
+}
 await plugin_default.connect();
+log.info(`habit-tracker ${VERSION} connected (poll=${POLL_MS}ms tick=${TICK_MS}ms)`);
 /*! Bundled license information:
 
 @elgato/schemas/dist/streamdeck/plugins/index.mjs:
