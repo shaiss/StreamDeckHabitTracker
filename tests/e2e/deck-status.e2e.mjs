@@ -10,9 +10,12 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
-const ROOT = new URL('../../public', import.meta.url).pathname;
+// fileURLToPath, not .pathname: on Windows the latter yields "/C:/..." and
+// every existsSync below silently 404s.
+const ROOT = fileURLToPath(new URL('../../public', import.meta.url));
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.gif': 'image/gif', '.png': 'image/png' };
 
 let server, browser, page, port;
