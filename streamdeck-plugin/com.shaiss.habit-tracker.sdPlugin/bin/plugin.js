@@ -17470,6 +17470,8 @@ function urgencyStep(def, now = Date.now()) {
 }
 
 // streamdeck-plugin/src/plugin.mjs
+var DEFAULT_BASE = "https://stream-deck-habit-tracker.vercel.app";
+var baseOf = (s) => (s && s.base || DEFAULT_BASE).replace(/\/+$/, "");
 var POLL_MS = +(process.env.HT_POLL_MS || 15e3);
 var TICK_MS = +(process.env.HT_TICK_MS || 3e3);
 var POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 1e4);
@@ -17533,12 +17535,15 @@ function refreshSlots(now) {
   let base = null, secret = null;
   for (const k of keys.values()) {
     if (k.settings.base) {
-      base = k.settings.base;
+      base = baseOf(k.settings);
       secret = k.settings.key || null;
       break;
     }
   }
-  if (!base) return;
+  if (!base) {
+    if (keys.size === 0) return;
+    base = DEFAULT_BASE;
+  }
   const seq = sched.pollStarted(now);
   const url2 = base.replace(/\/+$/, "") + "/api/slots?deck=" + encodeURIComponent(VERSION) + "&keys=" + keys.size + "&tz=" + (/* @__PURE__ */ new Date()).getTimezoneOffset() + (secret ? "&key=" + encodeURIComponent(secret) : "");
   inflightCtrl = new AbortController();
@@ -17567,10 +17572,6 @@ function refreshSlots(now) {
 }
 function render(k) {
   const s = k.settings;
-  if (!s.base) {
-    k.action.setImage(face("\u2699\uFE0F", "setup", SILVER_HUE, ""));
-    return;
-  }
   if (k.kind === "habit") {
     const idx = +s.index || 0;
     const def2 = habitCache ? habitCache[idx] : null;
@@ -17610,13 +17611,9 @@ function render(k) {
 function logUrl(k, extra = "") {
   const s = k.settings;
   const q = k.kind === "slot" ? "slot=" + encodeURIComponent(s.slot || 1) : "hkey=" + encodeURIComponent((+s.index || 0) + 1);
-  return s.base.replace(/\/+$/, "") + "/api/log?" + q + extra + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  return baseOf(s) + "/api/log?" + q + extra + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
 }
 function tap(k, { intensity = "" } = {}) {
-  if (!k.settings.base) {
-    k.action.showAlert();
-    return;
-  }
   fetch(logUrl(k, intensity ? "&intensity=" + encodeURIComponent(intensity) : "")).then((r) => {
     if (r.ok) {
       k.action.showOk();
@@ -17628,10 +17625,6 @@ function tap(k, { intensity = "" } = {}) {
   }).catch(() => k.action.showAlert());
 }
 function undo(k) {
-  if (!k.settings.base) {
-    k.action.showAlert();
-    return;
-  }
   fetch(logUrl(k), { method: "DELETE" }).then((r) => {
     if (r.ok) {
       k.action.showOk();
@@ -17644,11 +17637,7 @@ function undo(k) {
 }
 function dismissNudge(k) {
   const s = k.settings;
-  if (!s.base) {
-    k.action.showAlert();
-    return;
-  }
-  const url2 = s.base.replace(/\/+$/, "") + "/api/nudge?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  const url2 = baseOf(s) + "/api/nudge?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
   fetch(url2, { method: "POST" }).then((r) => {
     if (r.ok) {
       k.action.showOk();
@@ -17661,11 +17650,7 @@ function dismissNudge(k) {
 }
 function dismissQuestion(k) {
   const s = k.settings;
-  if (!s.base) {
-    k.action.showAlert();
-    return;
-  }
-  const url2 = s.base.replace(/\/+$/, "") + "/api/question?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  const url2 = baseOf(s) + "/api/question?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
   fetch(url2, { method: "POST" }).then((r) => {
     if (r.ok) {
       k.action.showOk();

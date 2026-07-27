@@ -28,6 +28,13 @@ import { createGestures } from './gestures.mjs';
 // about how loud a nudge should be. esbuild bundles it in.
 import { nudgeUrgency, urgencyStep } from '../../lib/nudge.js';
 
+// A key dragged straight from the action list arrives with Settings: {} —
+// there is no Property Inspector, so without a compiled-in default it would
+// stay a dead ⚙️ face forever (issue #55). The production origin is the same
+// constant the rest of the repo already hardcodes (setup.ps1, spike, docs).
+const DEFAULT_BASE = 'https://stream-deck-habit-tracker.vercel.app';
+const baseOf = (s) => ((s && s.base) || DEFAULT_BASE).replace(/\/+$/, '');
+
 const POLL_MS = +(process.env.HT_POLL_MS || 15000);
 const TICK_MS = +(process.env.HT_TICK_MS || 3000);
 const POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 10000);
@@ -103,11 +110,16 @@ function escalate(now) {
 }
 
 function refreshSlots(now) {
+  // Prefer a key that names its own base (a generated profile); fall back to
+  // the compiled-in default so hand-placed keys still poll (issue #55).
   let base = null, secret = null;
   for (const k of keys.values()) {
-    if (k.settings.base) { base = k.settings.base; secret = k.settings.key || null; break; }
+    if (k.settings.base) { base = baseOf(k.settings); secret = k.settings.key || null; break; }
   }
-  if (!base) return;
+  if (!base) {
+    if (keys.size === 0) return;
+    base = DEFAULT_BASE;
+  }
   const seq = sched.pollStarted(now);
   // ?deck= marks this as the hardware plugin's poll (not the dashboard's), so
   // the server records a heartbeat and /api/health can say whether a physical
@@ -148,7 +160,6 @@ function refreshSlots(now) {
 
 function render(k) {
   const s = k.settings;
-  if (!s.base) { k.action.setImage(face('⚙️', 'setup', SILVER_HUE, '')); return; }
   if (k.kind === 'habit') {
     const idx = +s.index || 0;
     const def = habitCache ? habitCache[idx] : null;
@@ -196,12 +207,11 @@ function logUrl(k, extra = '') {
   const q = k.kind === 'slot'
     ? 'slot=' + encodeURIComponent(s.slot || 1)
     : 'hkey=' + encodeURIComponent((+s.index || 0) + 1);
-  return s.base.replace(/\/+$/, '') + '/api/log?' + q + extra +
+  return baseOf(s) + '/api/log?' + q + extra +
     (s.key ? '&key=' + encodeURIComponent(s.key) : '');
 }
 
 function tap(k, { intensity = '' } = {}) {
-  if (!k.settings.base) { k.action.showAlert(); return; }
   fetch(logUrl(k, intensity ? '&intensity=' + encodeURIComponent(intensity) : ''))
     .then((r) => {
       if (r.ok) {
@@ -218,7 +228,6 @@ function tap(k, { intensity = '' } = {}) {
 // flash when there was nothing to remove is the only "are you sure" a key can
 // honestly offer.
 function undo(k) {
-  if (!k.settings.base) { k.action.showAlert(); return; }
   fetch(logUrl(k), { method: 'DELETE' })
     .then((r) => {
       if (r.ok) {
@@ -235,8 +244,7 @@ function undo(k) {
 // key is a poke, not a log, so there is nothing to undo here.
 function dismissNudge(k) {
   const s = k.settings;
-  if (!s.base) { k.action.showAlert(); return; }
-  const url = s.base.replace(/\/+$/, '') + '/api/nudge?dismiss=1&slot=' +
+  const url = baseOf(s) + '/api/nudge?dismiss=1&slot=' +
     encodeURIComponent(s.slot || 1) + (s.key ? '&key=' + encodeURIComponent(s.key) : '');
   fetch(url, { method: 'POST' })
     .then((r) => {
@@ -254,8 +262,7 @@ function dismissNudge(k) {
 // simply lapsed unseen. Either half of the pair dismisses the whole thing.
 function dismissQuestion(k) {
   const s = k.settings;
-  if (!s.base) { k.action.showAlert(); return; }
-  const url = s.base.replace(/\/+$/, '') + '/api/question?dismiss=1&slot=' +
+  const url = baseOf(s) + '/api/question?dismiss=1&slot=' +
     encodeURIComponent(s.slot || 1) + (s.key ? '&key=' + encodeURIComponent(s.key) : '');
   fetch(url, { method: 'POST' })
     .then((r) => {
