@@ -160,6 +160,7 @@ persist in Redis so they survive serverless cold starts.
 | **Morning** | cron, 10:00 UTC | Sets the day's keys |
 | **Nudge** | rides the deck's `/api/slots` poll | Proactive single-slot repaint when the gates allow |
 | **Roster** | after the morning pass | Proposes adding/retiring *fixed* habits — queued for your approval, never self-applied |
+| **Coach page** | morning cron + `/api/coachpage` | Curates the *considered layer* — up to 12 habits it's tracking beyond the front 4, rendered as deck slots 5–16 |
 | **Daily digest** | cron, 03:00 UTC | Writes the end-of-day note shown on the dashboard |
 
 Reactive feedback keys **expire on their own** (default 2 h; the model can set `ttlMinutes`
@@ -261,6 +262,7 @@ complication, or anything else that can make a request.
 | `GET /api/nudge[?run=1]` | Nudge state and gate evaluation; `?run=1` forces a pass. |
 | `POST /api/nudge?suppress=1` · `?takeover=1` | The hardware kill switch (24 h of takeover silence) and the once-a-day takeover budget claim. POST-only. |
 | `GET /api/roster[?run=1]` · `POST /api/roster` | Pending roster proposals and the retirement archive; POST approves, dismisses, or restores. |
+| `GET /api/coachpage[?run=1]` | The AI-curated Coach page — the wider set the coach tracks, rendered as deck slots 5–16. `?run=1` (or POST) refreshes it. |
 | `GET /api/mind` | Everything the Mind page renders, in one call. |
 | `GET /api/profile[?set=1&…]` | Name, timezone, the free-text "about you" the coach reads each pass, and the tri-state navigation consent (`coachNav`: off / nudge-only / may-navigate). |
 | `GET /api/health` | Storage + AI wiring, and when a *physical* deck last polled. Returns variable **names** only, never values — safe to leave public. |
