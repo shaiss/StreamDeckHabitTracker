@@ -5,8 +5,16 @@
   "Name": "Habit Tracker AI",
   "Description": "Logs habit taps to your Habit Tracker endpoint. AI Slot keys repaint themselves automatically when the AI coach assigns new habits.",
   "URL": "https://github.com/shaiss/StreamDeckHabitTracker",
-  "Version": "2.4.0.0",
+  "Version": "2.5.0.0",
   "CodePath": "bin/plugin.js",
+  "Profiles": [
+    {
+      "Name": "profiles/Habit Tracker AI",
+      "DeviceType": 0,
+      "Readonly": true,
+      "AutoInstall": true
+    }
+  ],
   "Nodejs": { "Version": "24" },
   "Icon": "images/plugin",
   "Category": "Habit Tracker",

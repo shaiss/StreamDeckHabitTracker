@@ -17480,7 +17480,7 @@ var VIOLET_HUE = 262;
 var NUDGE_HUE = 38;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
-var VERSION = "2.4.0";
+var VERSION = "2.5.0";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {

@@ -49,7 +49,7 @@ const SILVER_HUE = 222;   // neutral / pending
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.4.0';
+let VERSION = '2.5.0';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 const keys = new Map();   // action instance id -> { kind: 'habit'|'slot', settings, action }

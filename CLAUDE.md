@@ -37,8 +37,10 @@ node tools/make-animations.mjs
 # node tools/bundle-plugin.mjs
 node tools/build-plugin.mjs
 
-# Regenerate the hosted profile (single-user build: 15-key, plugin flavor only):
-node tools/generate.mjs "https://stream-deck-habit-tracker.vercel.app/api/log" --plugin --static --outfile=public/downloads/HabitTracker-MK2.streamDeckProfile --name="Habit Tracker AI"
+# Regenerate the bundled profile (single-user build: 15-key, plugin flavor,
+# 2 pages). It ships INSIDE the .sdPlugin (manifest Profiles[] AutoInstall,
+# issue #50) — re-run build-plugin.mjs afterwards so the package picks it up:
+node tools/generate.mjs "https://stream-deck-habit-tracker.vercel.app/api/log" --plugin --static --pages=2 --outfile="streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/profiles/Habit Tracker AI.streamDeckProfile" --name="Habit Tracker AI"
 
 # Tests — run before every PR (the ship skill enforces this):
 npm test          # unit suite, zero-dep (glob form is required on this Node —
@@ -212,9 +214,12 @@ removes prior installs (both plugin ids — `com.shaiss.…` and the legacy
 `com.kalmansforge.…` — plus any `Habit Tracker*` profiles found in
 **both** `ProfilesV2` (SD 6.x) and `ProfilesV3` (SD 7.x) by manifest Name),
 copies the staged plugin into `%APPDATA%\Elgato\StreamDeck\Plugins` (silent —
-no app prompt, no "already installed" refusal), relaunches the app (which
-also re-enables a plugin SD had marked unstable), and imports the profile
-(the one prompt left). Keep it PowerShell-5.1-safe and `irm | iex`-safe:
+no app prompt, no "already installed" refusal), and relaunches the app (which
+also re-enables a plugin SD had marked unstable). There is no import step:
+the profile ships inside the `.sdPlugin` (manifest `Profiles[]` with
+`AutoInstall: true`, issue #50), so the run ends with **zero prompts** —
+but uninstalling the plugin removes the profile with it. Keep the script
+PowerShell-5.1-safe and `irm | iex`-safe:
 no `$PSScriptRoot`, no param blocks, no pwsh-7-only syntax, **pure ASCII**
 (irm decodes charset-less text as ISO-8859-1).
 After changing the plugin or generator, **rebuild and re-commit the artifacts**
