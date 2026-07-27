@@ -36,6 +36,7 @@ var ws = null;
 var keys = {};            // context -> { action, settings }
 var slotCache = null;     // latest slots array from the server
 var habitCache = null;    // latest habit list from the server (live-editable)
+var todayCache = null;    // { habitName -> {count, goal, doneToday, streak, ringFill} }
 var slotCacheAt = 0;
 
 var POLL_MS = 15000;
@@ -273,14 +274,16 @@ function refreshSlots() {
       if (!settle()) return;
       var slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(j.slots || []);
       var habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(j.habits || []);
+      var todayChanged = !todayCache || JSON.stringify(todayCache) !== JSON.stringify(j.today || {});
       slotCache = j.slots || [];
       habitCache = j.habits || [];
+      todayCache = j.today || null;
       slotCacheAt = Date.now();
       for (var c in keys) {
         // One bad face must not strand the rest of the deck on stale images.
         try {
           if (slotsChanged && isSlot(keys[c])) render(c);
-          if (habitsChanged && isHabit(keys[c])) render(c);
+          if (isHabit(keys[c]) && (habitsChanged || todayChanged)) render(c);
         } catch (e) { /* next poll retries this key */ }
       }
     })
@@ -296,7 +299,10 @@ function render(context) {
   if (isHabit(k)) {
     var idx = +s.index || 0;
     var def = habitCache ? habitCache[idx] : null;
-    if (def) setImage(context, face(def.emoji || '•', def.label || def.habit, hueFor(def.name), ''));
+    if (def) {
+      var st = (todayCache && todayCache[def.name]) || null;
+      setImage(context, face(def.emoji || '•', def.label || def.habit, hueFor(def.name), '', undefined, st));
+    }
     else if (habitCache) setImage(context, face('·', 'empty', SILVER_HUE, '', 22)); // habit removed in manager
     else setImage(context, face('⏳', '…', SILVER_HUE, '', 22)); // first poll pending
     return;
@@ -314,9 +320,14 @@ function render(context) {
 }
 
 // Nocturne Ritual face: night base, votive halo in the key's hue, hairline
-// inner ring, oversized glyph, whispered label (design/PHILOSOPHY.md).
-function face(emoji, label, hue, badge, sat) {
+// inner ring, oversized glyph, whispered label (design/PHILOSOPHY.md). Living
+// key faces (#32) layer a streak ring, dim-when-done, and count dots onto
+// HABIT keys (state !== null); slot/nudge keys pass no state and render as
+// before.
+function face(emoji, label, hue, badge, sat, state) {
   sat = sat === undefined ? 72 : sat;
+  var done = state && state.doneToday;
+  if (done) sat = Math.round(sat * 0.55);            // dim-when-done
   var S = 144;
   var cv = document.createElement('canvas');
   cv.width = S; cv.height = S;
@@ -339,6 +350,24 @@ function face(emoji, label, hue, badge, sat) {
   ctx.lineWidth = 1.5;
   if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(6, 6, S - 12, S - 12, 17); ctx.stroke(); }
 
+  // Streak ring (habit keys only): an arc inset from the border, sweep =
+  // ringFill * 360°. Empty track faint, filled arc bright. Drawn over the halo
+  // but under the glyph so the emoji stays the focus.
+  if (state && typeof state.ringFill === 'number') {
+    var cx = S / 2, cy = S / 2, R = S / 2 - 7;
+    var start = -Math.PI / 2;
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'hsla(' + hue + ',' + sat + '%,55%,.18)';
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+    if (state.ringFill > 0) {
+      ctx.strokeStyle = 'hsla(' + hue + ',85%,72%,.95)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, start, start + Math.PI * 2 * state.ringFill);
+      ctx.stroke();
+    }
+  }
+
   ctx.textAlign = 'center';
   ctx.font = '62px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
   ctx.fillText(emoji, S / 2, 76);
@@ -351,7 +380,34 @@ function face(emoji, label, hue, badge, sat) {
   ctx.fillText(lbl.slice(0, 12), S / 2, 116);
   ctx.shadowBlur = 0;
 
-  if (badge) {
+  // Count dots (habit keys, repeatable habits): up to 8 dots along the bottom,
+  // filled = today's count. Above 8, show the count as a number instead.
+  if (state && state.goal > 1 && typeof state.count === 'number') {
+    if (state.goal > 8) {
+      ctx.fillStyle = 'hsla(' + hue + ',80%,80%,.95)';
+      ctx.font = '700 12px "Segoe UI",Arial,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(String(state.count), S - 10, S - 10);
+    } else {
+      var dots = state.goal, filled = Math.min(state.count, dots);
+      var gap = 9, w = (dots - 1) * gap, startX = (S - w) / 2, y = S - 14;
+      for (var i = 0; i < dots; i++) {
+        ctx.beginPath();
+        ctx.arc(startX + i * gap, y, 2.6, 0, Math.PI * 2);
+        ctx.fillStyle = i < filled ? 'hsla(' + hue + ',85%,72%,.95)' : 'hsla(' + hue + ',' + sat + '%,45%,.30)';
+        ctx.fill();
+      }
+    }
+  }
+
+  // Badge (slot/nudge) OR dim-when-done check (habit). Habit keys have no
+  // badge, so the ✓ only appears on a done habit.
+  if (state && done) {
+    ctx.fillStyle = 'hsla(' + hue + ',80%,80%,.95)';
+    ctx.font = '700 12px "Segoe UI",Arial,sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('✓', S - 10, 18);
+  } else if (badge) {
     ctx.fillStyle = 'hsla(' + hue + ',80%,80%,.9)';
     ctx.font = '700 11px "Segoe UI",Arial,sans-serif';
     ctx.textAlign = 'right';
