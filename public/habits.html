@@ -11,7 +11,7 @@
     h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.01em; }
     .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
     .rows { display: flex; flex-direction: column; gap: 10px; }
-    .hrow { display: grid; grid-template-columns: 64px 1fr 1fr 64px 40px; gap: 10px; align-items: center;
+    .hrow { display: grid; grid-template-columns: 64px 1fr 1fr 56px 64px 40px; gap: 10px; align-items: center;
             background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
     .hrow input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line);
                   border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px; }
@@ -19,7 +19,7 @@
     .hrow input[readonly] { opacity: .6; cursor: not-allowed; }
     .hrow .del { border: 0; background: transparent; color: var(--muted); font-size: 17px; cursor: pointer; }
     .hrow .del:hover { color: var(--bad); }
-    .cols { display: grid; grid-template-columns: 64px 1fr 1fr 64px 40px; gap: 10px; padding: 0 14px; margin-bottom: 6px;
+    .cols { display: grid; grid-template-columns: 64px 1fr 1fr 56px 64px 40px; gap: 10px; padding: 0 14px; margin-bottom: 6px;
             color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
     .actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
     .status { font-size: 13px; color: var(--muted); }
@@ -71,7 +71,7 @@
       <div class="hint">It reviews the fixed keys each morning. Nothing changes until you say so — and dismissing one tells it not to ask again.</div>
       <div id="propRows"></div>
     </div>
-    <div class="cols"><span>Emoji</span><span>Label (on the key)</span><span>Id (logged name)</span><span>Origin</span><span></span></div>
+    <div class="cols"><span>Emoji</span><span>Label (on the key)</span><span>Id (logged name)</span><span>Goal</span><span>Origin</span><span></span></div>
     <div class="rows" id="rows"></div>
     <div class="actions">
       <button class="btn ghost" id="addBtn">+ Add habit</button>
@@ -113,6 +113,7 @@
         <input class="emoji" value="${esc(h.emoji||'')}" maxlength="8" placeholder="🙂">
         <input class="label" value="${esc(h.label||'')}" maxlength="12" placeholder="Label">
         <input class="name" value="${esc(h.name||'')}" maxlength="20" placeholder="OneWordId" ${isNew ? '' : 'readonly title="Ids are locked to keep history consistent — delete and re-add to rename."'}>
+        <input class="goal" type="number" min="1" max="99" value="${h.goal ? esc(String(h.goal)) : ''}" placeholder="1" title="Daily goal (default 1). 2+ makes the key show count dots and a progress ring.">
         ${chip}
         <button class="del" title="Remove">✕</button>
       </div>`;
@@ -234,12 +235,16 @@
     });
 
     document.getElementById('saveBtn').addEventListener('click', () => {
-      const habits = [...rowsEl.querySelectorAll('.hrow')].map(el => ({
-        emoji: el.querySelector('.emoji').value.trim(),
-        label: el.querySelector('.label').value.trim(),
-        name: el.querySelector('.name').value.trim(),
-        origin: el.dataset.origin === 'coach' ? 'coach' : 'human'
-      }));
+      const habits = [...rowsEl.querySelectorAll('.hrow')].map(el => {
+        const g = parseInt(el.querySelector('.goal').value, 10);
+        return {
+          emoji: el.querySelector('.emoji').value.trim(),
+          label: el.querySelector('.label').value.trim(),
+          name: el.querySelector('.name').value.trim(),
+          origin: el.dataset.origin === 'coach' ? 'coach' : 'human',
+          ...(Number.isInteger(g) && g >= 1 && g <= 99 ? { goal: g } : {})
+        };
+      });
       const seen = new Set();
       for (const h of habits) {
         const k = h.name.toLowerCase();
