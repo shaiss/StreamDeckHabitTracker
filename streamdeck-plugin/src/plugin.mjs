@@ -35,6 +35,9 @@ import { deriveVisibility } from './visibility.mjs';
 // dependency-free and unit-pinned) so the deck and the backend cannot disagree
 // about how loud a nudge should be. esbuild bundles it in.
 import { nudgeUrgency, urgencyStep } from '../../lib/nudge.js';
+// The takeover gate (#54) lives server-adjacent for the same reason: the
+// deck and the backend must not disagree about when the coach may navigate.
+import { takeoverDue, RESTORE_MS, SUPPRESS_MS } from '../../lib/takeover.js';
 
 // A key dragged straight from the action list arrives with Settings: {} —
 // there is no Property Inspector, so without a compiled-in default it would
@@ -70,6 +73,22 @@ let slotCache = null;     // latest slots array from the server
 let coachCache = null;    // latest coach-page array (#52) — slots 5..16 render from it
 let habitCache = null;    // latest habit list from the server (live-editable)
 let todayCache = null;    // { habitName: {count, goal, doneToday, streak, ringFill} } (#32)
+
+// Takeover state (#54). The pure gate is lib/takeover.js; these are its
+// plugin-side inputs. Budget and kill switch are ALSO held server-side
+// (habits:nudge) and re-checked at claim time — the local copies just avoid
+// pointless HTTP when the answer is already no.
+let consentCache = 'off';        // coachNav from the poll; off until told otherwise
+let lastKeypressAt = 0;          // human-priority lock: last physical keypress
+let lastPageChangeAt = 0;        // …and last page change (appeared-key churn)
+let lastTakeoverDay = '';        // local memory of a spent budget
+let suppressedUntilLocal = 0;    // local memory of the kill switch
+let takeover = null;             // { deviceId, returnPage, timer } while we hold the glass
+
+const localDay = (t) => {
+  const d = new Date(t);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+};
 
 const sched = createScheduler({ pollMs: POLL_MS, timeoutMs: POLL_TIMEOUT_MS, recheckMs: RECHECK_MS });
 // Three gestures per key: tap logs, hold undoes, double-tap says "big one".
@@ -175,6 +194,7 @@ function refreshSlots(now) {
       const coachPage = j.coachPage || [];
       const habits = j.habits || [];
       const today = j.today || {};
+      consentCache = j.coachNav || 'off';   // #54: flipping consent off lands within one poll
       const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) ||
         !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage);
       const habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(habits);
@@ -186,10 +206,11 @@ function refreshSlots(now) {
       for (const k of keys.values()) {
         // One bad face must not strand the rest of the deck on stale images.
         try {
-          if (slotsChanged && k.kind === 'slot') render(k);
+          if (slotsChanged && (k.kind === 'slot' || k.kind === 'coach')) render(k);
           if (k.kind === 'habit' && (habitsChanged || todayChanged)) render(k);
         } catch { /* next poll retries this key */ }
       }
+      maybeTakeover();   // #54: evaluated on the poll beat, never more often
     })
     .catch(() => {
       if (sched.pollSettled(seq)) inflightCtrl = null;   // keep last faces on hiccups
@@ -224,6 +245,84 @@ function coachNavigate(k) {
   if (!k.deviceId) { k.action.showAlert(); return; }
   Promise.resolve(streamDeck.profiles.switchToProfile(k.deviceId, PROFILE_NAME, page))
     .catch(() => { try { k.action.showAlert(); } catch { /* key gone */ } });
+}
+
+// --- takeover (#54) ---------------------------------------------------------
+// The coach may raise its voice inside the room it is already in; it may not
+// walk into another room. switchToProfile can only reach OUR bundled profile
+// anyway (SDK contract), so the remaining risk is page-flipping under the
+// human — which is what the gate, the server-side budget claim, and the
+// auto-restore below exist to fence.
+
+function restoreTakeover() {
+  if (!takeover) return;
+  const t = takeover;
+  takeover = null;
+  if (t.timer) clearTimeout(t.timer);
+  Promise.resolve(streamDeck.profiles.switchToProfile(t.deviceId, PROFILE_NAME, t.returnPage))
+    .catch(() => { /* never retry a restore into the human's hands */ });
+}
+
+function maybeTakeover() {
+  if (takeover) return;                          // already holding the glass
+  const now = Date.now();
+  const vis = visibility();
+  const gate = takeoverDue({
+    now,
+    hour: new Date(now).getHours(),              // host-local: the deck sits next to its human
+    day: localDay(now),
+    consent: consentCache,
+    nudge: liveNudge(now),
+    visible: vis.anyVisible,
+    lastKeypressAt,
+    lastPageChangeAt,
+    takeoverDay: lastTakeoverDay,
+    suppressedUntil: suppressedUntilLocal
+  });
+  if (!gate.due) return;
+  if (vis.visiblePage === 0) return;             // the nudge is already on the glass
+  const dev = [...keys.values()].map((k) => k.deviceId).find(Boolean);
+  if (!dev) return;
+  let base = DEFAULT_BASE, secret = null;
+  for (const k of keys.values()) {
+    if (k.settings.base) { base = baseOf(k.settings); secret = k.settings.key || null; break; }
+  }
+  // Claim the day's budget server-side FIRST — a refusal (budget spent on a
+  // previous process, kill switch engaged) means stay silent.
+  fetch(base + '/api/nudge?takeover=1' + (secret ? '&key=' + encodeURIComponent(secret) : ''), { method: 'POST' })
+    .then((r) => {
+      if (!r.ok) return;
+      lastTakeoverDay = localDay(Date.now());
+      const returnPage = vis.visiblePage == null ? 1 : vis.visiblePage;
+      Promise.resolve(streamDeck.profiles.switchToProfile(dev, PROFILE_NAME, 0))
+        .then(() => {
+          // Auto-restore: give the page back after RESTORE_MS or on any tap
+          // (see onKeyUp). Never strand someone on a page they didn't choose.
+          const timer = setTimeout(restoreTakeover, RESTORE_MS);
+          if (timer.unref) timer.unref();
+          takeover = { deviceId: dev, returnPage, timer };
+          log.info('takeover: navigated to the nudge; restoring to page ' + returnPage + ' in ' + RESTORE_MS + 'ms');
+        })
+        .catch(() => { /* navigation refused — nothing to restore */ });
+    })
+    .catch(() => { /* offline: no claim, no navigation */ });
+}
+
+// Long-press on the Coach key: the hardware kill switch (#54). Saying "not
+// now" must not require a browser — 24h of takeover silence, persisted
+// server-side so a plugin restart cannot forget it.
+function suppressTakeovers(k) {
+  const s = k.settings;
+  const url = baseOf(s) + '/api/nudge?suppress=1' + (s.key ? '&key=' + encodeURIComponent(s.key) : '');
+  fetch(url, { method: 'POST' })
+    .then((r) => {
+      if (r.ok) {
+        suppressedUntilLocal = Date.now() + SUPPRESS_MS;
+        restoreTakeover();                       // and give the glass back immediately
+        k.action.showOk();
+      } else { k.action.showAlert(); }
+    })
+    .catch(() => k.action.showAlert());
 }
 
 function render(k) {
@@ -353,9 +452,10 @@ function dispatch({ id, gesture }) {
   const k = keys.get(id);
   if (!k) return;                                  // key vanished mid-gesture
   if (k.kind === 'coach') {
-    // The coach key logs nothing: every gesture is navigation (#53). #54
-    // gives the long press its own meaning (the takeover kill switch).
-    coachNavigate(k);
+    // The coach key logs nothing. Tap navigates (#53); long-press is the
+    // hardware kill switch — 24h of takeover silence (#54).
+    if (gesture === 'longpress') suppressTakeovers(k);
+    else coachNavigate(k);
     return;
   }
   if (gesture === 'longpress') {
@@ -401,6 +501,7 @@ function defineAction(uuid, kind) {
     // both answer to all three gestures. The coach key logs nothing — a
     // double-tap would only defer its single meaning (navigate).
     gest.register(ev.action.id, { doubleTap: kind !== 'coach' });
+    lastPageChangeAt = Date.now();   // page churn = the human (or we) moved (#54)
     render(keys.get(ev.action.id));
     startClock();
     sched.forcePoll();   // a key just appeared — refresh on this pump
@@ -411,7 +512,11 @@ function defineAction(uuid, kind) {
     if (k) { k.settings = (ev.payload && ev.payload.settings) || {}; render(k); }
     pump();
   };
-  inst.onWillDisappear = (ev) => { keys.delete(ev.action.id); gest.forget(ev.action.id); };
+  inst.onWillDisappear = (ev) => {
+    keys.delete(ev.action.id);
+    gest.forget(ev.action.id);
+    lastPageChangeAt = Date.now();   // (#54)
+  };
   // Both edges now matter: keyDown starts the hold clock, keyUp resolves the
   // press. ⚠️ Behavior change from the tap-on-keyDown era — a plain tap on a
   // double-tap key now lands DOUBLE_TAP_MS after release. That deferral is the
@@ -419,11 +524,15 @@ function defineAction(uuid, kind) {
   // (nudges) register without it.
   inst.onKeyDown = (ev) => {
     if (!keys.has(ev.action.id)) { ev.action.showAlert(); return; }
+    lastKeypressAt = Date.now();     // human-priority lock input (#54)
     gest.down(ev.action.id, Date.now());
     armGestures();
   };
   inst.onKeyUp = (ev) => {
     if (!keys.has(ev.action.id)) return;
+    // Any tap ends a takeover hold (#54): the human is present and acting,
+    // so give the page back before their gesture resolves.
+    if (takeover) restoreTakeover();
     for (const g of gest.up(ev.action.id, Date.now())) dispatch(g);
     armGestures();
   };

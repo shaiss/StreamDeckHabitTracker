@@ -17452,10 +17452,33 @@ function createGestures({ longPressMs = LONG_PRESS_MS, doubleTapMs = DOUBLE_TAP_
   };
 }
 
+// streamdeck-plugin/src/visibility.mjs
+function deriveVisibility(settingsList) {
+  let any2 = false;
+  const votes = /* @__PURE__ */ new Map();
+  for (const s of settingsList || []) {
+    any2 = true;
+    const page = s == null ? NaN : parseInt(s.page, 10);
+    if (!Number.isInteger(page) || page < 0) continue;
+    votes.set(page, (votes.get(page) || 0) + 1);
+  }
+  let visiblePage = null;
+  let best = 0;
+  for (const [page, n] of votes) {
+    if (n > best || n === best && visiblePage !== null && page < visiblePage) {
+      best = n;
+      visiblePage = page;
+    }
+  }
+  return { anyVisible: any2, visiblePage };
+}
+
 // lib/nudge.js
 var CHECK_EVERY_MS = 20 * 6e4;
 var MIN_GAP_MS = 2 * 36e5;
 var RECENT_TAP_MS = 45 * 6e4;
+var QUIET_END_HOUR = 8;
+var QUIET_START_HOUR = 22;
 var NUDGE_TTL_MS = 60 * 6e4;
 var DISMISS_QUIET_MS = 4 * 36e5;
 function nudgeUrgency(def, now = Date.now()) {
@@ -17467,6 +17490,43 @@ function nudgeUrgency(def, now = Date.now()) {
 var URGENCY_STEPS = 8;
 function urgencyStep(def, now = Date.now()) {
   return Math.round(nudgeUrgency(def, now) * URGENCY_STEPS);
+}
+
+// lib/takeover.js
+var CONSENT_LEVELS = ["off", "nudge-only", "may-navigate"];
+function normalizeConsent(v) {
+  return CONSENT_LEVELS.includes(v) ? v : "off";
+}
+var HUMAN_LOCK_MS = 10 * 6e4;
+var RESTORE_MS = 9e4;
+var SUPPRESS_MS = 24 * 36e5;
+function takeoverDue({
+  now,
+  hour,
+  day = "",
+  consent = "off",
+  nudge = null,
+  visible = false,
+  lastKeypressAt: lastKeypressAt2 = 0,
+  lastPageChangeAt: lastPageChangeAt2 = 0,
+  takeoverDay = "",
+  suppressedUntil = 0
+} = {}) {
+  if (normalizeConsent(consent) !== "may-navigate") return { due: false, reason: "consent withheld" };
+  if (suppressedUntil && now < suppressedUntil) return { due: false, reason: "kill switch engaged" };
+  if (!nudge || !nudge.nudge || nudge.expiresAt && nudge.expiresAt <= now) {
+    return { due: false, reason: "no live nudge to amplify" };
+  }
+  if (hour < QUIET_END_HOUR || hour >= QUIET_START_HOUR) return { due: false, reason: "quiet hours" };
+  if (!visible) return { due: false, reason: "profile not on screen" };
+  if (lastKeypressAt2 && now - lastKeypressAt2 < HUMAN_LOCK_MS) {
+    return { due: false, reason: "human at the controls" };
+  }
+  if (lastPageChangeAt2 && now - lastPageChangeAt2 < HUMAN_LOCK_MS) {
+    return { due: false, reason: "human just changed pages" };
+  }
+  if (day && takeoverDay === day) return { due: false, reason: "budget spent" };
+  return { due: true, reason: "ok" };
 }
 
 // streamdeck-plugin/src/plugin.mjs
@@ -17491,6 +17551,16 @@ var slotCache = null;
 var coachCache = null;
 var habitCache = null;
 var todayCache = null;
+var consentCache = "off";
+var lastKeypressAt = 0;
+var lastPageChangeAt = 0;
+var lastTakeoverDay = "";
+var suppressedUntilLocal = 0;
+var takeover = null;
+var localDay = (t) => {
+  const d = new Date(t);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+};
 var sched = createScheduler({ pollMs: POLL_MS, timeoutMs: POLL_TIMEOUT_MS, recheckMs: RECHECK_MS });
 var gest = createGestures();
 var inflightCtrl = null;
@@ -17544,6 +17614,9 @@ function escalate(now) {
 function liveNudge(now = Date.now()) {
   return (slotCache || []).find((s) => s && s.nudge && (!s.expiresAt || s.expiresAt > now)) || null;
 }
+function visibility() {
+  return deriveVisibility([...keys.values()].map((k) => k.settings));
+}
 function refreshSlots(now) {
   let base = null, secret = null;
   for (const k of keys.values()) {
@@ -17567,6 +17640,7 @@ function refreshSlots(now) {
     const coachPage = j.coachPage || [];
     const habits = j.habits || [];
     const today = j.today || {};
+    consentCache = j.coachNav || "off";
     const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) || !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage);
     const habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(habits);
     const todayChanged = !todayCache || JSON.stringify(todayCache) !== JSON.stringify(today);
@@ -17576,11 +17650,12 @@ function refreshSlots(now) {
     todayCache = today;
     for (const k of keys.values()) {
       try {
-        if (slotsChanged && k.kind === "slot") render(k);
+        if (slotsChanged && (k.kind === "slot" || k.kind === "coach")) render(k);
         if (k.kind === "habit" && (habitsChanged || todayChanged)) render(k);
       } catch {
       }
     }
+    maybeTakeover();
   }).catch(() => {
     if (sched.pollSettled(seq)) inflightCtrl = null;
   });
@@ -17613,6 +17688,70 @@ function coachNavigate(k) {
     } catch {
     }
   });
+}
+function restoreTakeover() {
+  if (!takeover) return;
+  const t = takeover;
+  takeover = null;
+  if (t.timer) clearTimeout(t.timer);
+  Promise.resolve(plugin_default.profiles.switchToProfile(t.deviceId, PROFILE_NAME, t.returnPage)).catch(() => {
+  });
+}
+function maybeTakeover() {
+  if (takeover) return;
+  const now = Date.now();
+  const vis = visibility();
+  const gate = takeoverDue({
+    now,
+    hour: new Date(now).getHours(),
+    // host-local: the deck sits next to its human
+    day: localDay(now),
+    consent: consentCache,
+    nudge: liveNudge(now),
+    visible: vis.anyVisible,
+    lastKeypressAt,
+    lastPageChangeAt,
+    takeoverDay: lastTakeoverDay,
+    suppressedUntil: suppressedUntilLocal
+  });
+  if (!gate.due) return;
+  if (vis.visiblePage === 0) return;
+  const dev = [...keys.values()].map((k) => k.deviceId).find(Boolean);
+  if (!dev) return;
+  let base = DEFAULT_BASE, secret = null;
+  for (const k of keys.values()) {
+    if (k.settings.base) {
+      base = baseOf(k.settings);
+      secret = k.settings.key || null;
+      break;
+    }
+  }
+  fetch(base + "/api/nudge?takeover=1" + (secret ? "&key=" + encodeURIComponent(secret) : ""), { method: "POST" }).then((r) => {
+    if (!r.ok) return;
+    lastTakeoverDay = localDay(Date.now());
+    const returnPage = vis.visiblePage == null ? 1 : vis.visiblePage;
+    Promise.resolve(plugin_default.profiles.switchToProfile(dev, PROFILE_NAME, 0)).then(() => {
+      const timer = setTimeout(restoreTakeover, RESTORE_MS);
+      if (timer.unref) timer.unref();
+      takeover = { deviceId: dev, returnPage, timer };
+      log.info("takeover: navigated to the nudge; restoring to page " + returnPage + " in " + RESTORE_MS + "ms");
+    }).catch(() => {
+    });
+  }).catch(() => {
+  });
+}
+function suppressTakeovers(k) {
+  const s = k.settings;
+  const url2 = baseOf(s) + "/api/nudge?suppress=1" + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  fetch(url2, { method: "POST" }).then((r) => {
+    if (r.ok) {
+      suppressedUntilLocal = Date.now() + SUPPRESS_MS;
+      restoreTakeover();
+      k.action.showOk();
+    } else {
+      k.action.showAlert();
+    }
+  }).catch(() => k.action.showAlert());
 }
 function render(k) {
   const s = k.settings;
@@ -17713,7 +17852,8 @@ function dispatch({ id, gesture }) {
   const k = keys.get(id);
   if (!k) return;
   if (k.kind === "coach") {
-    coachNavigate(k);
+    if (gesture === "longpress") suppressTakeovers(k);
+    else coachNavigate(k);
     return;
   }
   if (gesture === "longpress") {
@@ -17758,6 +17898,7 @@ function defineAction(uuid3, kind) {
       deviceId: ev.action.device && ev.action.device.id || void 0
     });
     gest.register(ev.action.id, { doubleTap: kind !== "coach" });
+    lastPageChangeAt = Date.now();
     render(keys.get(ev.action.id));
     startClock();
     sched.forcePoll();
@@ -17774,17 +17915,20 @@ function defineAction(uuid3, kind) {
   inst.onWillDisappear = (ev) => {
     keys.delete(ev.action.id);
     gest.forget(ev.action.id);
+    lastPageChangeAt = Date.now();
   };
   inst.onKeyDown = (ev) => {
     if (!keys.has(ev.action.id)) {
       ev.action.showAlert();
       return;
     }
+    lastKeypressAt = Date.now();
     gest.down(ev.action.id, Date.now());
     armGestures();
   };
   inst.onKeyUp = (ev) => {
     if (!keys.has(ev.action.id)) return;
+    if (takeover) restoreTakeover();
     for (const g of gest.up(ev.action.id, Date.now())) dispatch(g);
     armGestures();
   };

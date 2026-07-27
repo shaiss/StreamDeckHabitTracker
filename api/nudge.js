@@ -8,6 +8,17 @@
 //                              long-press). Clears the key, records a
 //                              `dismissed` outcome distinct from `ignored`,
 //                              and buys quiet for DISMISS_QUIET_MS.
+// POST /api/nudge?suppress=1 -> the hardware kill switch (#54): long-press on
+//                              the Coach key. 24h of takeover silence,
+//                              persisted server-side so a plugin restart
+//                              cannot forget it.
+// POST /api/nudge?takeover=1 -> claim today's takeover budget (#54). The
+//                              plugin evaluates the pure gate locally
+//                              (visibility + human-priority live only there),
+//                              but the <=1/day budget and the kill switch are
+//                              re-checked HERE, atomically enough for a
+//                              single-human deck — a restarted plugin process
+//                              can never double-spend. 409 = refused.
 import {
   getNudgeState, setNudgeState, getSlots, setSlots, all, getProfile, isConfigured,
   appendDismissal, getDismissals, getSlotHistory
@@ -16,6 +27,7 @@ import { zaiKey } from '../lib/ai.js';
 import { tzHelpers } from '../lib/tz.js';
 import { nudgePass, summarize } from '../lib/coach.js';
 import { nudgeDue } from '../lib/nudge.js';
+import { SUPPRESS_MS } from '../lib/takeover.js';
 import { scoreNudges } from '../lib/scorer.js';
 
 const RUN_COOLDOWN_MS = 30_000;
@@ -59,6 +71,38 @@ export default async function handler(req, res) {
       const state = (await getNudgeState()) || {};
       await setNudgeState({ ...state, lastDismissAt: at, dismissed: (state.dismissed || 0) + 1 });
       res.status(200).json({ dismissed: true, habit: def.habit, slot: n, at });
+      return;
+    }
+
+    // The kill switch and the budget claim are writes — same HABIT_KEY gate.
+    if (q.suppress === '1' || q.takeover === '1') {
+      const secret = process.env.HABIT_KEY;
+      if (secret && q.key !== secret) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const state = (await getNudgeState()) || {};
+      const now = Date.now();
+      if (q.suppress === '1') {
+        const until = now + SUPPRESS_MS;
+        await setNudgeState({ ...state, suppressedUntil: until });
+        res.status(200).json({ suppressed: true, until });
+        return;
+      }
+      // takeover claim: budget + kill switch live here, beside the rest of
+      // the nudge state, so they survive plugin restarts.
+      if (state.suppressedUntil && now < state.suppressedUntil) {
+        res.status(409).json({ error: 'Kill switch engaged.', until: state.suppressedUntil });
+        return;
+      }
+      const profile = await getProfile().catch(() => null);
+      const day = tzHelpers(profile?.tz).day(now);
+      if (state.takeoverDay === day) {
+        res.status(409).json({ error: 'Takeover budget spent for today.' });
+        return;
+      }
+      await setNudgeState({ ...state, takeoverAt: now, takeoverDay: day });
+      res.status(200).json({ granted: true, day });
       return;
     }
 
