@@ -31,6 +31,16 @@ const HABITS = [
 ];
 const SLOT_A = { habit: 'Flow', emoji: '🌊', label: 'Flow', reason: 'deep work', assignedAt: 1 };
 const SLOT_B = { habit: 'Walk', emoji: '🚶', label: 'Walk', reason: 'afternoon', assignedAt: 2 };
+// Nudge fixtures for #35. `at` controls how far through its TTL the poke is,
+// which is what drives escalation — there is no clock to fast-forward here.
+const nudgeAt = (fraction) => {
+  const ttl = 3600_000;
+  const now = Date.now();
+  return {
+    habit: 'Water', emoji: '💧', label: 'Water?', reason: 'dry morning', nudge: true,
+    assignedAt: now - Math.round(ttl * fraction), expiresAt: now + Math.round(ttl * (1 - fraction))
+  };
+};
 
 let http, httpPort;
 let slots, today, pollUrls, logUrls, hangPolls, logNotFound;
@@ -51,6 +61,13 @@ before(async () => {
       logUrls.push(req.method + ' ' + req.url);
       res.writeHead(logNotFound ? 404 : 200, { 'Content-Type': 'text/plain' });
       res.end(logNotFound ? 'Nothing to undo' : 'ok');
+      return;
+    }
+    if (url === '/api/nudge') {
+      // A hold on a nudge is a dismissal, not an undo (#35).
+      logUrls.push(req.method + ' ' + req.url);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ dismissed: true }));
       return;
     }
     res.writeHead(404); res.end();
@@ -256,6 +273,54 @@ test('nothing to undo flashes an alert rather than an OK', async () => {
     await p.press('ctx-habit-0', 'com.shaiss.habit-tracker.habit', 700);
     await until(() => p.sent.some((m) => m.event === 'showAlert'), { label: 'the alert flash' });
     assert.ok(!p.sent.some((m) => m.event === 'showOk'), 'and never a success flash');
+  } finally { p.done(); }
+});
+
+// --- nudge escalation + dismissal (#35) ---
+
+const haloOpacity = (svg) => +svg.match(/id="h"[\s\S]*?stop-opacity="([\d.]+)"/)[1];
+
+test('a nudge key escalates as its TTL runs down', async () => {
+  const p = await boot();
+  try {
+    slots = [nudgeAt(0.05), null, null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>Water?<')), { label: 'the fresh nudge face' });
+    const fresh = haloOpacity(svgOf(p.images().findLast((m) => svgOf(m).includes('>Water?<'))));
+
+    slots = [nudgeAt(0.95), null, null, null];   // same poke, nearly expired
+    await until(() => {
+      const last = p.images().findLast((m) => svgOf(m).includes('>Water?<'));
+      return last && haloOpacity(svgOf(last)) > fresh;
+    }, { label: 'the escalated face' });
+    const late = haloOpacity(svgOf(p.images().findLast((m) => svgOf(m).includes('>Water?<'))));
+    assert.ok(late > fresh, `an ignored nudge should get louder: ${fresh} -> ${late}`);
+  } finally { p.done(); }
+});
+
+test('a hold on a nudge dismisses it — POST /api/nudge, never DELETE /api/log', async () => {
+  const p = await boot();
+  try {
+    slots = [nudgeAt(0.5), null, null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>Water?<')), { label: 'the nudge face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot', 700);
+    await until(() => logUrls.length >= 1, { label: 'the dismissal' });
+    assert.match(logUrls[0], /^POST \/api\/nudge\?dismiss=1&slot=1\b/);
+    assert.ok(!logUrls.some((u) => u.startsWith('DELETE')), 'a poke has no log entry to undo');
+  } finally { p.done(); }
+});
+
+test('a nudge key registers no double-tap, so its taps stay immediate', async () => {
+  const p = await boot();
+  try {
+    slots = [nudgeAt(0.5), null, null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>Water?<')), { label: 'the nudge face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => logUrls.length >= 2, { label: 'two independent taps' });
+    assert.equal(logUrls.length, 2, 'two quick taps on a nudge are two logs, not one double-tap');
+    assert.ok(!logUrls.some((u) => u.includes('intensity=')), 'and neither carries an intensity');
   } finally { p.done(); }
 });
 

@@ -28,13 +28,23 @@ function hslToHex(h, s, l) {
 export function face(emoji, label, hue, badge, sat = 72, state = null) {
   const done = !!(state && state.doneToday);
   if (done) sat = Math.round(sat * 0.55); // dim-when-done
+  // Nudge escalation (#35): 0 when the poke lands, 1 as it nears expiry. The
+  // halo brightens and the border firms up, so an ignored nudge gets harder to
+  // keep ignoring rather than just quietly vanishing. Every other face passes
+  // no urgency and renders exactly as before.
+  const urg = state && typeof state.urgency === 'number'
+    ? Math.max(0, Math.min(1, state.urgency))
+    : 0;
   const S = 144;
   const raw = String(label);
   const lbl = esc(raw.slice(0, 12));
   const lblSize = raw.length > 8 ? 17 : 20;
-  const haloHi = hslToHex(hue, sat, 58);
-  const haloLo = hslToHex(hue, sat, 45);
-  const ring = hslToHex(hue, sat, 65);
+  const haloHi = hslToHex(hue, sat, 58 + 12 * urg);
+  const haloLo = hslToHex(hue, sat, 45 + 8 * urg);
+  const ring = hslToHex(hue, sat, 65 + 10 * urg);
+  const haloOpacity = (0.62 + 0.33 * urg).toFixed(2);
+  const ringOpacity = (0.3 + 0.5 * urg).toFixed(2);
+  const ringWidth = (1.5 + 1.5 * urg).toFixed(1);
   const badgeFill = hslToHex(hue, 80, 80);
 
   // Streak ring: faint full-circle track, bright arc from 12 o'clock whose
@@ -82,14 +92,14 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
     `<stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/>` +
     `</linearGradient>` +
     `<radialGradient id="h" cx="0.5" cy="0.36" r="0.62">` +
-    `<stop offset="0" stop-color="${haloHi}" stop-opacity="0.62"/>` +
+    `<stop offset="0" stop-color="${haloHi}" stop-opacity="${haloOpacity}"/>` +
     `<stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/>` +
     `<stop offset="1" stop-color="${haloLo}" stop-opacity="0"/>` +
     `</radialGradient>` +
     `</defs>` +
     `<rect width="${S}" height="${S}" fill="url(#b)"/>` +
     `<rect width="${S}" height="${S}" fill="url(#h)"/>` +
-    `<rect x="6" y="6" width="${S - 12}" height="${S - 12}" rx="17" fill="none" stroke="${ring}" stroke-opacity="0.30" stroke-width="1.5"/>` +
+    `<rect x="6" y="6" width="${S - 12}" height="${S - 12}" rx="17" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` +
     streakRing +
     `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" ` +
     `font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc(emoji)}</text>` +

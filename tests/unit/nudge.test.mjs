@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   nudgeDue, pickNudgeSlot, NUDGE_PROMPT,
-  MIN_GAP_MS, RECENT_TAP_MS, MIN_DAYS_OF_DATA, QUIET_END_HOUR, QUIET_START_HOUR
+  MIN_GAP_MS, RECENT_TAP_MS, MIN_DAYS_OF_DATA, QUIET_END_HOUR, QUIET_START_HOUR,
+  DISMISS_QUIET_MS, nudgeUrgency, urgencyStep, URGENCY_STEPS
 } from '../../lib/nudge.js';
 
 const NOW = 1_800_000_000_000;
@@ -56,4 +58,56 @@ test('prompt is biased to silence and states the full contract', () => {
   assert.match(p, /MAY target a fixed habit/);
   assert.match(p, /ONLY JSON/);
   assert.match(p, /It is 14:00/);
+});
+
+// --- escalation + dismissal (#35) ---
+
+test('an explicit dismissal buys more quiet than the ordinary gap', () => {
+  // Being told "not today" and returning inside two hours is exactly the
+  // badgering the dismissal exists to stop, so it must outrank MIN_GAP_MS.
+  assert.ok(DISMISS_QUIET_MS > MIN_GAP_MS, 'a dismissal must be stronger than a plain gap');
+  assert.equal(nudgeDue({ ...OK, lastDismissAt: NOW - DISMISS_QUIET_MS + 1000 }).reason, 'dismissed recently');
+  assert.equal(nudgeDue({ ...OK, lastDismissAt: NOW - DISMISS_QUIET_MS - 1000 }).due, true);
+  assert.equal(nudgeDue({ ...OK, lastDismissAt: 0 }).due, true, 'never dismissed ≠ just dismissed');
+});
+
+test('urgency runs 0 -> 1 across the nudge lifetime', () => {
+  const def = { nudge: true, assignedAt: NOW, expiresAt: NOW + 3600_000 };
+  assert.equal(nudgeUrgency(def, NOW), 0, 'a fresh poke is not insistent');
+  assert.equal(nudgeUrgency(def, NOW + 1800_000), 0.5);
+  assert.equal(nudgeUrgency(def, NOW + 3600_000), 1, 'loudest right at expiry');
+  assert.equal(nudgeUrgency(def, NOW + 9999_000), 1, 'and never past it');
+  assert.equal(nudgeUrgency(def, NOW - 1000), 0, 'nor before it landed');
+});
+
+test('only expiring nudges escalate', () => {
+  assert.equal(nudgeUrgency({ nudge: true, assignedAt: NOW }, NOW + 1000), 0, 'no expiry, no deadline to run down');
+  assert.equal(nudgeUrgency({ assignedAt: NOW, expiresAt: NOW + 1000 }, NOW + 500), 0, 'a suggestion is not a nudge');
+  assert.equal(nudgeUrgency(null, NOW), 0);
+  assert.equal(nudgeUrgency({ nudge: true, assignedAt: NOW, expiresAt: NOW }, NOW), 0, 'zero-length window');
+});
+
+test('urgency is quantized so faces repaint on visible change, not every tick', () => {
+  const def = { nudge: true, assignedAt: NOW, expiresAt: NOW + URGENCY_STEPS * 60_000 };
+  assert.equal(urgencyStep(def, NOW), 0);
+  assert.equal(urgencyStep(def, NOW + 1000), 0, 'a second later is not a repaint');
+  assert.equal(urgencyStep(def, NOW + 60_000), 1);
+  assert.equal(urgencyStep(def, NOW + URGENCY_STEPS * 60_000), URGENCY_STEPS);
+});
+
+test('the nudge prompt tells the coach dismissals exist and must be respected', () => {
+  const p = NUDGE_PROMPT({ localHour: 14, human: { timezone: 'America/New_York' } });
+  assert.match(p, /dismissedToday/);
+  assert.match(p, /nudgeRecord/);
+});
+
+test('the virtual deck embeds the identical urgency curve (drift guard)', () => {
+  // deck.html has no build step and carries its own copy. A virtual deck that
+  // escalated on a different curve would be a lying preview of the hardware.
+  const src = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
+  assert.match(src, /function urgencyOf\(def\)/, 'the curve exists');
+  for (const marker of ['def.expiresAt - def.assignedAt', 'Date.now() - def.assignedAt', 'Math.max(0, Math.min(1']) {
+    assert.ok(src.includes(marker), 'deck.html missing urgency marker: ' + marker);
+  }
+  assert.match(src, /--urg/, 'and drives the face from it');
 });

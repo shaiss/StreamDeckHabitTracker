@@ -17289,13 +17289,17 @@ function hslToHex(h, s, l) {
 function face(emoji3, label, hue, badge, sat = 72, state = null) {
   const done = !!(state && state.doneToday);
   if (done) sat = Math.round(sat * 0.55);
+  const urg = state && typeof state.urgency === "number" ? Math.max(0, Math.min(1, state.urgency)) : 0;
   const S = 144;
   const raw = String(label);
   const lbl = esc2(raw.slice(0, 12));
   const lblSize = raw.length > 8 ? 17 : 20;
-  const haloHi = hslToHex(hue, sat, 58);
-  const haloLo = hslToHex(hue, sat, 45);
-  const ring = hslToHex(hue, sat, 65);
+  const haloHi = hslToHex(hue, sat, 58 + 12 * urg);
+  const haloLo = hslToHex(hue, sat, 45 + 8 * urg);
+  const ring = hslToHex(hue, sat, 65 + 10 * urg);
+  const haloOpacity = (0.62 + 0.33 * urg).toFixed(2);
+  const ringOpacity = (0.3 + 0.5 * urg).toFixed(2);
+  const ringWidth = (1.5 + 1.5 * urg).toFixed(1);
   const badgeFill = hslToHex(hue, 80, 80);
   let streakRing = "";
   if (state && typeof state.ringFill === "number") {
@@ -17320,7 +17324,7 @@ function face(emoji3, label, hue, badge, sat = 72, state = null) {
       }
     }
   }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="${haloHi}" stop-opacity="0.62"/><stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/><stop offset="1" stop-color="${haloLo}" stop-opacity="0"/></radialGradient></defs><rect width="${S}" height="${S}" fill="url(#b)"/><rect width="${S}" height="${S}" fill="url(#h)"/><rect x="6" y="6" width="${S - 12}" height="${S - 12}" rx="17" fill="none" stroke="${ring}" stroke-opacity="0.30" stroke-width="1.5"/>` + streakRing + `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc2(emoji3)}</text><text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#000000" fill-opacity="0.55">${lbl}</text><text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#e9edf4">${lbl}</text>` + tally + // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="${haloHi}" stop-opacity="${haloOpacity}"/><stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/><stop offset="1" stop-color="${haloLo}" stop-opacity="0"/></radialGradient></defs><rect width="${S}" height="${S}" fill="url(#b)"/><rect width="${S}" height="${S}" fill="url(#h)"/><rect x="6" y="6" width="${S - 12}" height="${S - 12}" rx="17" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` + streakRing + `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc2(emoji3)}</text><text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#000000" fill-opacity="0.55">${lbl}</text><text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#e9edf4">${lbl}</text>` + tally + // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
   // the only corner mark a habit face ever shows.
   (done ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="12" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.95">\u2713</text>` : badge ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="11" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.9">${esc2(badge)}</text>` : "") + `</svg>`;
   return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
@@ -17448,6 +17452,23 @@ function createGestures({ longPressMs = LONG_PRESS_MS, doubleTapMs = DOUBLE_TAP_
   };
 }
 
+// lib/nudge.js
+var CHECK_EVERY_MS = 20 * 6e4;
+var MIN_GAP_MS = 2 * 36e5;
+var RECENT_TAP_MS = 45 * 6e4;
+var NUDGE_TTL_MS = 60 * 6e4;
+var DISMISS_QUIET_MS = 4 * 36e5;
+function nudgeUrgency(def, now = Date.now()) {
+  if (!def || !def.nudge || !def.expiresAt || !def.assignedAt) return 0;
+  const span = def.expiresAt - def.assignedAt;
+  if (span <= 0) return 0;
+  return Math.max(0, Math.min(1, (now - def.assignedAt) / span));
+}
+var URGENCY_STEPS = 8;
+function urgencyStep(def, now = Date.now()) {
+  return Math.round(nudgeUrgency(def, now) * URGENCY_STEPS);
+}
+
 // streamdeck-plugin/src/plugin.mjs
 var POLL_MS = +(process.env.HT_POLL_MS || 15e3);
 var TICK_MS = +(process.env.HT_TICK_MS || 3e3);
@@ -17456,7 +17477,7 @@ var RECHECK_MS = (process.env.HT_RECHECK_MS || "2000,5000,9000,15000,25000").spl
 var VIOLET_HUE = 262;
 var NUDGE_HUE = 38;
 var SILVER_HUE = 222;
-var VERSION = "2.2.0";
+var VERSION = "2.3.0";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -17492,6 +17513,20 @@ function pump() {
     inflightCtrl = null;
   }
   if (poll) refreshSlots(now);
+  escalate(now);
+}
+function escalate(now) {
+  if (!slotCache) return;
+  for (const k of keys.values()) {
+    if (k.kind !== "slot" || !k.isNudge) continue;
+    const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
+    if (!def || !def.nudge) continue;
+    if (urgencyStep(def, now) === k.urgencyStep) continue;
+    try {
+      render(k);
+    } catch {
+    }
+  }
 }
 function refreshSlots(now) {
   let base = null, secret = null;
@@ -17547,8 +17582,19 @@ function render(k) {
   }
   const n = parseInt(s.slot, 10) || 1;
   const def = slotCache ? slotCache[n - 1] : null;
+  const wasNudge = k.isNudge;
+  k.isNudge = !!(def && def.nudge);
+  if (k.isNudge !== wasNudge) gest.register(k.action.id, { doubleTap: !k.isNudge });
   if (def && def.nudge) {
-    k.action.setImage(face(def.emoji || "\u2728", def.label || def.habit, NUDGE_HUE, "\u2757 " + n, 90));
+    k.urgencyStep = urgencyStep(def);
+    k.action.setImage(face(
+      def.emoji || "\u2728",
+      def.label || def.habit,
+      NUDGE_HUE,
+      "\u2757 " + n,
+      90,
+      { urgency: nudgeUrgency(def) }
+    ));
   } else if (def) {
     k.action.setImage(face(def.emoji || "\u2728", def.label || def.habit, VIOLET_HUE, "AI " + n));
   } else {
@@ -17590,10 +17636,27 @@ function undo(k) {
     }
   }).catch(() => k.action.showAlert());
 }
+function dismissNudge(k) {
+  const s = k.settings;
+  if (!s.base) {
+    k.action.showAlert();
+    return;
+  }
+  const url2 = s.base.replace(/\/+$/, "") + "/api/nudge?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  fetch(url2, { method: "POST" }).then((r) => {
+    if (r.ok) {
+      k.action.showOk();
+      sched.forcePoll();
+      pump();
+    } else {
+      k.action.showAlert();
+    }
+  }).catch(() => k.action.showAlert());
+}
 function dispatch({ id, gesture }) {
   const k = keys.get(id);
   if (!k) return;
-  if (gesture === "longpress") undo(k);
+  if (gesture === "longpress") (k.isNudge ? dismissNudge : undo)(k);
   else if (gesture === "doubletap") tap(k, { intensity: "high" });
   else tap(k);
 }
