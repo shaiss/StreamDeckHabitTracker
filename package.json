@@ -1,7 +1,7 @@
 {
   "name": "streamdeck-habit-tracker",
   "version": "1.0.0",
-  "description": "Tap a Stream Deck key -> a timestamped row lands in your Google Sheet.",
+  "description": "Tap a Stream Deck key -> a timestamped tap is logged in the cloud, and an AI coach decides what to ask you next.",
   "type": "module",
   "scripts": {
     "generate": "node tools/generate.mjs",
