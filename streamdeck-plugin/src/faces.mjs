@@ -47,6 +47,11 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
   const ringWidth = (1.5 + 1.5 * urg).toFixed(1);
   const badgeFill = hslToHex(hue, 80, 80);
 
+  // Shared niche geometry: the hairline border and the progress fill trace the
+  // exact same rounded rect, so they read as one frame — keep them off the same
+  // constants rather than two copies of the literals that could drift (#64 review).
+  const frameR = 17, frameX = 6, frameY = 6, frameW = S - 12, frameH = S - 12;
+
   // Progress frame (#64): the key's OWN rounded-rect border fills, instead of a
   // separate circle floating over the square (which read as pasted-on because
   // its curve never met the key edges). A dim full-perimeter track plus a bright
@@ -60,7 +65,7 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
   // rounded-rect perimeter is 2(w+h) − 8r + 2πr (four quarter-corners = 2πr).
   let progressFrame = '';
   if (state && typeof state.ringFill === 'number') {
-    const r = 17, x = 6, y = 6, w = S - 12, h = S - 12, cx = x + w / 2;
+    const r = frameR, x = frameX, y = frameY, w = frameW, h = frameH, cx = x + w / 2;
     const framePath =
       `M${cx} ${y} H${x + w - r} A${r} ${r} 0 0 1 ${x + w} ${y + r} ` +
       `V${y + h - r} A${r} ${r} 0 0 1 ${x + w - r} ${y + h} ` +
@@ -113,7 +118,7 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
     `</defs>` +
     `<rect width="${S}" height="${S}" fill="url(#b)"/>` +
     `<rect width="${S}" height="${S}" fill="url(#h)"/>` +
-    `<rect x="6" y="6" width="${S - 12}" height="${S - 12}" rx="17" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` +
+    `<rect x="${frameX}" y="${frameY}" width="${frameW}" height="${frameH}" rx="${frameR}" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` +
     progressFrame +
     `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" ` +
     `font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc(emoji)}</text>` +

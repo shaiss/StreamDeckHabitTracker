@@ -80,6 +80,9 @@ test('living faces: the lit border length grows with ringFill, up to the perimet
   };
   const [a, b, c] = [0.25, 0.5, 1].map(lit);
   assert.ok(a < b && b < c, `lit length rises monotonically: ${a},${b},${c}`);
+  // Overshoot (repeatable habits can exceed their goal) clamps to the full
+  // perimeter via Math.min(1, ringFill) — never a longer-than-the-frame dash.
+  assert.equal(lit(1.5), c, 'ringFill past the goal is clamped to the full perimeter');
   // Full fill ≈ the exact rounded-rect perimeter 2(w+h) − 8r + 2πr, w=h=132, r=17.
   const P = 2 * (132 + 132) - 8 * 17 + 2 * Math.PI * 17;
   assert.ok(Math.abs(c - P) < 0.5, `full fill ≈ perimeter ${P.toFixed(2)}, got ${c}`);
