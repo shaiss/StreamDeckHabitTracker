@@ -26,7 +26,9 @@ const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript
 const IMG = '<img src=x>';          // 11 chars — fits label's 12-char clamp
 const SVG = '<svg onload';          // an unterminated tag still breaks out
 const SCRIPT = '<script>window.PWN=1</script>';
-const BOLD = '<b>bold</b>';
+// carries a unique id so a parsed one is unambiguously OURS — the dashboard
+// (deck heartbeat) and habits (the .note block) both render legitimate <b>.
+const BOLD = '<b id=pwnb>bold</b>';
 
 const EVIL_SLOT = {
   habit: 'Evil', emoji: IMG, label: SVG, reason: SCRIPT,
@@ -99,10 +101,14 @@ before(async () => {
 
 after(async () => { await browser?.close(); server?.close(); });
 
-// Counts only nodes the HOSTILE payloads could have created, and only inside
-// the container the page renders model output into — every page ships its own
-// inline <script> and the dashboard renders a legitimate <b> in the deck
-// heartbeat line, both of which would otherwise read as false positives.
+// Counting nodes by tag is the wrong instrument: the pages legitimately create
+// <img> (deck key icons) and <b> (the deck heartbeat line), and which of those
+// exist at probe time depends on icon load timing and Chromium version.
+//
+// The precise, environment-independent question is whether the payload was
+// PARSED or ESCAPED. If it was escaped it survives in innerHTML as `&lt;…`; if
+// it was parsed the browser re-serializes it as a real tag. So assert on the
+// serialized markup of the container, and report what was found on failure.
 async function probe(path, root) {
   const page = await browser.newPage();
   const errors = [];
@@ -111,9 +117,22 @@ async function probe(path, root) {
   await page.waitForTimeout(900);
   const result = await page.evaluate((sel) => {
     const scope = document.querySelector(sel);
+    if (!scope) return { missing: true };
+    const html = scope.innerHTML;
+    // Tags that can only exist here if one of our payloads was parsed.
+    const parsed = [...scope.querySelectorAll('img, svg, script, #pwnb')]
+      .filter((el) => {
+        if (el.tagName === 'IMG') return el.getAttribute('src') === 'x';  // icons are /icons/…
+        if (el.tagName === 'SCRIPT') return !el.src;                      // page scripts sit outside
+        return true;                          // an svg, or the uniquely-tagged <b>, is ours
+      })
+      .map((el) => el.outerHTML.slice(0, 120));
     return {
       pwned: !!window.PWN,
-      injected: scope ? scope.querySelectorAll('img[src="x"], svg, script').length : -1,
+      parsed,
+      // proof the payloads actually reached this container at all — a probe
+      // that renders nothing would otherwise "pass" vacuously
+      rendered: html.includes('&lt;'),
       text: document.body.innerText
     };
   }, root);
@@ -121,33 +140,32 @@ async function probe(path, root) {
   return { ...result, errors };
 }
 
+function assertInert(r, what) {
+  assert.equal(r.missing, undefined, `${what}: the content container was not found — the probe checked nothing`);
+  assert.equal(r.pwned, false, `${what}: a <script> from the model executed`);
+  assert.deepEqual(r.parsed, [], `${what}: hostile markup was parsed into real nodes`);
+  assert.equal(r.rendered, true, `${what}: no escaped payload reached the container — the probe proved nothing`);
+}
+
 test('the dashboard renders hostile coach output as inert text', async () => {
   const r = await probe('/', '#app');
-  assert.equal(r.pwned, false, 'a <script> from the model executed');
-  assert.equal(r.injected, 0, 'hostile markup created real DOM nodes');
-  assert.notEqual(r.injected, -1, 'the content container was not found — the probe is checking nothing');
+  assertInert(r, 'dashboard');
   assert.ok(r.text.includes(IMG), 'the hostile emoji should survive as visible text');
   assert.ok(r.text.includes(SVG), 'the hostile label should survive as visible text');
 });
 
 test('the coach mind renders hostile memory and slots as inert text', async () => {
   const r = await probe('/mind.html', '.wrap');
-  assert.equal(r.pwned, false, 'a <script> from the model executed');
-  assert.equal(r.injected, 0, 'hostile markup created real DOM nodes');
-  assert.notEqual(r.injected, -1, 'the content container was not found — the probe is checking nothing');
+  assertInert(r, 'mind');
   assert.ok(r.text.includes(IMG) || r.text.includes(SVG), 'hostile strings should be visible as text');
 });
 
 test('the virtual deck renders hostile key faces as inert text', async () => {
   const r = await probe('/deck.html', '#face');
-  assert.equal(r.pwned, false, 'a <script> from the model executed');
-  assert.equal(r.injected, 0, 'hostile markup created real DOM nodes');
-  assert.notEqual(r.injected, -1, 'the content container was not found — the probe is checking nothing');
+  assertInert(r, 'deck');
 });
 
 test('the habit manager renders a hostile roster as inert text', async () => {
   const r = await probe('/habits.html', '.wrap');
-  assert.equal(r.pwned, false, 'a <script> from the model executed');
-  assert.equal(r.injected, 0, 'hostile markup created real DOM nodes');
-  assert.notEqual(r.injected, -1, 'the content container was not found — the probe is checking nothing');
+  assertInert(r, 'habits');
 });
