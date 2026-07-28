@@ -145,6 +145,10 @@ async function probe(path, root) {
   return { ...result, errors };
 }
 
+// The four assertions every page owes. Kept together so a new page's test is
+// one line and cannot accidentally check less than the others — including the
+// vacuity guard, which is the one people forget: a probe that renders nothing
+// passes every other check trivially.
 function assertInert(r, what) {
   assert.equal(r.missing, undefined, `${what}: the content container was not found — the probe checked nothing`);
   assert.equal(r.pwned, false, `${what}: a <script> from the model executed`);
