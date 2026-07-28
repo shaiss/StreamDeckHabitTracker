@@ -268,7 +268,7 @@
       const trackLine = tr && tr.offered > 0
         ? `<div class="ai-note" style="margin:0 0 var(--s3)">Track record: ${tr.landed}/${tr.offered} suggested keys tapped (${Math.round(tr.hitRate*100)}%) — the coach sees this and adapts.</div>`
         : '';
-      el.innerHTML = `<div class="ai-head"><h2 class="section-h">AI Coach${s?.model ? ` <span class="muted" style="text-transform:none;letter-spacing:0">· ${s.model}</span>` : ''}</h2>${btn}</div>
+      el.innerHTML = `<div class="ai-head"><h2 class="section-h">AI Coach${s?.model ? ` <span class="muted" style="text-transform:none;letter-spacing:0">· ${esc(s.model)}</span>` : ''}</h2>${btn}</div>
         ${insight}${trackLine}<div class="slot-grid">${cards}</div>${deckLine(s?.deck)}${note}<div class="ai-err" id="aiErr"></div>`;
       document.getElementById('suggestBtn')?.addEventListener('click', suggest);
     }
