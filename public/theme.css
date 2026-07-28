@@ -1,7 +1,14 @@
-/* Nocturne Ritual — design tokens (see design/PHILOSOPHY.md).
+/* Nocturne Ritual — design tokens + the shared class vocabulary.
+   Why: design/PHILOSOPHY.md.  How: design/WEB-UX.md (the operational guide —
+   read it before adding a rule here or a hex anywhere).
+
    One source of truth for every page + nav. Tokens live on <body> so
    body[data-nav="dark"] can commit a page to night deliberately
-   (deck, mind) while other pages follow the system theme. */
+   (deck, mind) while other pages follow the system theme.
+
+   Contrast notes are measured against --card unless stated. Anything that
+   carries text is held to 4.5:1; a token that would fail on a white card
+   gets a light-mode value that flips direction rather than a second token. */
 
 body {
   /* night (default) */
@@ -14,14 +21,23 @@ body {
   --ink2: #b9c0cc;
   --muted: #8f97a6;
   --accent: #7fa9ff;        /* links & focus */
-  --violet: #8b5cf6;        /* reserved: the coach speaking */
+  --violet: #8b5cf6;        /* reserved: the coach speaking — FILLS ONLY (4.3:1) */
   --violet-deep: #5b21b6;
+  --violet-ink: #a78bfa;    /* the coach speaking, as TEXT — 6.68:1 vs --card */
+  --on-violet: #ffffff;     /* the only ink allowed on --grad-coach */
+  --amber: #f59e0b;         /* the coach LOUDER: nudge + hardware attention (hue 38) — 8.47:1 */
   --series: #3987e5;        /* data — validated vs --card (dark) */
-  --good: #37c978;
-  --bad: #e05252;
+  --good: #37c978;          /* state: yes, live, done — 8.48:1 */
+  --bad: #e05252;           /* state: no, error, destructive — 4.76:1 */
 
-  --r-lg: 16px;   /* niches: cards, tiles */
-  --r-md: 10px;   /* controls */
+  /* composed values — a recipe repeated more than once becomes a token */
+  --grad-coach: linear-gradient(135deg, var(--violet), var(--violet-deep));
+  --chrome: rgba(11,13,20,.72);        /* sticky bar under backdrop-filter: blur(12px) */
+  --shadow-pop: 0 6px 18px rgba(0,0,0,.45);  /* the ONE elevation step (tooltips, popovers) */
+
+  --r-lg: 16px;   /* niches: cards, tiles, panels */
+  --r-md: 10px;   /* controls: buttons, nav links */
+  --r-sm: 8px;    /* chips, badges, inputs, code pills */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -44,18 +60,38 @@ body {
     --muted: #6a7280;
     --accent: #2563eb;
     --series: #2a78d6;      /* data — validated vs --card (light) */
-    --good: #159a5a;
+    --violet-ink: #6d28d9;  /* inverts: the night value is 2.7:1 on white; this is 7.10:1 */
+    --amber: #b45309;       /* inverts: #f59e0b is 2.2:1 on white; this is 5.02:1 */
+    --good: #0f7a46;        /* darkened from #159a5a (3.6:1) — it carries 12px text */
+    --bad: #b91c1c;         /* was never overridden; #e05252 is 3.8:1 on white, this is 6.5:1 */
+    --chrome: rgba(244,245,248,.82);
+    --shadow-pop: 0 6px 18px rgba(16,20,32,.14);
   }
 }
 
-/* ---- shared vocabulary ---------------------------------------------- */
+/* ---- shared vocabulary ----------------------------------------------
+   Everything below is additive and low-specificity on purpose: a page's
+   own <style> block loads after this file, so a page-local rule always
+   wins. Adopt a class instead of re-declaring it; see design/WEB-UX.md §6. */
 
-.card, .niche {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
+*, *::before, *::after { box-sizing: border-box; }
+
+/* page frame — one measure per kind of content, capped and centered */
+.wrap { max-width: 860px; margin: 0 auto; padding: var(--s6) var(--s5) calc(var(--s6) * 2); }
+.wrap.narrow { max-width: 760px; }   /* a form */
+.wrap.wide   { max-width: 900px; }   /* the coach's prose */
+
+/* page header — title left, live status right, both on the same baseline */
+header, .page-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s5);
 }
+h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -.01em; }
+.sub  { color: var(--muted); font-size: 13px; }
+.hint { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.muted { color: var(--muted); }
 
+/* the museum placard — names an artifact, never competes with it */
 .section-h {
   font-size: 13px;
   font-weight: 600;
@@ -65,21 +101,100 @@ body {
   margin: 0 0 var(--s3);
 }
 
+/* the niche: background + hairline + radius, always all three */
+.card, .niche {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--s4);
+}
+.card.flush, .niche.flush { padding: 0; overflow: hidden; }   /* a niche that holds rows */
+
+/* the grid of identical niches — only the minmax changes with content weight */
+.grid { display: grid; gap: var(--s3); grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.grid.prose { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+
+/* an empty slot: dashed, centered, muted — "something belongs here" */
+.empty { color: var(--muted); font-size: 13px; padding: var(--s5) var(--s4); }
+.card.empty, .niche.empty {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  min-height: 96px; border-style: dashed;
+}
+
+/* controls */
 .btn {
   border: 0;
   border-radius: var(--r-md);
-  padding: 9px 16px;
+  padding: var(--s2) var(--s4);
   font: 600 13px/1 var(--font);
   cursor: pointer;
-  background: linear-gradient(135deg, var(--violet), var(--violet-deep));
-  color: #fff;
+  background: var(--grad-coach);
+  color: var(--on-violet);
 }
 .btn:disabled { opacity: .55; cursor: default; }
 .btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
 
 .linklike {
   border: 0; background: transparent; color: var(--accent);
-  font: 500 12.5px/1 var(--font); cursor: pointer; padding: 4px 6px;
+  font: 500 12.5px/1 var(--font); cursor: pointer; padding: var(--s1) var(--s2);
 }
 
+/* form field — .field on the control, .field-label on its <label>.
+   NOT named .label: habits.html already uses .label for the key-label input. */
+.field {
+  width: 100%; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: var(--s2) var(--s3); font: inherit; font-size: 14px;
+}
+.field[readonly] { opacity: .6; cursor: not-allowed; }
+.field-label { display: block; font-size: 12px; color: var(--muted); margin: var(--s3) 0 var(--s1); }
+
+/* micro-labels. .chip carries a surface; .tag is type only. */
+.chip {
+  display: inline-block;
+  font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  padding: var(--s1) var(--s2); border-radius: var(--r-sm);
+}
+.chip.coach { color: var(--on-violet); background: var(--grad-coach); }
+.chip.quiet { color: var(--muted); border: 1px solid var(--line); }
+.tag { font-size: 11px; font-weight: 700; letter-spacing: .05em; color: var(--violet-ink); }
+.tag.nudge { color: var(--amber); }
+
+/* status line — one element, one sentence, no toast */
+.status { font-size: 13px; color: var(--muted); }
+.status.err { color: var(--bad); white-space: pre-wrap; }
+
+/* note / callout — the product explaining itself, quietly */
+.note {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: var(--s4); color: var(--ink2); font-size: 13.5px; line-height: 1.6;
+}
+.note b { color: var(--fg); font-weight: 600; }
+
+/* the only floating surface in the system */
+.tip {
+  position: fixed; z-index: 99; pointer-events: none; display: none;
+  background: var(--card2); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: var(--s2) var(--s3); font-size: 12.5px; box-shadow: var(--shadow-pop);
+}
+.tip b { font-size: 14px; font-variant-numeric: tabular-nums; }
+
+/* data table — the fallback view of a chart; figures right-aligned and tabular */
+.data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.data-table td, .data-table th {
+  padding: var(--s2) var(--s3); border-top: 1px solid var(--line); text-align: left;
+}
+.data-table th {
+  color: var(--muted); font-weight: 600; font-size: 11.5px;
+  text-transform: uppercase; letter-spacing: .05em; border-top: 0;
+}
+.data-table td:last-child, .data-table th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
 a { color: var(--accent); }
+
+/* focus is never invisible. :where() = zero specificity, so any page rule
+   (deck's .k, the dashboard's .bar-col) still wins. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
