@@ -123,7 +123,7 @@
         return `FORMING · landed ${r.landed}/${r.offered}`;
       };
       document.getElementById('ints').innerHTML = (m.slots||[]).map((d,i) => d
-        ? `<div class="card int"><div class="head"><span class="em">${d.emoji}</span><span class="nm">${esc(d.label||d.habit)}</span></div>
+        ? `<div class="card int"><div class="head"><span class="em">${esc(d.emoji)}</span><span class="nm">${esc(d.label||d.habit)}</span></div>
              <div class="why">${esc(d.reason||'')}</div><div class="tag conf">${conf(d.habit)}</div></div>`
         : `<div class="card int empty">quiet corner ${i+1}</div>`
       ).join('');

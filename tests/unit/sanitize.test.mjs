@@ -112,3 +112,37 @@ test('assignedAt is always Date.now()', () => {
   const after = Date.now();
   assert.ok(out[0].assignedAt >= before && out[0].assignedAt <= after);
 });
+
+// --- the render boundary -------------------------------------------------
+// sanitize() length-clamps emoji (8) and label (12) but does NOT strip markup:
+// only `habit` is character-restricted. So the pages are the last line of
+// defence, and `<img src=x>` fits in 11 characters. This guards the render
+// sites the way tests/unit/hue.test.mjs guards the hue formula — as text, so
+// a future edit that drops an esc() fails here rather than in a browser.
+test('sanitize lets markup through emoji and label — the pages must escape', () => {
+  const [def] = sanitize([{ habit: 'Evil', emoji: '<img src=x>', label: '<svg onload' }]);
+  assert.equal(def.habit, 'Evil', 'habit is character-restricted');
+  assert.ok(def.emoji.includes('<'), 'emoji is only length-clamped, so it can carry markup');
+  assert.ok(def.label.includes('<'), 'label is only length-clamped, so it can carry markup');
+});
+
+test('every page escapes the model-supplied strings it renders', async () => {
+  const { readFileSync } = await import('node:fs');
+  const read = (f) => readFileSync(new URL('../../' + f, import.meta.url), 'utf8');
+  // A model-supplied field interpolated into innerHTML without esc() is the bug.
+  const RAW = [
+    /\$\{d\.emoji\}/, /\$\{d\.label\}/, /\$\{d\.habit\}/,
+    /\$\{lastInsight\.date/, /\+ def\.emoji \+/, /\+ def\.label \+/
+  ];
+  for (const f of ['public/index.html', 'public/mind.html', 'public/deck.html']) {
+    for (const line of read(f).split('\n')) {
+      // Only lines that actually BUILD markup can inject. Assigning a DOM
+      // property (el.title = def.emoji + …) never parses HTML, so it is safe
+      // and would otherwise be a false positive.
+      if (!/["'`]\s*<\/?[a-z]/i.test(line)) continue;
+      for (const re of RAW) {
+        assert.ok(!re.test(line), `${f}: ${re} is interpolated raw into markup — wrap it in esc()\n  ${line.trim()}`);
+      }
+    }
+  }
+});

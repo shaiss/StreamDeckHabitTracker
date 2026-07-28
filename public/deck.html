@@ -305,7 +305,7 @@
         const badge = def.qid ? '❓ ' + n : def.nudge ? '❗ ' + n : 'AI ' + n;
         const style = def.nudge ? ' style="--urg:' + urgencyOf(def).toFixed(3) + '"' : '';
         return '<span class="facecss ' + cls + '"' + style + '><span class="badge">' + badge + '</span>' +
-          '<span class="em">' + def.emoji + '</span><span class="lb">' + esc(def.label || def.habit) + '</span></span>' +
+          '<span class="em">' + esc(def.emoji) + '</span><span class="lb">' + esc(def.label || def.habit) + '</span></span>' +
           '<span class="glass"></span><span class="flash"></span>';
       }
       return '<span class="facecss emptyface"><span class="badge">AI</span>' +
@@ -344,7 +344,7 @@
         }
       }
       return '<span class="facecss habitface ' + (done ? 'dim' : '') + '" style="--hue:' + hue + '">' +
-        extras + '<span class="em">' + (def.emoji || '•') + '</span>' +
+        extras + '<span class="em">' + esc(def.emoji || '•') + '</span>' +
         '<span class="lb">' + esc(def.label || def.name) + '</span></span>' +
         '<span class="glass"></span><span class="flash"></span>';
     }

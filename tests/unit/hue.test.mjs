@@ -33,10 +33,13 @@ test('plugin and virtual deck embed the identical FNV-1a formula (drift guard)',
 
   for (const f of ['public/deck.html', 'public/mind.html']) {
     const src = readFileSync(new URL('../../' + f, import.meta.url), 'utf8');
-    const fn = src.match(/function hueFor\s*\([\s\S]*?\n {4}}/);
-    assert.ok(fn, `${f} must define hueFor()`);
+    // Fail closed: match globally and require EXACTLY one definition. A second
+    // copy — even a stale one left in a comment — would mean this guard could
+    // validate one function while the page executes another.
+    const fns = [...src.matchAll(/function hueFor\s*\([\s\S]*?\n {4}}/g)];
+    assert.equal(fns.length, 1, `${f} must define hueFor() exactly once (found ${fns.length})`);
     // eslint-disable-next-line no-new-func -- evaluating the page's own copy is the point
-    const embedded = new Function(`${fn[0]}; return hueFor;`)();
+    const embedded = new Function(`${fns[0][0]}; return hueFor;`)();
     for (const n of NAMES) {
       assert.equal(embedded(n), hueFor(n), `${f} hueFor(${JSON.stringify(n)}) forked from lib-hue.mjs`);
     }

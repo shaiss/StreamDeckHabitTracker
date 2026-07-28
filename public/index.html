@@ -253,16 +253,16 @@
       const btn = `<button class="btn" id="suggestBtn" ${s && !s.aiReady ? 'disabled' : ''}>✨ Suggest</button>`;
       const cards = (s?.slots || [null,null,null,null]).map((d, i) => d ? `
         <div class="card slot${d.nudge ? ' nudge' : ''}">
-          <div class="top"><span class="em">${d.emoji}</span><span class="nm">${d.label}</span></div>
-          <div class="why">${(d.reason||'').replace(/</g,'&lt;')}</div>
-          <div class="tag">${d.nudge ? '❗ NUDGE' : 'SLOT ' + (i+1)} · logs as ${d.habit}</div>
+          <div class="top"><span class="em">${esc(d.emoji)}</span><span class="nm">${esc(d.label)}</span></div>
+          <div class="why">${esc(d.reason||'')}</div>
+          <div class="tag">${d.nudge ? '❗ NUDGE' : 'SLOT ' + (i+1)} · logs as ${esc(d.habit)}</div>
         </div>` : `
         <div class="card slot empty">Slot ${i+1} — empty</div>`).join('');
       const note = s && !s.aiReady
         ? `<div class="ai-note">To enable: Vercel → project → Settings → Environment Variables → add <code>ZAI_API_KEY</code> (get one at z.ai) → redeploy.</div>`
         : `<div class="ai-note">The AI picks up to 4 extra habits it wants tracked, based on your taps. Slot keys on the Stream Deck log whatever is assigned here — and swap automatically when suggestions change.</div>`;
       const insight = lastInsight?.text
-        ? `<div class="card slot" style="margin-bottom:var(--s3)"><div class="top"><span class="em">📝</span><span class="nm">Coach's note · ${lastInsight.date||''}</span></div><div class="why">${String(lastInsight.text).replace(/</g,'&lt;')}</div></div>`
+        ? `<div class="card slot" style="margin-bottom:var(--s3)"><div class="top"><span class="em">📝</span><span class="nm">Coach's note · ${esc(lastInsight.date||'')}</span></div><div class="why">${esc(lastInsight.text)}</div></div>`
         : '';
       const tr = s?.track?.overall;
       const trackLine = tr && tr.offered > 0
