@@ -41,9 +41,13 @@ test('every token the guide names is declared in theme.css', () => {
 test('tokens that must invert for light mode actually do', () => {
   const css = read(THEME);
   const light = css.slice(css.indexOf('@media'));
-  // These carry text and fail 4.5:1 on a white card at their night value, so a
-  // missing light override is a real accessibility regression, not a nit.
-  for (const t of ['--violet-ink', '--amber', '--good', '--bad', '--series', '--accent']) {
+  // Derived from TOKENS so the contract has ONE source of truth: marking a
+  // token light-required in the map above is what makes it checked here.
+  // Several of these carry text and fail 4.5:1 on a white card at their night
+  // value, so a missing override is an accessibility regression, not a nit.
+  const required = Object.entries(TOKENS).filter(([, needsLight]) => needsLight).map(([t]) => t);
+  assert.ok(required.length >= 15, 'the light-mode contract should not have quietly shrunk');
+  for (const t of required) {
     assert.ok(new RegExp(`\\${t}\\s*:`).test(light), `${t} must be overridden for light mode`);
   }
 });
@@ -77,12 +81,60 @@ const HEX_ALLOW = {
   'public/mind.html': ['#0d0f16', '#0a0b11']
 };
 
+// A functional color is as raw as a hex. These are the exact literals the
+// sanctioned illustrations are allowed to use — anything else must be a token
+// or a token-derived expression (color-mix(... var(--x) ...), hsla(var(--hue))).
+const FUNC_ALLOW = {
+  'public/deck.html': [
+    // §7.2 key faces: the halo/base formulas that mirror faces.mjs
+    'hsla(262,72%,58%,.62)', 'hsla(262,72%,45%,.18)',
+    'hsla(38,90%,45%,.20)', 'hsla(38,90%,65%,',
+    'hsla(300,78%,58%,.66)', 'hsla(300,78%,45%,.20)',
+    'hsla(222,20%,55%,.35)',
+    // §7.1 device render: plastic sheen, cast shadows, LCD glass, flash scrim
+    'rgba(255,255,255,', 'rgba(0,0,0,'
+  ],
+  'public/mind.html': [
+    'rgba(255,255,255,',              // §7.4 glass re-bind + orb specular
+    'rgba(37,99,235,.13)', 'rgba(217,70,146,.10)'   // §7.4 aurora blue + magenta
+  ],
+  'public/nav.js': ['rgba(139,92,246,'],            // the brand dot's violet glow
+  'public/index.html': ['rgba(0,0,0,']              // no remaining functional color
+};
+
 test('no raw color outside a sanctioned illustration', () => {
+  // hex + the functional notations. Named colors are caught separately below:
+  // matching bare words would drown in false positives (`transparent`, `inherit`).
+  const RAW = /#[0-9a-fA-F]{3,8}\b|(?:rgba?|hsla?|oklch|oklab|lab|lch|color)\([^)]*\)/g;
   for (const f of SURFACE) {
-    const allowed = new Set(HEX_ALLOW[f] || []);
-    for (const m of read(f).matchAll(/#[0-9a-fA-F]{3,8}\b/g)) {
-      if (f === THEME) continue;               // theme.css IS the palette
-      assert.ok(allowed.has(m[0]), `${f}: raw color ${m[0]} — name a token or sanction it in §7`);
+    if (f === THEME) continue;                 // theme.css IS the palette
+    const hexOk = new Set(HEX_ALLOW[f] || []);
+    const funcOk = FUNC_ALLOW[f] || [];
+    for (const m of read(f).matchAll(RAW)) {
+      const lit = m[0];
+      if (lit.startsWith('#')) {
+        assert.ok(hexOk.has(lit), `${f}: raw color ${lit} — name a token or sanction it in §7`);
+        continue;
+      }
+      // Derived color is always fine — it cannot drift away from the system.
+      // Either it reads a token, or it is the per-object identity hue (§7.3),
+      // which is computed by lib-hue.mjs rather than chosen by anyone.
+      if (lit.includes('var(--') || lit.includes('hueFor(')) continue;
+      assert.ok(
+        funcOk.some((a) => lit.startsWith(a)),
+        `${f}: raw color ${lit} — use a token, color-mix(var(--x)), or sanction it in §7`
+      );
+    }
+  }
+});
+
+test('no CSS named colors in page chrome', () => {
+  // `white`/`black`/`red` are the easiest way to smuggle a color past a guard
+  // that only knows hex and rgb().
+  const NAMED = /(?:color|background|background-color|border-color|outline-color|fill|stroke)\s*:\s*(white|black|red|green|blue|orange|purple|grey|gray|silver|gold|yellow|pink|cyan|magenta)\b/gi;
+  for (const f of SURFACE) {
+    for (const m of read(f).matchAll(NAMED)) {
+      assert.fail(`${f}: named color "${m[1]}" — the palette is theme.css, not CSS keywords`);
     }
   }
 });

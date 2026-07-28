@@ -17,13 +17,9 @@
        adds the column grid and tightens the vertical padding */
     .hrow { display: grid; grid-template-columns: 64px 1fr 1fr 56px 64px 40px; gap: var(--s3); align-items: center;
             padding: var(--s3) var(--s4); }
-    /* Sanctioned re-declaration of theme.css .field (WEB-UX.md §6): these inputs
-       are grid cells emitted by rowHtml(), and .emoji/.label/.name/.goal are
-       locked e2e hooks, so the shared class cannot be added to their markup. */
-    .hrow input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line);
-                  border-radius: var(--r-sm); padding: var(--s2) var(--s3); font: inherit; font-size: 14px; }
+    /* the control comes from .field; rowHtml() emits it alongside the .emoji/
+       .label/.name/.goal hooks, so only the emoji cell's centering differs */
     .hrow input.emoji { text-align: center; font-size: 20px; padding: var(--s1); }
-    .hrow input[readonly] { opacity: .6; cursor: not-allowed; }
     .hrow .del { border: 0; background: transparent; color: var(--muted); font-size: 17px; cursor: pointer; }
     .hrow .del:hover { color: var(--bad); }
     /* the column placard above .rows — same micro-label spec as theme.css .data-table th */
@@ -32,9 +28,6 @@
     .actions { display: flex; gap: var(--s3); align-items: center; margin-top: var(--s4); flex-wrap: wrap; }
     .note { margin-top: var(--s5); }
     .chip { justify-self: start; }                   /* it is a cell in the .hrow grid */
-    /* Sanctioned: theme.css names this variant .chip.quiet; rowHtml() emits
-       .chip.human and its markup is a locked contract (WEB-UX.md §6). */
-    .chip.human { color: var(--muted); border: 1px solid var(--line); }
     .sect { margin-top: var(--s6); }
     .sect .section-h { margin-bottom: var(--s1); }   /* the placard sits tight above its .hint */
     .sect .hint { margin-bottom: var(--s3); }
@@ -45,9 +38,6 @@
     .crow .nm { font-weight: 600; }
     .crow .meta { font-size: 12px; color: var(--muted); }
     .crow .stats { font-size: 12px; color: var(--muted); text-align: right; }
-    /* the coach speaking as type — theme.css .tag, re-declared because renderCoach()
-       emits class="active" and its markup is out of scope here (WEB-UX.md §3). */
-    .crow .active { color: var(--violet-ink); font-weight: 700; font-size: 11px; letter-spacing: .05em; }
     .prow { display: grid; grid-template-columns: 40px 1fr auto; gap: var(--s3); align-items: center;
             padding: var(--s3) var(--s4); border-left: 3px solid var(--violet); margin-bottom: var(--s3); }
     .prow .em { font-size: 22px; text-align: center; }
@@ -55,12 +45,8 @@
     .prow .meta { font-size: 12px; color: var(--muted); }
     .prow .why { font-size: 12.5px; color: var(--muted); margin-top: var(--s1); line-height: 1.5; }
     .prow .pbtns { display: flex; gap: var(--s2); }
-    /* Sanctioned re-declaration of theme.css .chip: renderRoster() emits
-       class="kind add|retire" and its markup is out of scope here (WEB-UX.md §6). */
-    .kind { font-size: 10px; font-weight: 700; letter-spacing: .07em; padding: var(--s1) var(--s2);
-            border-radius: var(--r-sm); margin-right: var(--s2); }
-    .kind.add { color: var(--on-violet); background: var(--grad-coach); }
-    .kind.retire { color: var(--muted); border: 1px solid var(--line); }
+    /* the ADD/RETIRE badge is a .chip (coach or quiet); only the gap differs */
+    .kind { margin-right: var(--s2); }
     /* retired: the same niche, dimmed */
     .arow { display: grid; grid-template-columns: 40px 1fr auto; gap: var(--s3); align-items: center;
             padding: var(--s3) var(--s4); margin-bottom: var(--s2); opacity: .72; }
@@ -114,12 +100,12 @@
       const origin = h.origin === 'coach' ? 'coach' : 'human';
       const chip = origin === 'coach'
         ? '<span class="chip coach" title="Invented by the AI coach, promoted by you">COACH</span>'
-        : '<span class="chip human" title="Created by you">HUMAN</span>';
+        : '<span class="chip quiet human" title="Created by you">HUMAN</span>';
       return `<div class="card hrow" data-new="${isNew ? 1 : 0}" data-origin="${origin}">
-        <input class="emoji" value="${esc(h.emoji||'')}" maxlength="8" placeholder="🙂">
-        <input class="label" value="${esc(h.label||'')}" maxlength="12" placeholder="Label">
-        <input class="name" value="${esc(h.name||'')}" maxlength="20" placeholder="OneWordId" ${isNew ? '' : 'readonly title="Ids are locked to keep history consistent — delete and re-add to rename."'}>
-        <input class="goal" type="number" min="1" max="99" value="${h.goal ? esc(String(h.goal)) : ''}" placeholder="1" title="Daily goal (default 1). 2+ makes the key show count dots and a progress ring.">
+        <input class="field emoji" value="${esc(h.emoji||'')}" maxlength="8" placeholder="🙂">
+        <input class="field label" value="${esc(h.label||'')}" maxlength="12" placeholder="Label">
+        <input class="field name" value="${esc(h.name||'')}" maxlength="20" placeholder="OneWordId" ${isNew ? '' : 'readonly title="Ids are locked to keep history consistent — delete and re-add to rename."'}>
+        <input class="field goal" type="number" min="1" max="99" value="${h.goal ? esc(String(h.goal)) : ''}" placeholder="1" title="Daily goal (default 1). 2+ makes the key show count dots and a progress ring.">
         ${chip}
         <button class="del" title="Remove">✕</button>
       </div>`;
@@ -133,7 +119,7 @@
         <div class="card crow">
           <span class="em">${esc(c.emoji)}</span>
           <span><span class="nm">${esc(c.label)}</span> <span class="meta">· ${esc(c.habit)}</span>
-            ${c.active ? '<div class="active">ON A SLOT KEY NOW</div>' : ''}</span>
+            ${c.active ? '<div class="tag active">ON A SLOT KEY NOW</div>' : ''}</span>
           <span class="stats">offered ${c.offered}× · tapped ${c.taps}×</span>
           <button class="btn ghost promote" data-habit="${esc(c.habit)}" data-emoji="${esc(c.emoji)}" data-label="${esc(c.label)}">⬆ Promote</button>
         </div>`).join('');
@@ -164,7 +150,7 @@
         <div class="card prow">
           <span class="em">${esc(p.emoji)}</span>
           <span>
-            <span class="kind ${p.kind === 'retire' ? 'retire' : 'add'}">${p.kind === 'retire' ? 'RETIRE' : 'ADD'}</span>
+            <span class="chip ${p.kind === 'retire' ? 'quiet' : 'coach'} kind">${p.kind === 'retire' ? 'RETIRE' : 'ADD'}</span>
             <span class="nm">${esc(p.label)}</span> <span class="meta">· ${esc(p.name)}</span>
             ${p.reason ? `<div class="why">${esc(p.reason)}</div>` : ''}
           </span>

@@ -56,10 +56,9 @@
     .ai-head { display:flex; align-items:center; justify-content:space-between; gap:var(--s3); margin-bottom:var(--s3); }
     .ai-head h2 { margin:0; }
     .slot-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:var(--s3); }
-    .slot { border-radius:var(--r-lg); padding:var(--s4); border:1px solid var(--line);
-            background:linear-gradient(160deg, color-mix(in oklab, var(--violet), transparent 86%), var(--card) 55%); }
-    .slot.empty { border-style:dashed; background:var(--card); color:var(--muted);
-                  display:flex; align-items:center; justify-content:center; min-height:96px; font-size:13px; }
+    /* .card supplies the niche; the slot only adds the coach's violet wash */
+    .slot { background:linear-gradient(160deg, color-mix(in oklab, var(--violet), transparent 86%), var(--card) 55%); }
+    .slot.empty { background:var(--card); }   /* .card.empty already dashes + centers it */
     .slot .top { display:flex; align-items:center; gap:var(--s2); }
     .slot .top .em { font-size:24px; }
     .slot .top .nm { font-weight:650; }
@@ -253,17 +252,17 @@
       const s = slotState;
       const btn = `<button class="btn" id="suggestBtn" ${s && !s.aiReady ? 'disabled' : ''}>✨ Suggest</button>`;
       const cards = (s?.slots || [null,null,null,null]).map((d, i) => d ? `
-        <div class="slot${d.nudge ? ' nudge' : ''}">
+        <div class="card slot${d.nudge ? ' nudge' : ''}">
           <div class="top"><span class="em">${d.emoji}</span><span class="nm">${d.label}</span></div>
           <div class="why">${(d.reason||'').replace(/</g,'&lt;')}</div>
           <div class="tag">${d.nudge ? '❗ NUDGE' : 'SLOT ' + (i+1)} · logs as ${d.habit}</div>
         </div>` : `
-        <div class="slot empty">Slot ${i+1} — empty</div>`).join('');
+        <div class="card slot empty">Slot ${i+1} — empty</div>`).join('');
       const note = s && !s.aiReady
         ? `<div class="ai-note">To enable: Vercel → project → Settings → Environment Variables → add <code>ZAI_API_KEY</code> (get one at z.ai) → redeploy.</div>`
         : `<div class="ai-note">The AI picks up to 4 extra habits it wants tracked, based on your taps. Slot keys on the Stream Deck log whatever is assigned here — and swap automatically when suggestions change.</div>`;
       const insight = lastInsight?.text
-        ? `<div class="slot" style="margin-bottom:var(--s3)"><div class="top"><span class="em">📝</span><span class="nm">Coach's note · ${lastInsight.date||''}</span></div><div class="why">${String(lastInsight.text).replace(/</g,'&lt;')}</div></div>`
+        ? `<div class="card slot" style="margin-bottom:var(--s3)"><div class="top"><span class="em">📝</span><span class="nm">Coach's note · ${lastInsight.date||''}</span></div><div class="why">${String(lastInsight.text).replace(/</g,'&lt;')}</div></div>`
         : '';
       const tr = s?.track?.overall;
       const trackLine = tr && tr.offered > 0
