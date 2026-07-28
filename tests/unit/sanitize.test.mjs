@@ -112,3 +112,24 @@ test('assignedAt is always Date.now()', () => {
   const after = Date.now();
   assert.ok(out[0].assignedAt >= before && out[0].assignedAt <= after);
 });
+
+// --- the render boundary -------------------------------------------------
+// This pins WHY the pages have to escape: sanitize() length-clamps emoji (8)
+// and label (12) but does not strip markup — only `habit` is character-
+// restricted — and `<img src=x>` fits in 11 characters. If someone ever hardens
+// sanitize() itself, this test fails and the reasoning gets revisited rather
+// than quietly rotting.
+test('sanitize lets markup through emoji and label — the pages must escape', () => {
+  const [def] = sanitize([{ habit: 'Evil', emoji: '<img src=x>', label: '<svg onload' }]);
+  assert.equal(def.habit, 'Evil', 'habit is character-restricted');
+  assert.ok(def.emoji.includes('<'), 'emoji is only length-clamped, so it can carry markup');
+  assert.ok(def.label.includes('<'), 'label is only length-clamped, so it can carry markup');
+});
+
+// The companion check — that the pages actually escape these — is
+// tests/e2e/xss.e2e.mjs, which drives the real renderers with hostile values in
+// a browser. That is deliberately NOT a regex over the source: a static guard
+// has to enumerate every model-derived field and every interpolation form, and
+// silently goes stale the moment a renderer adds one. (It did: an earlier
+// line-scanning version of this guard passed while `s.model` reached innerHTML
+// unescaped — the browser test caught it.)

@@ -6,82 +6,98 @@
   <title>Inside the Coach — Habit Tracker</title>
   <link rel="stylesheet" href="/theme.css" />
   <style>
-    * { box-sizing: border-box; }
+    /* Sanctioned exception — design/WEB-UX.md §7.4: the coach's dreamscape.
+       It RE-BINDS the shared tokens rather than escaping them: every niche
+       below still reads var(--card)/var(--line), so the glass look is one edit
+       and not forty literals. The page follows the OS theme like every other
+       page, so the re-bind has a value for each. */
     body {
-      /* committed to night (data-nav=dark): the coach's dreamscape.
-         Translucent niches float over the gradient, so card/line go glassy. */
-      --ink: var(--fg); --card: rgba(255,255,255,.045); --line: rgba(255,255,255,.09);
+      --card: rgba(255,255,255,.045);   /* glass: light lifted off a dark floor */
+      --line: rgba(255,255,255,.09);
       min-height: 100vh;
+      /* The aurora is illustration, not chrome. Its floor is the ordinary page
+         field (--bg → --bg2), so the whole dreamscape flips with the theme and
+         only the washes are painted on top. The violet stop is exactly --violet;
+         the blue and magenta have no token on purpose (a magenta token would
+         imply a role it has not earned) and stay illustration literals. */
       background:
-        radial-gradient(60% 45% at 15% 10%, rgba(139,92,246,.16), transparent 60%),
+        radial-gradient(60% 45% at 15% 10%, color-mix(in oklab, var(--violet), transparent 84%), transparent 60%),
         radial-gradient(50% 40% at 85% 20%, rgba(37,99,235,.13), transparent 60%),
         radial-gradient(70% 55% at 50% 100%, rgba(217,70,146,.10), transparent 65%),
-        linear-gradient(180deg, #0d0f16 0%, #0a0b11 100%);
+        linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%);
     }
-    .wrap { max-width: 900px; margin: 0 auto; padding: 34px 20px 70px; }
-    header { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom: 6px; }
-    h1 { margin:0; font-size:24px; letter-spacing:-.01em; }
-    h1 .spark { filter: drop-shadow(0 0 12px rgba(139,92,246,.8)); }
-    .sub { color: var(--muted); font-size: 13px; }
-    .sub a { color:#8fb4ff; text-decoration:none; }
-    section { margin-top: 30px; }
-    h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:0 0 12px; font-weight:600; }
-
-    /* stat tiles — numbers wear ink, not color */
-    .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
-    .tile { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; }
-    .tile .n { font-size:28px; font-weight:650; letter-spacing:-.02em; }
-    .tile .l { color:var(--muted); font-size:12.5px; margin-top:2px; }
-
-    /* core memories — glowing orbs (decoration, not data encoding) */
-    .orbs { display:flex; flex-direction:column; gap:10px; }
-    .orb {
-      display:flex; gap:14px; align-items:flex-start;
-      background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px 16px;
+    @media (prefers-color-scheme: light) {
+      body:not([data-nav="dark"]) {
+        /* frosted white on a pale field — the same idea inverted, not a
+           different one: the niche is still lifted off the floor, and the
+           hairline is still at the threshold of visibility */
+        --card: rgba(255,255,255,.72);
+        --line: rgba(16,20,32,.10);
+      }
     }
+    /* the title sits tight against its tagline here — the dashboard's header
+       gap would strand it above the fold */
+    header { margin-bottom: var(--s1); }
+    h1 .spark { filter: drop-shadow(0 0 12px color-mix(in oklab, var(--violet), transparent 20%)); }
+    section { margin-top: var(--s6); }
+
+    /* stat tiles — numbers wear ink, not color. auto-FIT rather than the shared
+       .grid's auto-fill so four tiles span the full measure instead of leaving
+       an empty track. */
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--s3); }
+    .tile .n { font-size: 28px; font-weight: 650; letter-spacing: -.02em; }
+    .tile .l { color: var(--muted); font-size: 12.5px; margin-top: var(--s1); }
+
+    /* core memories — each orb wears the hue of its own text (§3: hue is
+       identity, derived and never chosen) */
+    .orbs { display: flex; flex-direction: column; gap: var(--s2); }
+    .orb { display: flex; gap: var(--s4); align-items: flex-start; }
     .orb .ball {
-      flex:0 0 26px; height:26px; margin-top:1px; border-radius:50%;
+      flex: 0 0 26px; height: 26px; margin-top: 1px; border-radius: 50%;
       background: radial-gradient(circle at 32% 30%, rgba(255,255,255,.95), var(--c) 45%, color-mix(in oklab, var(--c), black 45%) 100%);
       box-shadow: 0 0 14px color-mix(in oklab, var(--c), transparent 45%);
     }
-    .orb .t { font-size:14.5px; line-height:1.55; color:var(--ink2); }
-    .orb.new { border-color: rgba(139,92,246,.4); }
+    .orb .t { font-size: 14.5px; line-height: 1.55; color: var(--ink2); }
 
     /* intuitions — current slot keys, confidence from behavior */
-    .ints { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
-    .int { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px 16px; position:relative; }
-    .int .head { display:flex; align-items:center; gap:9px; }
-    .int .em { font-size:24px; filter:drop-shadow(0 0 10px rgba(139,92,246,.5)); }
-    .int .nm { font-weight:650; font-size:15px; }
-    .int .why { color:var(--muted); font-size:12.5px; line-height:1.5; margin-top:8px; }
-    .int .conf { margin-top:10px; font-size:11.5px; font-weight:700; letter-spacing:.05em; color:#a78bfa; }
-    .int.empty { color:var(--muted); display:flex; align-items:center; justify-content:center; min-height:90px; border-style:dashed; font-size:13px; }
+    .ints { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--s3); }
+    .int { position: relative; }
+    .int .head { display: flex; align-items: center; gap: var(--s2); }
+    .int .em { font-size: 24px; filter: drop-shadow(0 0 10px color-mix(in oklab, var(--violet), transparent 50%)); }
+    .int .nm { font-weight: 650; font-size: 15px; }
+    .int .why { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-top: var(--s2); }
+    .int .conf { margin-top: var(--s3); }
 
-    .note { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px 18px; color:var(--ink2); font-size:14.5px; line-height:1.6; }
-    .note .d { color:var(--muted); font-size:12px; margin-bottom:6px; }
-    .empty { color:var(--muted); font-size:13.5px; padding:14px 2px; }
+    .note .d { color: var(--muted); font-size: 12px; margin-bottom: var(--s1); }
   </style>
 </head>
-<body data-nav="dark">
+<body>
   <script src="/nav.js" defer></script>
-  <div class="wrap">
+  <div class="wrap wide">
     <header>
       <div>
         <h1><span class="spark">✨</span> Inside the Coach</h1>
         <div class="sub" id="tagline">Loading its mind…</div>
       </div>
-      
     </header>
 
-    <section><h2>Growing up</h2><div class="tiles" id="tiles"></div></section>
-    <section><h2>Core memories</h2><div class="orbs" id="orbs"><div class="empty">No memories yet — they form as the coach works.</div></div></section>
-    <section><h2>Intuitions right now</h2><div class="ints" id="ints"></div></section>
-    <section><h2>Last reflection</h2><div id="reflect"><div class="empty">The coach writes a reflection at the end of each day.</div></div></section>
+    <section><h2 class="section-h">Growing up</h2><div class="tiles" id="tiles"></div></section>
+    <section><h2 class="section-h">Core memories</h2><div class="orbs" id="orbs"><div class="empty">No memories yet — they form as the coach works.</div></div></section>
+    <section><h2 class="section-h">Intuitions right now</h2><div class="ints" id="ints"></div></section>
+    <section><h2 class="section-h">Last reflection</h2><div id="reflect"><div class="empty">The coach writes a reflection at the end of each day.</div></div></section>
   </div>
 
   <script>
-    const ORB_COLORS = ['#8b5cf6','#3f7ee8','#d9468f','#2fa47a','#d98f2f']; // decorative, per-memory
     const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+
+    // Hue is identity, derived and never chosen (design/WEB-UX.md §3). Same
+    // FNV-1a as tools/lib-hue.mjs — a memory keeps its color for life instead
+    // of borrowing the coach's reserved violet from a rotating palette.
+    function hueFor(name) {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+      let hue = h % 320; if (hue >= 245) hue += 40; return hue;
+    }
 
     fetch('/api/mind').then(r=>r.json()).then(m => {
       if (!m.configured) { document.getElementById('tagline').textContent = 'Storage not connected yet.'; return; }
@@ -97,13 +113,13 @@
         [s.ideasTried ?? 0, 'ideas tried'],
         [tr.landed, 'intuitions that landed'],
         [tr.offered ? Math.round(tr.hitRate*100) + '%' : '—', 'intuition hit rate']
-      ].map(([n,l]) => `<div class="tile"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+      ].map(([n,l]) => `<div class="card tile"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
 
       // core memories: the coach's own notes, split into thoughts
       const notes = (m.memory?.notes || '').split(/\n+|(?<=[.!?])\s+(?=[A-Z"“])/).map(t=>t.trim()).filter(t=>t.length>8);
       if (notes.length) {
-        document.getElementById('orbs').innerHTML = notes.slice(0, 10).map((t,i) =>
-          `<div class="orb"><span class="ball" style="--c:${ORB_COLORS[i%ORB_COLORS.length]}"></span><span class="t">${esc(t)}</span></div>`
+        document.getElementById('orbs').innerHTML = notes.slice(0, 10).map((t) =>
+          `<div class="card orb"><span class="ball" style="--c:hsl(${hueFor(t)},62%,60%)"></span><span class="t">${esc(t)}</span></div>`
         ).join('');
       }
 
@@ -117,9 +133,9 @@
         return `FORMING · landed ${r.landed}/${r.offered}`;
       };
       document.getElementById('ints').innerHTML = (m.slots||[]).map((d,i) => d
-        ? `<div class="int"><div class="head"><span class="em">${d.emoji}</span><span class="nm">${esc(d.label||d.habit)}</span></div>
-             <div class="why">${esc(d.reason||'')}</div><div class="conf">${conf(d.habit)}</div></div>`
-        : `<div class="int empty">quiet corner ${i+1}</div>`
+        ? `<div class="card int"><div class="head"><span class="em">${esc(d.emoji)}</span><span class="nm">${esc(d.label||d.habit)}</span></div>
+             <div class="why">${esc(d.reason||'')}</div><div class="tag conf">${conf(d.habit)}</div></div>`
+        : `<div class="card int empty">quiet corner ${i+1}</div>`
       ).join('');
 
       // reflection

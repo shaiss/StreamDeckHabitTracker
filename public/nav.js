@@ -1,7 +1,8 @@
 // Shared nav bar for all pages. No framework, no build step: each page adds
 // <script src="/nav.js" defer></script> and the bar injects itself at the top
-// of <body>. Theme: body[data-nav="dark"] forces the dark look (deck, mind);
-// default follows prefers-color-scheme (dashboard).
+// of <body>. Theme: theme.css declares the tokens on <body>, where
+// body[data-nav="dark"] forces the dark look (deck, mind) and everything else
+// follows prefers-color-scheme (dashboard). The bar owns no colors of its own.
 //
 // Settings: on the dashboard (where #settings exists) the Settings item
 // toggles the panel in place via a "toggle-settings" event; on other pages it
@@ -17,32 +18,34 @@
   const path = location.pathname.replace(/\/+$/, '') || '/';
   const isActive = (it) => !it.settings && ((it.href.split('?')[0].replace(/\/+$/, '') || '/') === path);
 
+  // Chrome has no palette of its own: every value below is a theme.css token
+  // (design/WEB-UX.md §2). The tokens are declared on <body> and .hnav lives
+  // inside <body>, so var() resolves — which is why there is no light-mode
+  // block here any more: --chrome, --fg and --line flip themselves.
   const css = `
-    .hnav { position: sticky; top: 0; z-index: 90; width: 100%; display: flex; align-items: center; gap: 4px;
-      padding: 9px 14px; border-bottom: 1px solid rgba(255,255,255,.09);
-      background: rgba(11,12,16,.72); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
-      color: #e8eaed; font: 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-    .hnav .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: -.01em;
-      color: inherit; text-decoration: none; margin-right: 10px; padding: 6px 4px; }
+    .hnav { position: sticky; top: 0; z-index: 90; width: 100%; display: flex; align-items: center; gap: var(--s1);
+      padding: var(--s2) var(--s4); border-bottom: 1px solid var(--line);
+      background: var(--chrome); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+      color: var(--fg); font: 14px/1 var(--font); }
+    .hnav .brand { display: flex; align-items: center; gap: var(--s2); font-weight: 700; letter-spacing: -.01em;
+      color: inherit; text-decoration: none; margin-right: var(--s3); padding: var(--s1); }
+    /* Sanctioned ornament, not a container (WEB-UX §4: the brand dot is one of
+       the two circles in the system). Its 10px size and 8px glow radius are
+       optical, so they stay literal; the violet is the coach's. */
     .hnav .brand .dot { width: 10px; height: 10px; border-radius: 50%;
-      background: radial-gradient(circle at 32% 30%, #c4b5fd, #8b5cf6 60%, #5b21b6);
-      box-shadow: 0 0 8px rgba(139,92,246,.8); }
-    .hnav .links { display: flex; gap: 4px; margin-left: auto; }
-    .hnav .links a { display: flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 10px;
-      color: inherit; text-decoration: none; opacity: .72; transition: opacity .12s, background .12s; }
-    .hnav .links a:hover { opacity: 1; background: rgba(139,92,246,.12); }
-    .hnav .links a.active { opacity: 1; background: rgba(139,92,246,.18); box-shadow: inset 0 0 0 1px rgba(139,92,246,.35); }
+      background: radial-gradient(circle at 32% 30%, var(--violet-ink), var(--violet) 60%, var(--violet-deep));
+      box-shadow: 0 0 8px color-mix(in oklab, var(--violet), transparent 20%); }
+    .hnav .links { display: flex; gap: var(--s1); margin-left: auto; }
+    .hnav .links a { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3);
+      border-radius: var(--r-md); color: inherit; text-decoration: none; opacity: .72;
+      transition: opacity .12s, background .12s; }
+    .hnav .links a:hover { opacity: 1; background: color-mix(in oklab, var(--violet), transparent 88%); }
+    .hnav .links a.active { opacity: 1; background: color-mix(in oklab, var(--violet), transparent 82%);
+      box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--violet), transparent 65%); }
     @media (max-width: 620px) {
-      .hnav .links a { padding: 8px 11px; }
+      .hnav .links a { padding: var(--s2); }
       .hnav .links a .lbl { display: none; }         /* icons only on phones */
       .hnav .brand .txt { font-size: 13.5px; }
-    }
-    @media (prefers-color-scheme: light) {
-      body:not([data-nav="dark"]) .hnav { background: rgba(246,247,249,.82); color: #1a1c1f;
-        border-bottom-color: #e3e5e9; }
-      body:not([data-nav="dark"]) .hnav .links a:hover { background: rgba(109,40,217,.08); }
-      body:not([data-nav="dark"]) .hnav .links a.active { background: rgba(109,40,217,.10);
-        box-shadow: inset 0 0 0 1px rgba(109,40,217,.30); }
     }`;
 
   const style = document.createElement('style');

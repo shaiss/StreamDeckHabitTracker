@@ -144,8 +144,18 @@ Vercel MCP `web_fetch_vercel_url` tool to probe the live site.
 - CORS is open (`*`) on read/log endpoints for the dashboard and any legacy
   in-browser callers (the Node plugin itself doesn't need CORS).
 
-**Frontend** (`public/index.html`) — single static file, no framework, no build
-step. Dashboard + AI Coach section; polls every 20s.
+**Frontend** (`public/`) — static files, no framework, no build step. Four pages
+behind one shared nav (`nav.js`): `index.html` (dashboard + AI Coach, polls every
+20s), `habits.html` (the roster manager), `mind.html` (Inside the Coach), and
+`deck.html` (the virtual Stream Deck). **The design language is not optional
+here**: `design/PHILOSOPHY.md` is the taste (Nocturne Ritual) and
+**`design/WEB-UX.md` is the operational guide** — tokens, the shared class
+vocabulary in `public/theme.css`, the color roles (violet = the coach speaking,
+`--series` = the one data blue, hue = per-object identity *derived* from the
+name), the radius/spacing ladders, and the four sanctioned exceptions. Read it
+before adding a rule or a hex. `tests/unit/design-tokens.test.mjs` enforces it
+the way `hue.test.mjs` enforces the hue formula — a raw color, an off-ladder
+radius, or a duplicated recipe fails CI.
 
 **Stream Deck plugin** (`streamdeck-plugin/`) — a **Node.js-runtime** plugin:
 Stream Deck ≥7.1 spawns `bin/plugin.js` under its bundled Node 24. The legacy
