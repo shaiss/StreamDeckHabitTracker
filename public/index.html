@@ -6,80 +6,79 @@
   <title>Habit Tracker</title>
   <link rel="stylesheet" href="/theme.css" />
   <style>
-    * { box-sizing: border-box; }
-    .hnav { margin-bottom: 4px; }
-    .wrap { max-width: 860px; margin: 0 auto; padding: 28px 20px 64px; }
-    header { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:22px; }
-    h1 { font-size: 22px; margin:0; letter-spacing:-.01em; }
-    .sub { color:var(--muted); font-size:13px; }
-    .grid { display:grid; grid-template-columns: repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
-    .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; }
+    /* Page-local rules only. The shared vocabulary — the box-sizing reset,
+       .wrap, header, h1, .sub, .muted, .grid, .card(.flush), .empty, .section-h,
+       .btn, .linklike, .field, .field-label, .tag, .status, .tip, .data-table
+       and the focus ring — comes from /theme.css (design/WEB-UX.md §6). What is
+       left here either has no shared counterpart or overrides one property. */
+    .hnav { margin-bottom: var(--s1); }   /* nav.js owns the bar; this is the page's gap under it */
+
+    /* stat cards. .card is the shared niche; the count is the one loud thing. */
     .card .emoji { font-size:26px; line-height:1; }
-    .card .name { color:var(--muted); font-size:13px; margin-top:8px; }
+    .card .name { color:var(--muted); font-size:13px; margin-top:var(--s2); }
     .card .big { font-size:30px; font-weight:650; letter-spacing:-.02em; margin-top:2px; }
-    .card .today { color:var(--good); font-size:12px; margin-top:4px; }
-    section { margin-top:30px; }
-    h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 12px; }
-    .chart { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg); padding:18px 18px 12px; }
+    .card .today { color:var(--good); font-size:12px; margin-top:var(--s1); }
+    section { margin-top:var(--s6); }
+    .empty { text-align:center; }   /* the shared .empty stays left-aligned (mind.html); the dashboard centers it */
+
+    /* the 7-day chart. .chart only restates the niche padding; the plot's 30px
+       left gutter, its 6px margins and the tick/cap offsets are mark geometry,
+       not chrome spacing, so they stay literal (WEB-UX §5). */
+    .chart { padding:var(--s4) var(--s4) var(--s3); }
     .plot { position:relative; height:168px; margin:6px 6px 0 30px; }
     .gline { position:absolute; left:0; right:0; border-top:1px solid var(--line); }
     .gline .tick { position:absolute; left:-30px; top:-7px; width:24px; text-align:right;
                   font-size:10.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
-    .cols { position:absolute; inset:0; display:flex; align-items:flex-end; gap:10px; }
+    .cols { position:absolute; inset:0; display:flex; align-items:flex-end; gap:var(--s3); }
     .bar-col { flex:1; height:100%; display:flex; align-items:flex-end; justify-content:center;
-               cursor:pointer; position:relative; border-radius:6px; }
+               cursor:pointer; position:relative; border-radius:var(--r-sm); }
+    /* sanctioned exception (WEB-UX §4): the bar cap is a data mark, not a surface */
     .bar { width:100%; max-width:24px; background:var(--series); border-radius:4px 4px 0 0; min-height:2px; }
     .bar-col:hover .bar, .bar-col:focus-visible .bar { filter:brightness(1.18); }
-    .bar-col:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
     .cap { position:absolute; width:100%; text-align:center; font-size:11px; color:var(--fg);
            transform:translateY(-14px); font-variant-numeric:tabular-nums; }
-    .dows { display:flex; gap:10px; margin:6px 6px 0 30px; }
+    .dows { display:flex; gap:var(--s3); margin:6px 6px 0 30px; }   /* gap must match .cols */
     .dows span { flex:1; text-align:center; font-size:11px; color:var(--muted); }
-    .viz-tip { position:fixed; z-index:99; pointer-events:none; background:var(--card2);
-               border:1px solid var(--line); border-radius:10px; padding:7px 11px; font-size:12.5px;
-               box-shadow:0 6px 18px rgba(0,0,0,.25); display:none; }
-    .viz-tip b { font-size:14px; font-variant-numeric:tabular-nums; }
-    .tap-table { width:100%; border-collapse:collapse; font-size:13.5px; }
-    .tap-table td, .tap-table th { padding:7px 12px; border-top:1px solid var(--line); text-align:left; }
-    .tap-table th { color:var(--muted); font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; border-top:0; }
-    .tap-table td:last-child, .tap-table th:last-child { text-align:right; font-variant-numeric:tabular-nums; }
-    .recent { background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
-    .row { display:flex; justify-content:space-between; padding:10px 16px; border-top:1px solid var(--line); font-size:14px; }
+
+    /* recent taps — the container is .card.flush, a niche that holds rows */
+    .row { display:flex; justify-content:space-between; padding:var(--s3) var(--s4); border-top:1px solid var(--line); font-size:14px; }
     .row:first-child { border-top:0; }
     .row .when { color:var(--muted); font-size:13px; }
-    .setup { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
-    .setup code { background:rgba(127,127,127,.16); padding:1px 6px; border-radius:6px; font-size:13px; }
-    .setup ol { margin:10px 0 0; padding-left:20px; } .setup li { margin:6px 0; }
-    .muted { color:var(--muted); } .empty { color:var(--muted); padding:24px 16px; text-align:center; }
-    .ai-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+
+    /* first-run setup card — .card supplies the niche, only the padding differs */
+    .setup { padding:var(--s5); }
+    .setup code { background:var(--card2); padding:1px 6px; border-radius:var(--r-sm); font-size:13px; }
+    .setup ol { margin:var(--s3) 0 0; padding-left:var(--s5); } .setup li { margin:var(--s2) 0; }
+
+    /* the coach speaking: violet as a wash, amber when it is speaking louder.
+       These are chrome (the coach in the web UI), not the plugin's key faces —
+       so they derive from the tokens rather than mirroring faces.mjs (WEB-UX §3). */
+    .ai-head { display:flex; align-items:center; justify-content:space-between; gap:var(--s3); margin-bottom:var(--s3); }
     .ai-head h2 { margin:0; }
-    .slot-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:12px; }
-    .slot { border-radius:14px; padding:14px; border:1px solid var(--line);
-            background:linear-gradient(160deg, rgba(139,92,246,.14), var(--card) 55%); }
+    .slot-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:var(--s3); }
+    .slot { border-radius:var(--r-lg); padding:var(--s4); border:1px solid var(--line);
+            background:linear-gradient(160deg, color-mix(in oklab, var(--violet), transparent 86%), var(--card) 55%); }
     .slot.empty { border-style:dashed; background:var(--card); color:var(--muted);
                   display:flex; align-items:center; justify-content:center; min-height:96px; font-size:13px; }
-    .slot .top { display:flex; align-items:center; gap:8px; }
+    .slot .top { display:flex; align-items:center; gap:var(--s2); }
     .slot .top .em { font-size:24px; }
     .slot .top .nm { font-weight:650; }
-    .slot .why { font-size:12.5px; color:var(--muted); margin-top:8px; line-height:1.45; }
-    .slot .tag { font-size:11px; color:#8b5cf6; font-weight:700; letter-spacing:.05em; margin-top:8px; }
-    .slot.nudge { border-color:rgba(245,158,11,.55);
-                  background:linear-gradient(160deg, rgba(245,158,11,.18), var(--card) 55%); }
-    .slot.nudge .tag { color:#f59e0b; }
-    .ai-note { font-size:13px; color:var(--muted); margin-top:10px; }
-    .deckline b { color:#f0b429; }
-    .deckline[data-live="1"] b { color:#7ee081; }
-    .ai-err { font-size:13px; color:#e05252; margin-top:10px; white-space:pre-wrap; }
-    .gear { border:0; background:transparent; color:var(--muted); font-size:18px; cursor:pointer; padding:4px 6px; }
-    .settings { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:22px; display:none; }
+    .slot .why { font-size:12.5px; color:var(--muted); margin-top:var(--s2); line-height:1.45; }
+    .slot .tag { margin-top:var(--s2); }   /* type comes from the shared .tag: 11px/700 --violet-ink */
+    .slot.nudge { border-color:color-mix(in oklab, var(--amber), transparent 45%);
+                  background:linear-gradient(160deg, color-mix(in oklab, var(--amber), transparent 82%), var(--card) 55%); }
+    .slot.nudge .tag { color:var(--amber); }
+    .ai-note { font-size:13px; color:var(--muted); margin-top:var(--s3); }
+    .deckline b { color:var(--amber); }                  /* the deck has gone quiet: attention, now */
+    .deckline[data-live="1"] b { color:var(--good); }
+    .ai-err { font-size:13px; color:var(--bad); margin-top:var(--s3); white-space:pre-wrap; }
+
+    /* settings panel — .card supplies the niche, .field/.field-label the controls */
+    .settings { margin-bottom:var(--s5); display:none; }
     .settings.open { display:block; }
-    .settings h3 { margin:0 0 12px; font-size:14px; }
-    .settings label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
-    .settings input, .settings textarea, .settings select { width:100%; box-sizing:border-box; background:var(--bg); color:var(--fg);
-      border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; font-size:14px; }
+    .settings h3 { margin:0 0 var(--s3); font-size:14px; }
     .settings textarea { min-height:70px; resize:vertical; }
-    .settings .row2 { display:flex; gap:10px; align-items:center; margin-top:14px; }
-    .settings .status { font-size:12.5px; color:var(--muted); }
+    .settings .row2 { display:flex; gap:var(--s3); align-items:center; margin-top:var(--s4); }
   </style>
 </head>
 <body>
@@ -92,17 +91,17 @@
       </div>
       <div class="sub" id="updated"></div>
     </header>
-    <div class="settings" id="settings">
+    <div class="card settings" id="settings">
       <h3>Settings &amp; profile</h3>
-      <label for="setName">Your name (the coach uses it)</label>
-      <input id="setName" maxlength="60" placeholder="e.g. Shai" />
-      <label for="setTz">Timezone (IANA name)</label>
-      <input id="setTz" list="tzList" placeholder="America/New_York" />
+      <label class="field-label" for="setName">Your name (the coach uses it)</label>
+      <input class="field" id="setName" maxlength="60" placeholder="e.g. Shai" />
+      <label class="field-label" for="setTz">Timezone (IANA name)</label>
+      <input class="field" id="setTz" list="tzList" placeholder="America/New_York" />
       <datalist id="tzList"></datalist>
-      <label for="setAbout">About you — anything the coach should know</label>
-      <textarea id="setAbout" maxlength="1000" placeholder="Night owl. Desk job. Trying to drink more water and stop late-night snacking."></textarea>
-      <label for="setCoachNav">Coach navigation — may an urgent nudge flip your deck to its page?</label>
-      <select id="setCoachNav">
+      <label class="field-label" for="setAbout">About you — anything the coach should know</label>
+      <textarea class="field" id="setAbout" maxlength="1000" placeholder="Night owl. Desk job. Trying to drink more water and stop late-night snacking."></textarea>
+      <label class="field-label" for="setCoachNav">Coach navigation — may an urgent nudge flip your deck to its page?</label>
+      <select class="field" id="setCoachNav">
         <option value="off">Off — never navigate (default)</option>
         <option value="nudge-only">Nudge only — repaint a key, never move pages</option>
         <option value="may-navigate">May navigate — at most once a day, only inside its own profile, auto-returns</option>
@@ -187,15 +186,15 @@
       app.innerHTML = `
         <div class="grid">${cards}</div>
         <section>
-          <div class="ai-head"><h2>Taps per day · last 7 days</h2><button class="linklike" id="tblBtn">table</button></div>
-          <div class="chart" id="chartCard">
+          <div class="ai-head"><h2 class="section-h">Taps per day · last 7 days</h2><button class="linklike" id="tblBtn">table</button></div>
+          <div class="card chart" id="chartCard">
             <div class="plot">${grid}<div class="cols">${cols}</div></div>
             <div class="dows">${dows}</div>
-            <table class="tap-table" id="tapTable" hidden><tr><th>Day</th><th>Taps</th></tr>${tableRows}</table>
+            <table class="data-table" id="tapTable" hidden><tr><th>Day</th><th>Taps</th></tr>${tableRows}</table>
           </div>
         </section>
         <section id="ai"></section>
-        <section><h2>Recent</h2><div class="recent">${recent}</div></section>`;
+        <section><h2 class="section-h">Recent</h2><div class="card flush">${recent}</div></section>`;
       document.getElementById('total').textContent = `${entries.length} total taps`;
       wireChart();
       renderAi();
@@ -203,7 +202,7 @@
 
     let tip = null;
     function wireChart() {
-      if (!tip) { tip = document.createElement('div'); tip.className = 'viz-tip'; document.body.appendChild(tip); }
+      if (!tip) { tip = document.createElement('div'); tip.className = 'tip'; document.body.appendChild(tip); }
       const plot = document.querySelector('.plot'), table = document.getElementById('tapTable');
       document.getElementById('tblBtn')?.addEventListener('click', (e) => {
         const show = table.hidden; table.hidden = !show; plot.parentElement.querySelector('.plot').style.display = show?'none':'';
@@ -264,13 +263,13 @@
         ? `<div class="ai-note">To enable: Vercel → project → Settings → Environment Variables → add <code>ZAI_API_KEY</code> (get one at z.ai) → redeploy.</div>`
         : `<div class="ai-note">The AI picks up to 4 extra habits it wants tracked, based on your taps. Slot keys on the Stream Deck log whatever is assigned here — and swap automatically when suggestions change.</div>`;
       const insight = lastInsight?.text
-        ? `<div class="slot" style="margin-bottom:12px"><div class="top"><span class="em">📝</span><span class="nm">Coach's note · ${lastInsight.date||''}</span></div><div class="why">${String(lastInsight.text).replace(/</g,'&lt;')}</div></div>`
+        ? `<div class="slot" style="margin-bottom:var(--s3)"><div class="top"><span class="em">📝</span><span class="nm">Coach's note · ${lastInsight.date||''}</span></div><div class="why">${String(lastInsight.text).replace(/</g,'&lt;')}</div></div>`
         : '';
       const tr = s?.track?.overall;
       const trackLine = tr && tr.offered > 0
-        ? `<div class="ai-note" style="margin:0 0 10px">Track record: ${tr.landed}/${tr.offered} suggested keys tapped (${Math.round(tr.hitRate*100)}%) — the coach sees this and adapts.</div>`
+        ? `<div class="ai-note" style="margin:0 0 var(--s3)">Track record: ${tr.landed}/${tr.offered} suggested keys tapped (${Math.round(tr.hitRate*100)}%) — the coach sees this and adapts.</div>`
         : '';
-      el.innerHTML = `<div class="ai-head"><h2>AI Coach${s?.model ? ` <span class="muted" style="text-transform:none;letter-spacing:0">· ${s.model}</span>` : ''}</h2>${btn}</div>
+      el.innerHTML = `<div class="ai-head"><h2 class="section-h">AI Coach${s?.model ? ` <span class="muted" style="text-transform:none;letter-spacing:0">· ${s.model}</span>` : ''}</h2>${btn}</div>
         ${insight}${trackLine}<div class="slot-grid">${cards}</div>${deckLine(s?.deck)}${note}<div class="ai-err" id="aiErr"></div>`;
       document.getElementById('suggestBtn')?.addEventListener('click', suggest);
     }
@@ -291,7 +290,7 @@
     }
 
     function renderSetup() {
-      app.innerHTML = `<div class="setup">
+      app.innerHTML = `<div class="card setup">
         <strong>Almost there &mdash; storage isn&rsquo;t connected yet.</strong>
         <ol>
           <li>In Vercel, open this project &rarr; <strong>Storage</strong> tab.</li>

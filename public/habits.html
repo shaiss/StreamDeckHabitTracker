@@ -6,68 +6,74 @@
   <title>Habits — Habit Tracker</title>
   <link rel="stylesheet" href="/theme.css" />
   <style>
-    * { box-sizing: border-box; }
-    .wrap { max-width: 760px; margin: 0 auto; padding: 28px 20px 64px; }
-    h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.01em; }
-    .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
-    .rows { display: flex; flex-direction: column; gap: 10px; }
-    .hrow { display: grid; grid-template-columns: 64px 1fr 1fr 56px 64px 40px; gap: 10px; align-items: center;
-            background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+    /* Page-local rules only. The shared vocabulary this page adopts wholesale
+       lives in /theme.css: .wrap.narrow, h1, .sub, .section-h, .hint, .chip,
+       .chip.coach, .status(.err), .note, .btn(.ghost). See design/WEB-UX.md §6 —
+       adopt the class, never re-declare it; override one property when it differs. */
+    h1 { margin-bottom: var(--s1); }                 /* the title sits tight above its .sub */
+    .sub { margin-bottom: var(--s5); }
+    .rows { display: flex; flex-direction: column; gap: var(--s3); }
+    /* the niche comes from .card (rowHtml emits class="card hrow"); this only
+       adds the column grid and tightens the vertical padding */
+    .hrow { display: grid; grid-template-columns: 64px 1fr 1fr 56px 64px 40px; gap: var(--s3); align-items: center;
+            padding: var(--s3) var(--s4); }
+    /* Sanctioned re-declaration of theme.css .field (WEB-UX.md §6): these inputs
+       are grid cells emitted by rowHtml(), and .emoji/.label/.name/.goal are
+       locked e2e hooks, so the shared class cannot be added to their markup. */
     .hrow input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line);
-                  border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px; }
-    .hrow input.emoji { text-align: center; font-size: 20px; padding: 6px; }
+                  border-radius: var(--r-sm); padding: var(--s2) var(--s3); font: inherit; font-size: 14px; }
+    .hrow input.emoji { text-align: center; font-size: 20px; padding: var(--s1); }
     .hrow input[readonly] { opacity: .6; cursor: not-allowed; }
     .hrow .del { border: 0; background: transparent; color: var(--muted); font-size: 17px; cursor: pointer; }
     .hrow .del:hover { color: var(--bad); }
-    .cols { display: grid; grid-template-columns: 64px 1fr 1fr 56px 64px 40px; gap: 10px; padding: 0 14px; margin-bottom: 6px;
-            color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
-    .actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
-    .status { font-size: 13px; color: var(--muted); }
-    .status.err { color: var(--bad); white-space: pre-wrap; }
-    .note { margin-top: 24px; background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-            padding: 14px 16px; font-size: 13px; color: var(--muted); line-height: 1.6; }
-    .note b { color: var(--fg); font-weight: 600; }
-    .chip { font-size: 10px; font-weight: 700; letter-spacing: .07em; padding: 3px 7px; border-radius: 6px;
-            justify-self: start; }
+    /* the column placard above .rows — same micro-label spec as theme.css .data-table th */
+    .cols { display: grid; grid-template-columns: 64px 1fr 1fr 56px 64px 40px; gap: var(--s3); padding: 0 var(--s4);
+            margin-bottom: var(--s2); color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; }
+    .actions { display: flex; gap: var(--s3); align-items: center; margin-top: var(--s4); flex-wrap: wrap; }
+    .note { margin-top: var(--s5); }
+    .chip { justify-self: start; }                   /* it is a cell in the .hrow grid */
+    /* Sanctioned: theme.css names this variant .chip.quiet; rowHtml() emits
+       .chip.human and its markup is a locked contract (WEB-UX.md §6). */
     .chip.human { color: var(--muted); border: 1px solid var(--line); }
-    .chip.coach { color: #fff; background: linear-gradient(135deg, var(--violet), var(--violet-deep)); }
-    .sect { margin-top: 34px; }
-    .sect h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em;
-               color: var(--muted); margin: 0 0 4px; }
-    .sect .hint { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; }
-    .crow { display: grid; grid-template-columns: 40px 1fr auto auto; gap: 12px; align-items: center;
-            background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px;
-            border-left: 3px solid var(--violet); margin-bottom: 10px; }
+    .sect { margin-top: var(--s6); }
+    .sect .section-h { margin-bottom: var(--s1); }   /* the placard sits tight above its .hint */
+    .sect .hint { margin-bottom: var(--s3); }
+    /* .card supplies the niche; the violet left edge marks it as the coach's */
+    .crow { display: grid; grid-template-columns: 40px 1fr auto auto; gap: var(--s3); align-items: center;
+            padding: var(--s3) var(--s4); border-left: 3px solid var(--violet); margin-bottom: var(--s3); }
     .crow .em { font-size: 22px; text-align: center; }
     .crow .nm { font-weight: 600; }
     .crow .meta { font-size: 12px; color: var(--muted); }
     .crow .stats { font-size: 12px; color: var(--muted); text-align: right; }
-    .crow .active { color: #a78bfa; font-weight: 700; font-size: 11px; letter-spacing: .05em; }
-    .prow { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: center;
-            background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px;
-            border-left: 3px solid var(--violet); margin-bottom: 10px; }
+    /* the coach speaking as type — theme.css .tag, re-declared because renderCoach()
+       emits class="active" and its markup is out of scope here (WEB-UX.md §3). */
+    .crow .active { color: var(--violet-ink); font-weight: 700; font-size: 11px; letter-spacing: .05em; }
+    .prow { display: grid; grid-template-columns: 40px 1fr auto; gap: var(--s3); align-items: center;
+            padding: var(--s3) var(--s4); border-left: 3px solid var(--violet); margin-bottom: var(--s3); }
     .prow .em { font-size: 22px; text-align: center; }
     .prow .nm { font-weight: 600; }
     .prow .meta { font-size: 12px; color: var(--muted); }
-    .prow .why { font-size: 12.5px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
-    .prow .pbtns { display: flex; gap: 8px; }
-    .kind { font-size: 10px; font-weight: 700; letter-spacing: .07em; padding: 3px 7px; border-radius: 6px;
-            margin-right: 7px; }
-    .kind.add { color: #fff; background: linear-gradient(135deg, var(--violet), var(--violet-deep)); }
+    .prow .why { font-size: 12.5px; color: var(--muted); margin-top: var(--s1); line-height: 1.5; }
+    .prow .pbtns { display: flex; gap: var(--s2); }
+    /* Sanctioned re-declaration of theme.css .chip: renderRoster() emits
+       class="kind add|retire" and its markup is out of scope here (WEB-UX.md §6). */
+    .kind { font-size: 10px; font-weight: 700; letter-spacing: .07em; padding: var(--s1) var(--s2);
+            border-radius: var(--r-sm); margin-right: var(--s2); }
+    .kind.add { color: var(--on-violet); background: var(--grad-coach); }
     .kind.retire { color: var(--muted); border: 1px solid var(--line); }
-    .arow { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: center;
-            background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px;
-            margin-bottom: 8px; opacity: .72; }
+    /* retired: the same niche, dimmed */
+    .arow { display: grid; grid-template-columns: 40px 1fr auto; gap: var(--s3); align-items: center;
+            padding: var(--s3) var(--s4); margin-bottom: var(--s2); opacity: .72; }
     .arow .em { font-size: 20px; text-align: center; }
   </style>
 </head>
 <body>
   <script src="/nav.js" defer></script>
-  <div class="wrap">
+  <div class="wrap narrow">
     <h1>Habits</h1>
     <div class="sub">The fixed keys — what you're deliberately tracking. (The ✨ AI slots pick their own.)</div>
     <div class="sect" id="propSect" hidden style="margin-top:0">
-      <h2>The coach wants to change your roster</h2>
+      <h2 class="section-h">The coach wants to change your roster</h2>
       <div class="hint">It reviews the fixed keys each morning. Nothing changes until you say so — and dismissing one tells it not to ask again.</div>
       <div id="propRows"></div>
     </div>
@@ -79,12 +85,12 @@
       <span class="status" id="status"></span>
     </div>
     <div class="sect" id="coachSect" hidden>
-      <h2>The coach's inventions</h2>
+      <h2 class="section-h">The coach's inventions</h2>
       <div class="hint">Habits the AI created for its slot keys. Promote one to make it a permanent fixed key — it keeps its coach badge.</div>
       <div id="coachRows"></div>
     </div>
     <div class="sect" id="archSect" hidden>
-      <h2>Retired</h2>
+      <h2 class="section-h">Retired</h2>
       <div class="hint">Keys you've retired. Their tap history is intact — restore one and it picks up where it left off.</div>
       <div id="archRows"></div>
     </div>
@@ -109,7 +115,7 @@
       const chip = origin === 'coach'
         ? '<span class="chip coach" title="Invented by the AI coach, promoted by you">COACH</span>'
         : '<span class="chip human" title="Created by you">HUMAN</span>';
-      return `<div class="hrow" data-new="${isNew ? 1 : 0}" data-origin="${origin}">
+      return `<div class="card hrow" data-new="${isNew ? 1 : 0}" data-origin="${origin}">
         <input class="emoji" value="${esc(h.emoji||'')}" maxlength="8" placeholder="🙂">
         <input class="label" value="${esc(h.label||'')}" maxlength="12" placeholder="Label">
         <input class="name" value="${esc(h.name||'')}" maxlength="20" placeholder="OneWordId" ${isNew ? '' : 'readonly title="Ids are locked to keep history consistent — delete and re-add to rename."'}>
@@ -124,7 +130,7 @@
       if (!list || !list.length) { sect.hidden = true; return; }
       sect.hidden = false;
       document.getElementById('coachRows').innerHTML = list.map(c => `
-        <div class="crow">
+        <div class="card crow">
           <span class="em">${esc(c.emoji)}</span>
           <span><span class="nm">${esc(c.label)}</span> <span class="meta">· ${esc(c.habit)}</span>
             ${c.active ? '<div class="active">ON A SLOT KEY NOW</div>' : ''}</span>
@@ -155,7 +161,7 @@
       const props = r.proposals || [], arch = r.archive || [];
       document.getElementById('propSect').hidden = !props.length;
       document.getElementById('propRows').innerHTML = props.map(p => `
-        <div class="prow">
+        <div class="card prow">
           <span class="em">${esc(p.emoji)}</span>
           <span>
             <span class="kind ${p.kind === 'retire' ? 'retire' : 'add'}">${p.kind === 'retire' ? 'RETIRE' : 'ADD'}</span>
@@ -170,7 +176,7 @@
 
       document.getElementById('archSect').hidden = !arch.length;
       document.getElementById('archRows').innerHTML = arch.map(a => `
-        <div class="arow">
+        <div class="card arow">
           <span class="em">${esc(a.emoji)}</span>
           <span><span class="nm">${esc(a.label)}</span> <span class="meta">· ${esc(a.name)}</span></span>
           <button class="btn ghost restore" data-name="${esc(a.name)}">↩ Restore</button>

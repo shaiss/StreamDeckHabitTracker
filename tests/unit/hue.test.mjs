@@ -20,7 +20,9 @@ test('plugin and virtual deck embed the identical FNV-1a formula (drift guard)',
   // assert the import so a future rewrite can't silently fork the formula.
   const faces = readFileSync(new URL('../../streamdeck-plugin/src/faces.mjs', import.meta.url), 'utf8');
   assert.ok(faces.includes("from '../../tools/lib-hue.mjs'"), 'faces.mjs must import the shared hue formula');
-  for (const f of ['public/deck.html', 'tools/lib-hue.mjs']) {
+  // mind.html joined the list when its memory orbs stopped using a rotating
+  // palette and started deriving hue from the memory's own text (#65).
+  for (const f of ['public/deck.html', 'public/mind.html', 'tools/lib-hue.mjs']) {
     const src = readFileSync(new URL('../../' + f, import.meta.url), 'utf8');
     for (const marker of ['2166136261', '16777619', '% 320', '245']) {
       assert.ok(src.includes(marker), `${f} missing hue-formula marker ${marker}`);

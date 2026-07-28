@@ -6,24 +6,34 @@
   <title>Virtual Stream Deck — Habit Tracker</title>
   <link rel="stylesheet" href="/theme.css" />
   <style>
+    /* Device geometry deliberately lives on :root, while theme.css declares the
+       page TOKENS on <body> (so body[data-nav="dark"] can commit this page to
+       night). The scope difference is the signal: these are measurements of a
+       physical object, not palette. Sanctioned exception — design/WEB-UX.md §7. */
     :root {
       --key: 118px; --gap: 14px; --pad: 26px;
       --body1: #2a2c30; --body2: #131417; --bezel: #0b0c0e;
     }
-    * { box-sizing: border-box; }
     html, body { height: 100%; }
     body {
-      margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      /* sanctioned: the studio vignette staging the product shot is part of the
+         device illustration, not a page surface — design/WEB-UX.md §7 */
       background: radial-gradient(120% 100% at 50% 0%, #23262b 0%, #101216 55%, #0a0b0d 100%);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      color: #9aa0a6; padding: 24px 12px; min-height: 100vh;
+      color: var(--muted); padding: var(--s5) var(--s3); min-height: 100vh;
     }
-    .top { margin-bottom: 18px; text-align: center; }
-    .top h1 { margin: 0; font-size: 16px; font-weight: 600; color: #cfd3d8; letter-spacing: .02em; }
-    .top a { color: #6ea8ff; font-size: 13px; text-decoration: none; }
-    .top .sub { font-size: 12.5px; margin-top: 3px; }
+    /* The title is a caption centered above the device, so the shared header
+       flex/space-between pattern would fight the layout; the h1 and .sub type
+       still come from theme.css and this only overrides what differs. */
+    .top { margin-bottom: var(--s4); text-align: center; }
+    .top h1 { font-size: 16px; font-weight: 600; letter-spacing: .02em; color: var(--ink2); }
+    .top a { font-size: 13px; text-decoration: none; }   /* color: theme.css `a` → --accent */
+    .top .sub { margin-top: var(--s1); }
 
-    /* ---- the device ---- */
+    /* ---- the device: an illustration of hardware, not a UI surface.
+       Every color, gradient, shadow and radius below is sanctioned to leave the
+       token system (design/WEB-UX.md §7) — tokenizing it would let a palette
+       edit deform the hardware. ---- */
     .device {
       position: relative;
       background: linear-gradient(160deg, var(--body1), var(--body2) 70%);
@@ -80,9 +90,16 @@
     }
     .k.off { cursor: default; background: radial-gradient(circle at 50% 38%, #0c0d10, #050607 75%); }
     .k.off .glass { opacity: .5; }
-    .k:focus-visible { outline: 2px solid #6ea8ff; }
+    /* NOT part of the device exception: a focus ring is accessibility chrome and
+       takes the shared accent (design/WEB-UX.md §7). The 3px offset above stays,
+       so the ring clears the key well. */
+    .k:focus-visible { outline: 2px solid var(--accent); }
 
-    /* CSS-rendered faces (AI slots + fallbacks) — mirrors the plugin's canvas */
+    /* CSS-rendered faces (AI slots + fallbacks) — byte-parity mirrors of
+       streamdeck-plugin/src/faces.mjs. Sanctioned exception (design/WEB-UX.md
+       §7): the hues, halo formula, base gradient and urgency math must NOT
+       become tokens, or a web-side theme edit silently desyncs the virtual deck
+       from the hardware. The #fff ink mirrors the SVG faces' label fill. */
     .facecss {
       position: absolute; inset: 0; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 2px; padding-bottom: 10px;
@@ -134,7 +151,8 @@
       linear-gradient(180deg,#12151f,#0a0c13); }
     .emptyface .em, .emptyface .lb { opacity: .55; }
 
-    /* Stream Deck style OK / alert overlay flash */
+    /* Stream Deck style OK / alert overlay flash — sanctioned: it is painted on
+       the key face, not on the page (design/WEB-UX.md §7) */
     .flash {
       position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
       background: rgba(0,0,0,.55); border-radius: inherit; pointer-events: none;
@@ -142,10 +160,12 @@
     }
     .flash.show { opacity: 1; }
 
-    .hint { margin-top: 22px; font-size: 12.5px; text-align: center; max-width: 560px; line-height: 1.5; }
-    .hint b { color: #cfd3d8; font-weight: 600; }
+    /* size/line-height/color come from theme.css .hint — this only centers it
+       under the device and caps the measure */
+    .hint { margin-top: var(--s5); text-align: center; max-width: 560px; }
+    .hint b { color: var(--ink2); font-weight: 600; }
 
-    /* phone: shrink the whole device */
+    /* phone: shrink the whole device (device geometry — see :root above) */
     @media (max-width: 760px) { :root { --key: 62px; --gap: 8px; --pad: 14px; } .device { border-radius: 20px; } }
     @media (min-width: 761px) and (max-width: 1000px) { :root { --key: 92px; --gap: 11px; --pad: 20px; } }
   </style>
