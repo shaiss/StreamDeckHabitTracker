@@ -29,10 +29,10 @@ only the zones it needs, but a zone *always means the same thing*.
 | Zone | Position | Carries | Rule |
 |---|---|---|---|
 | **Frame** | outer 6–10px ring | turn-state & urgency (color + motion) | the loudest channel; readable from across the room |
-| **Glyph** | center | identity / the action's verb | from a fixed icon set; one glyph = one verb |
+| **Glyph** | center | the action's verb — and, at rest, the object's own hue (its identity) | from a fixed icon set; one glyph = one verb |
 | **Label** | bottom strip | human-readable name | ≤ 2 words, uppercase mono, never wraps past 2 lines |
 | **Badge** | top-right | count, option index, or hotkey number | numbers live here, never inline in the label |
-| **Status dot** | top-left | secondary state or *which agent* owns this | the only place an "identity hue" is allowed |
+| **Status dot** | top-left | secondary state, or *which agent* owns this | carries the **agent**-identity hue (multi-agent only); the object's own identity lives on the glyph, not here |
 
 Why a separate frame for state: it keeps the **state channel** (color/motion) from
 fighting the **content channel** (glyph/label). You can recolor the frame to amber
@@ -65,9 +65,18 @@ Two deliberate choices:
   *action* (pressing this deletes things) and lives on the glyph/label. Same hue,
   different zone, so they never read as the same thing.
 
-**Agent identity** gets its own separate hue set (violet / teal / pink / lime …),
-used **only in the status dot**. This is the firewall that keeps multi-agent color
-from ever colliding with state color: state owns the frame, identity owns the dot.
+**Two identity axes, two zones — don't conflate them.** "Identity" means two different
+things here, and each has exactly one home:
+
+- **Object identity** — *which* ritual object this key is (this habit, this task). This
+  is *Nocturne Ritual*'s "one hue, derived from its name, kept for life," and it lives
+  on the **glyph and its halo** (the reconciliation below makes this explicit).
+- **Agent identity** — in *multi-agent* supervision, *which* AI owns this key. It gets
+  its own hue set (violet / teal / pink / lime …) and lives **only in the status dot**.
+
+Neither ever touches the frame — that's the firewall. **State owns the frame, object
+identity owns the glyph, agent identity owns the dot.** Three zones, three jobs, no
+collision.
 
 ### Color is never the only signal
 
@@ -93,8 +102,8 @@ color on **state**. Both cannot own the frame.
 The tension is real, and the resolution is a **division of the key's real estate**,
 not a winner:
 
-- **State owns the frame; identity owns the interior.** *Nocturne Ritual*'s "one hue,
-  kept for life" moves inward — it colors the **glyph and its halo** (the object's
+- **State owns the frame; object identity owns the interior.** *Nocturne Ritual*'s "one
+  hue, kept for life" moves inward — it colors the **glyph and its halo** (the object's
   identity, its memory) — while the **frame ring** is reserved for turn-state. A habit
   key at rest is exactly the Ritual key you already ship: its own hue, glowing. Only
   when the AI needs a decision *about* it does the frame light amber. Identity is what

@@ -112,9 +112,13 @@ The data model per key is deliberately tiny:
   "badge": null,             // number, or null
   "agent": "builder",        // → identity dot hue
   "danger": true,            // arms two-stage confirm (3.8)
-  "action": "approve:deploy" // token returned to the AI on press
+  "action": "approve:deploy" // token returned to the AI on the committing press
 }
 ```
+
+`state` is what the *AI emits*. The two-stage `armed` window (below) is a **deck-local**
+substate the bridge tracks for `danger` keys — it isn't an AI-emitted `state` value, so
+the emitted enum stays `idle | working | wait | confirming | done | blocked`.
 
 The loop:
 
@@ -122,10 +126,22 @@ The loop:
    each key's frame/glyph/label/badge via the device SDK (e.g. `elgato`
    Stream Deck SDK, `python-elgato-streamdeck`, `node-elgato-stream-deck`), which
    exposes a per-key image buffer plus button-press events over USB HID.
-2. **Human → deck.** A press emits the key's `action` token and triggers the local
-   `CONFIRMING` flash immediately (no round-trip needed for the acknowledgment — the
-   deck confirms *receipt* locally, then the AI's response drives the next state).
-3. **deck → AI.** The `action` token flows back to the agent as the human's decision.
+2. **Human → deck.** What a press does depends on `danger`. The *committing* press
+   triggers the local `CONFIRMING` flash immediately (no round-trip needed for the
+   acknowledgment — the deck confirms *receipt* locally, then the AI's response drives
+   the next state):
+   - **`danger: false`** — the press is the committing press: it flashes and emits the
+     key's `action` token straight away.
+   - **`danger: true`** — the first press is an *arming* press, not a committing one.
+     It must **not** emit anything and does **not** flash-acknowledge; instead it flips
+     the key to a local **`armed`** state with a short expiry (~3s), rendering the
+     two-stage Confirm face (3.8). Only a *second* press within the arm window is the
+     committing press — it flashes and emits the `action` token. If the window lapses,
+     the key silently disarms and nothing reaches the AI. This keeps an irreversible
+     token (`approve:deploy`) from ever crossing the bridge on a single, possibly
+     accidental, tap.
+3. **deck → AI.** The `action` token flows back to the agent as the human's decision —
+   after the arm-then-confirm gate above, for `danger` keys.
 
 This maps cleanly onto mechanisms agents already have: **tool-use permission
 prompts**, **human-in-the-loop checkpoints**, and the **elicitation** step where an
