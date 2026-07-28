@@ -24,7 +24,9 @@ const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript
 // Every string here is hostile. Each is a *different* shape of attack so a
 // renderer that escapes one but not another still fails.
 const IMG = '<img src=x>';          // 11 chars — fits label's 12-char clamp
-const SVG = '<svg onload';          // an unterminated tag still breaks out
+// unique id for the same reason as BOLD: deck.html renders a legitimate
+// <svg class="ring"> streak ring on every habit key (#64/#68).
+const SVG = '<svg id=pwnsvg onload=1>';
 const SCRIPT = '<script>window.PWN=1</script>';
 // carries a unique id so a parsed one is unambiguously OURS — the dashboard
 // (deck heartbeat) and habits (the .note block) both render legitimate <b>.
@@ -120,11 +122,14 @@ async function probe(path, root) {
     if (!scope) return { missing: true };
     const html = scope.innerHTML;
     // Tags that can only exist here if one of our payloads was parsed.
-    const parsed = [...scope.querySelectorAll('img, svg, script, #pwnb')]
+    // Every payload carries its own unique marker, so a legitimate node the
+    // page renders (key icons, the streak-ring <svg>, the heartbeat <b>) can
+    // never be mistaken for an injection — and vice versa.
+    const parsed = [...scope.querySelectorAll('img, script, #pwnb, #pwnsvg')]
       .filter((el) => {
         if (el.tagName === 'IMG') return el.getAttribute('src') === 'x';  // icons are /icons/…
         if (el.tagName === 'SCRIPT') return !el.src;                      // page scripts sit outside
-        return true;                          // an svg, or the uniquely-tagged <b>, is ours
+        return true;                                                      // uniquely tagged: ours
       })
       .map((el) => el.outerHTML.slice(0, 120));
     return {
