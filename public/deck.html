@@ -112,12 +112,19 @@
       radial-gradient(circle at 50% 36%, hsla(var(--hue,222),72%,58%,.62) 0%, transparent 68%),
       linear-gradient(180deg,#141827,#0a0c13); }
     /* Living key faces (#32): streak ring, dim-when-done, count dots. */
+    /* Progress frame (#64): the key's own rounded-rect border fills, matching
+       the plugin's faces.mjs — a dim full-perimeter track plus a bright segment
+       tracing ringFill of the perimeter. Same rounded-rect path as the plugin;
+       pathLength="100" (browser substrate) lets the fill be driven by the raw
+       percent with no perimeter math. */
     .habitface .ring {
-      position: absolute; inset: 5px; border-radius: 14px;
-      background: conic-gradient(hsla(var(--hue,222),85%,72%,.95) calc(var(--ring-pct,0)*1%), hsla(var(--hue,222),45%,45%,.18) 0);
-      -webkit-mask: radial-gradient(circle, transparent 64%, #000 66%);
-              mask: radial-gradient(circle, transparent 64%, #000 66%);
-      pointer-events: none;
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      pointer-events: none; overflow: visible;
+    }
+    .habitface .ring .track { fill: none; stroke: hsla(var(--hue,222),45%,45%,.18); stroke-width: 5; }
+    .habitface .ring .fill {
+      fill: none; stroke: hsla(var(--hue,222),85%,72%,.95); stroke-width: 5;
+      stroke-linecap: round; stroke-dasharray: var(--ring-pct,0) 100;
     }
     .habitface.dim { filter: saturate(.55) brightness(.92); }
     .habitface .check { position: absolute; top: 5px; right: 8px;
@@ -311,8 +318,16 @@
       const hue = hueFor(def.name);
       const done = st && st.doneToday;
       const goal = (st && st.goal) || 1;
-      const pct = st ? Math.round((st.ringFill || 0) * 100) : 0;
-      let extras = '<span class="ring" style="--ring-pct:' + pct + '"></span>';
+      const pct = st ? Math.min(100, Math.round((st.ringFill || 0) * 100)) : 0;
+      // Same rounded-rect path as the plugin's faces.mjs, authored from
+      // top-center clockwise so the fill grows from the top. pathLength="100"
+      // normalizes the perimeter to the percent above.
+      const framePath = 'M72 6 H121 A17 17 0 0 1 138 23 V121 A17 17 0 0 1 121 138 '
+        + 'H23 A17 17 0 0 1 6 121 V23 A17 17 0 0 1 23 6 Z';
+      let extras = '<svg class="ring" viewBox="0 0 144 144" preserveAspectRatio="none">'
+        + '<path class="track" d="' + framePath + '"/>'
+        + (pct > 0 ? '<path class="fill" pathLength="100" style="--ring-pct:' + pct + '" d="' + framePath + '"/>' : '')
+        + '</svg>';
       if (done) extras += '<span class="check">✓</span>';
       if (goal > 1 && st && typeof st.count === 'number') {
         if (goal > 8) {
