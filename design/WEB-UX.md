@@ -39,10 +39,20 @@ body { --card: #121521; /* … */ }
 }
 ```
 
-`mind.html` and `deck.html` carry `<body data-nav="dark">` and are therefore
-**committed to night** on every machine; `index.html` and `habits.html` follow
-the OS. A page may re-bind a token on its own `body` (mind.html does — see §7),
-which only works because the tokens live there. Do not move them to `:root`.
+**Every page follows the OS theme. There are no exceptions, and a page that
+opts out is a bug.** This is the whole point of the issue this document came
+from: a Mind page pinned to night while its siblings went light does not read as
+the same product, however good it looks on its own.
+
+A page may re-bind a token on its own `body` — `mind.html` does, to make its
+niches glassy (§7.4) — which only works because the tokens live on `body`. Do
+not move them to `:root`. **A re-bind owes a value to each theme**; binding only
+the night value is how a page silently pins itself to night.
+
+The `body[data-nav="dark"]` escape hatch still exists in `theme.css` and nothing
+uses it. Leave it there for a page that one day genuinely must be dark in both
+themes, but understand that reaching for it is a design decision to argue for
+here first — not a shortcut past writing the light values.
 
 Every page loads, in this order:
 
@@ -496,9 +506,19 @@ on `:root`). This is a picture of a physical object: enclosure plastic, bezel,
 key wells, cast shadows. Tokenizing it would let a palette edit deform the
 hardware. Its custom properties belong on `:root` precisely because they are
 device geometry rather than page tokens — that scope difference is the signal.
-*Not* covered by the exception: `.k:focus-visible`, which is accessibility
-chrome and takes `--accent`; and the page's own captions and links, which take
-`--muted`, `--ink2` and `--accent` like anywhere else.
+
+**The device stays black in light mode**, and this is the one place in the
+system where something legitimately does not flip. A Stream Deck is black
+plastic; a white one in light mode would be a lie about the hardware, and this
+page exists to be an honest preview of it. The test is whether the thing depicts
+a real object — not whether it looks better dark.
+
+*Not* covered by the exception, and all of which do follow the theme: the studio
+vignette staging the shot, which is built from `--card2 → --bg → --bg2` so the
+device sits on a light desk by day and a dark one at night;
+`.k:focus-visible`, which is accessibility chrome and takes `--accent`; and the
+page's own captions and links, which take `--muted`, `--ink2` and `--accent`
+like anywhere else.
 
 **2. The virtual deck's coach faces** (`.slotface`, `.nudgeface`, `.qface`,
 `.habitface`, `.emptyface`). These are **byte-parity mirrors** of
@@ -532,11 +552,19 @@ mind, and its page-local re-bind of `--card` / `--line` to glass values:
 
 ```css
 body { --card: rgba(255,255,255,.045); --line: rgba(255,255,255,.09); }
+
+@media (prefers-color-scheme: light) {
+  body:not([data-nav="dark"]) { --card: rgba(255,255,255,.72); --line: rgba(16,20,32,.10); }
+}
 ```
 
 This is a *re-bind of existing tokens*, not an escape from them — every `.card`
-on the page still says `var(--card)`, and the page is night-only so there is one
-value to get right. That is the sanctioned shape of a page-local look. What is
+on the page still says `var(--card)`, so the glass look is one edit and not
+forty literals. **The re-bind carries both themes**, because the page follows
+the OS like every other (§1): frosted white on a pale field by day, light lifted
+off a dark floor at night. The aurora's own floor is `--bg → --bg2`, so the
+dreamscape flips with the theme and only the coloured washes are painted on top.
+That is the sanctioned shape of a page-local look. What is
 *not* sanctioned on that page: hard-coded accents (`#8fb4ff` is a drifted
 `--accent`), hard-coded coach text (`#a78bfa` is `--violet-ink`), aurora stops
 typed as literals when `--violet` and `--accent` are the actual intent, and the
@@ -603,12 +631,17 @@ minimum:
    value and, where §2 lists one, a light-mode value. Renaming or dropping a
    token silently degrades a page to a browser default (usually black on black),
    so the declaration itself is the assertion.
-2. **No raw color outside the sanctioned files.** `index.html`, `habits.html`,
-   `nav.js` and `mind.html` contain no `#rrggbb`, `rgba(` or `hsla(` literal
-   except inside an explicitly allow-listed exception (mind.html's dreamscape
-   gradient and glass re-bind). `deck.html` is allow-listed as a whole for its
-   device render and key faces (§7) — with the focus ring exempted from the
-   allow-list, because it must be `--accent`.
+2. **No raw color outside the sanctioned files** — hex *and* the functional
+   notations (`rgb`/`hsl`/`oklch`/…) *and* CSS named colours, since any of the
+   three can smuggle a colour past a guard that only knows the others. The
+   allow-list is **exact literals in exact files, never a whole-file exemption**:
+   `mind.html` is now down to its glass re-bind and two aurora washes and holds
+   no hex at all, and `deck.html` lists only its enclosure, key wells and
+   key-face gradients — its studio vignette follows the theme and is not
+   allow-listed. Anything reading `var(--…)` or `hueFor(…)` is derived, not raw,
+   and always passes.
+   *Pruning that list when a literal becomes a token is part of the job:* a
+   stale entry silently re-permits a colour the system already replaced.
 3. **No off-ladder radius.** No `border-radius: 14px` or `6px` in any page; the
    only literal radii permitted are inside deck.html's device block.
 4. **No duplicate recipes.** The string `linear-gradient(135deg` appears exactly

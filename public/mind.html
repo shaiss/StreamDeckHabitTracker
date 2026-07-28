@@ -7,23 +7,33 @@
   <link rel="stylesheet" href="/theme.css" />
   <style>
     /* Sanctioned exception — design/WEB-UX.md §7.4: the coach's dreamscape.
-       Note this RE-BINDS the shared tokens rather than escaping them: every
-       niche below still reads var(--card)/var(--line), so the glass look is one
-       edit and not forty literals. The page is night-only (data-nav="dark"), so
-       there is exactly one value to get right. */
+       It RE-BINDS the shared tokens rather than escaping them: every niche
+       below still reads var(--card)/var(--line), so the glass look is one edit
+       and not forty literals. The page follows the OS theme like every other
+       page, so the re-bind has a value for each. */
     body {
-      --card: rgba(255,255,255,.045);
+      --card: rgba(255,255,255,.045);   /* glass: light lifted off a dark floor */
       --line: rgba(255,255,255,.09);
       min-height: 100vh;
-      /* The aurora is illustration, not chrome. The violet stop is exactly
-         --violet, so it is expressed as one; the blue and magenta have no token
-         on purpose (a magenta token would imply a role it has not earned) and
-         stay illustration literals. */
+      /* The aurora is illustration, not chrome. Its floor is the ordinary page
+         field (--bg → --bg2), so the whole dreamscape flips with the theme and
+         only the washes are painted on top. The violet stop is exactly --violet;
+         the blue and magenta have no token on purpose (a magenta token would
+         imply a role it has not earned) and stay illustration literals. */
       background:
         radial-gradient(60% 45% at 15% 10%, color-mix(in oklab, var(--violet), transparent 84%), transparent 60%),
         radial-gradient(50% 40% at 85% 20%, rgba(37,99,235,.13), transparent 60%),
         radial-gradient(70% 55% at 50% 100%, rgba(217,70,146,.10), transparent 65%),
-        linear-gradient(180deg, #0d0f16 0%, #0a0b11 100%);
+        linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%);
+    }
+    @media (prefers-color-scheme: light) {
+      body:not([data-nav="dark"]) {
+        /* frosted white on a pale field — the same idea inverted, not a
+           different one: the niche is still lifted off the floor, and the
+           hairline is still at the threshold of visibility */
+        --card: rgba(255,255,255,.72);
+        --line: rgba(16,20,32,.10);
+      }
     }
     /* the title sits tight against its tagline here — the dashboard's header
        gap would strand it above the fold */
@@ -61,7 +71,7 @@
     .note .d { color: var(--muted); font-size: 12px; margin-bottom: var(--s1); }
   </style>
 </head>
-<body data-nav="dark">
+<body>
   <script src="/nav.js" defer></script>
   <div class="wrap wide">
     <header>

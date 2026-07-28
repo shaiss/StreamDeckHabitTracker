@@ -7,9 +7,12 @@
   <link rel="stylesheet" href="/theme.css" />
   <style>
     /* Device geometry deliberately lives on :root, while theme.css declares the
-       page TOKENS on <body> (so body[data-nav="dark"] can commit this page to
-       night). The scope difference is the signal: these are measurements of a
-       physical object, not palette. Sanctioned exception — design/WEB-UX.md §7. */
+       page TOKENS on <body>. The scope difference is the signal: these are
+       measurements of a physical object, not palette — which is also why the
+       device keeps its own dark colours in light mode. A Stream Deck is black
+       plastic; recolouring it would be a lie about the hardware, and this page
+       exists to be an honest preview of it.
+       Sanctioned exception — design/WEB-UX.md §7. */
     :root {
       --key: 118px; --gap: 14px; --pad: 26px;
       --body1: #2a2c30; --body2: #131417; --bezel: #0b0c0e;
@@ -17,9 +20,11 @@
     html, body { height: 100%; }
     body {
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      /* sanctioned: the studio vignette staging the product shot is part of the
-         device illustration, not a page surface — design/WEB-UX.md §7 */
-      background: radial-gradient(120% 100% at 50% 0%, #23262b 0%, #101216 55%, #0a0b0d 100%);
+      /* The studio vignette staging the product shot. Built from the page
+         field so it follows the OS theme with everything else — a light room
+         in light mode, a dark one at night. The DEVICE below stays black
+         either way. */
+      background: radial-gradient(120% 100% at 50% 0%, var(--card2) 0%, var(--bg) 55%, var(--bg2) 100%);
       color: var(--muted); padding: var(--s5) var(--s3); min-height: 100vh;
     }
     /* The title is a caption centered above the device, so the shared header
@@ -177,7 +182,7 @@
     @media (min-width: 761px) and (max-width: 1000px) { :root { --key: 92px; --gap: 11px; --pad: 20px; } }
   </style>
 </head>
-<body data-nav="dark">
+<body>
   <script src="/nav.js" defer></script>
   <div class="top">
     <h1>Virtual Stream Deck</h1>

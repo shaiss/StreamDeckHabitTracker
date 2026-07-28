@@ -2,9 +2,11 @@
    Why: design/PHILOSOPHY.md.  How: design/WEB-UX.md (the operational guide —
    read it before adding a rule here or a hex anywhere).
 
-   One source of truth for every page + nav. Tokens live on <body> so
-   body[data-nav="dark"] can commit a page to night deliberately
-   (deck, mind) while other pages follow the system theme.
+   One source of truth for every page + nav. Tokens live on <body> so a page
+   can re-bind one locally (mind.html's glass) without forking the palette.
+   EVERY page follows the system theme; body[data-nav="dark"] remains as an
+   escape hatch but nothing uses it — a page pinned to night while its siblings
+   went light was exactly the drift #65 set out to remove.
 
    Contrast notes are measured against --card unless stated. Anything that
    carries text is held to 4.5:1; a token that would fail on a white card

@@ -68,17 +68,20 @@ test('no page references a token that does not exist', () => {
 const HEX_ALLOW = {
   // §7.1 the photoreal device + §7.2 the key faces, which are a byte-parity
   // contract with streamdeck-plugin/src/faces.mjs and must NOT become tokens.
+  // The device stays black in BOTH themes: it depicts black plastic, and a
+  // white Stream Deck would be a lie about the hardware (§7.1). The studio
+  // vignette behind it is NOT here — it is built from --card2/--bg/--bg2 and
+  // follows the theme like every other page field.
   'public/deck.html': [
     '#2a2c30', '#131417', '#0b0c0e',            // enclosure, bezel
-    '#23262b', '#101216', '#0a0b0d',            // studio vignette
     '#0e0f12', '#17181b', '#060708',            // faceplate, stand
     '#000', '#050506', '#0c0d10', '#050607',    // key well, unlit key
     '#141827', '#0a0c13', '#12151f',            // key-face base gradient
     '#fff'                                      // key-face label ink
   ],
-  // §7.4 the dreamscape's own night floor — the aurora's violet stop is
-  // already expressed as color-mix(var(--violet)).
-  'public/mind.html': ['#0d0f16', '#0a0b11']
+  // mind.html has no hex left: the dreamscape floor is --bg → --bg2 and the
+  // violet stop is color-mix(var(--violet)), so it flips with the theme.
+  'public/mind.html': []
 };
 
 // A functional color is as raw as a hex. These are the exact literals the
@@ -95,7 +98,8 @@ const FUNC_ALLOW = {
     'rgba(255,255,255,', 'rgba(0,0,0,'
   ],
   'public/mind.html': [
-    'rgba(255,255,255,',              // §7.4 glass re-bind + orb specular
+    'rgba(255,255,255,',              // §7.4 glass re-bind (night) + orb specular
+    'rgba(16,20,32,.10)',             // §7.4 glass re-bind (light) hairline
     'rgba(37,99,235,.13)', 'rgba(217,70,146,.10)'   // §7.4 aurora blue + magenta
   ],
   'public/nav.js': ['rgba(139,92,246,'],            // the brand dot's violet glow
