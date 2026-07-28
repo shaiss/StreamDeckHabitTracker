@@ -47,22 +47,41 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
   const ringWidth = (1.5 + 1.5 * urg).toFixed(1);
   const badgeFill = hslToHex(hue, 80, 80);
 
-  // Streak ring: faint full-circle track, bright arc from 12 o'clock whose
-  // sweep is ringFill × 360° (dasharray on a rotated circle — no path math).
-  let streakRing = '';
+  // Shared niche geometry: the hairline border and the progress fill trace the
+  // exact same rounded rect, so they read as one frame — keep them off the same
+  // constants rather than two copies of the literals that could drift (#64 review).
+  const frameR = 17, frameX = 6, frameY = 6, frameW = S - 12, frameH = S - 12;
+
+  // Progress frame (#64): the key's OWN rounded-rect border fills, instead of a
+  // separate circle floating over the square (which read as pasted-on because
+  // its curve never met the key edges). A dim full-perimeter track plus a bright
+  // segment tracing ringFill of the perimeter, clockwise from top-center — so
+  // the niche edge itself lights up as the day's goal fills. Same rounded-rect
+  // geometry as the hairline border below, so the two read as one frame.
+  //
+  // Kept rasterizer-safe: only <path> + stroke-dasharray + round caps (already
+  // proven on the SD rasterizer). The path is authored starting at top-center,
+  // clockwise, so the dash fills from the top with no dashoffset math; the exact
+  // rounded-rect perimeter is 2(w+h) − 8r + 2πr (four quarter-corners = 2πr).
+  let progressFrame = '';
   if (state && typeof state.ringFill === 'number') {
-    const R = S / 2 - 7;
-    streakRing =
-      `<circle cx="${S / 2}" cy="${S / 2}" r="${R}" fill="none" ` +
-      `stroke="${hslToHex(hue, sat, 55)}" stroke-opacity="0.18" stroke-width="3"/>`;
+    const r = frameR, x = frameX, y = frameY, w = frameW, h = frameH, cx = x + w / 2;
+    const framePath =
+      `M${cx} ${y} H${x + w - r} A${r} ${r} 0 0 1 ${x + w} ${y + r} ` +
+      `V${y + h - r} A${r} ${r} 0 0 1 ${x + w - r} ${y + h} ` +
+      `H${x + r} A${r} ${r} 0 0 1 ${x} ${y + h - r} ` +
+      `V${y + r} A${r} ${r} 0 0 1 ${x + r} ${y} Z`;
+    const P = 2 * (w + h) - 8 * r + 2 * Math.PI * r;
+    const fw = 4; // thick border, so the fill reads at a glance
+    progressFrame =
+      `<path d="${framePath}" fill="none" stroke="${hslToHex(hue, sat, 55)}" ` +
+      `stroke-opacity="0.18" stroke-width="${fw}"/>`;
     if (state.ringFill > 0) {
-      const C = 2 * Math.PI * R;
-      const sweep = (C * Math.min(1, state.ringFill)).toFixed(2);
-      streakRing +=
-        `<circle cx="${S / 2}" cy="${S / 2}" r="${R}" fill="none" ` +
-        `stroke="${hslToHex(hue, 85, 72)}" stroke-opacity="0.95" stroke-width="3" ` +
-        `stroke-linecap="round" stroke-dasharray="${sweep} ${C.toFixed(2)}" ` +
-        `transform="rotate(-90 ${S / 2} ${S / 2})"/>`;
+      const lit = (P * Math.min(1, state.ringFill)).toFixed(2);
+      progressFrame +=
+        `<path d="${framePath}" fill="none" stroke="${hslToHex(hue, 85, 72)}" ` +
+        `stroke-opacity="0.95" stroke-width="${fw}" stroke-linecap="round" ` +
+        `stroke-dasharray="${lit} ${P.toFixed(2)}"/>`;
     }
   }
 
@@ -99,8 +118,8 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
     `</defs>` +
     `<rect width="${S}" height="${S}" fill="url(#b)"/>` +
     `<rect width="${S}" height="${S}" fill="url(#h)"/>` +
-    `<rect x="6" y="6" width="${S - 12}" height="${S - 12}" rx="17" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` +
-    streakRing +
+    `<rect x="${frameX}" y="${frameY}" width="${frameW}" height="${frameH}" rx="${frameR}" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` +
+    progressFrame +
     `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" ` +
     `font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc(emoji)}</text>` +
     `<text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" ` +

@@ -79,6 +79,8 @@ ships with a regression test. After merging, also probe the live deployment:
   budget claim via SET NX) back the coach-navigation guardrails (#54)
 - `GET /api/roster` — pending roster proposals + retirement archive
   (`?run=1` forces a coach roster pass; 30s cooldown)
+- `GET /api/coachpage` — current Coach-page assignments (`?run=1` or POST forces
+  a coach-page pass; 30s cooldown, rewrites `habits:coach:page` → deck slots 5..16)
 - `GET /api/experiment?run=1&models=a,b&n=3` — replay captured coach contexts
   against multiple models, rule-scored (lib/quality.js); CI wrapper in
   .github/workflows/coach-experiment.yml
@@ -113,11 +115,14 @@ Vercel MCP `web_fetch_vercel_url` tool to probe the live site.
   cold starts — Mastra's in-process memory would not, and we deliberately do
   not add a full storage adapter).
 - `lib/coach.js` — the AI coach, **purely Mastra-routed** (no raw-z.ai
-  fallback). Six entry points: `fullSuggest()` (manual refresh), `morningPass()`
+  fallback). Seven entry points: `fullSuggest()` (manual refresh), `morningPass()`
   (cron), `reactTo(entry)` (per-tap background pass via `waitUntil` from
   `@vercel/functions`, 45s cooldown claimed in Redis *before* the model call to
   prevent double-fire), `nudgePass()` (proactive single-slot repaint, driven by
-  the deck's `/api/slots` poll), `rosterPass()` (self-managing roster), and
+  the deck's `/api/slots` poll), `rosterPass()` (self-managing roster),
+  `coachPagePass()` (the AI-curated Coach page, `habits:coach:page`, slots
+  5..16 — run by the morning cron and `/api/coachpage`, reserves the fixed
+  habits + front-4, not dataset-captured like the roster pass), and
   `dailyDigest()` (cron insight). A coach failure no longer silently rescues —
   it surfaces as a clean error: `reactTo`/`nudgePass` no-op (already inside
   `waitUntil(...catch)`), `fullSuggest`/`morningPass`/`dailyDigest` return null

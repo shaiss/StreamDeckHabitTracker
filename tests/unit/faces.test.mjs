@@ -50,16 +50,42 @@ test('hueFor is the shared tools/lib-hue.mjs formula', async () => {
 const state = (over = {}) =>
   ({ count: 0, goal: 1, doneToday: false, streak: 0, ringFill: 0, ...over });
 
-test('living faces: streak ring track always draws, arc sweeps with ringFill', () => {
+// #64: the progress indicator is the key's OWN rounded-rect border filling,
+// not a separate circle floating over the square.
+test('living faces: the key border fills — a rounded-rect frame, not a floating circle', () => {
   const third = decode(face('🚽', 'Pee', 20, '', 72, state({ count: 1, goal: 3, ringFill: 1 / 3 })));
-  assert.ok(third.includes('stroke-dasharray'), 'partial fill draws the arc');
-  assert.ok(third.includes('stroke-linecap="round"'), 'arc ends are rounded');
+  assert.ok(!third.includes('rotate(-90'), 'the old rotated progress circle is gone');
+  assert.ok(!/r="65"/.test(third), 'no inset progress-circle radius survives');
+  assert.ok(third.includes('stroke-dasharray'), 'partial fill draws a lit segment');
+  assert.ok(third.includes('stroke-linecap="round"'), 'the lit segment ends are rounded');
+  // The fill is a <path> tracing the rounded-rect (A17 17 corners), not a circle.
+  assert.match(third, /<path d="M[^"]*A17 17[^"]*"[^>]*stroke-dasharray/,
+    'the fill traces the rounded-rect frame');
+
   const empty = decode(face('🚽', 'Pee', 20, '', 72, state()));
-  assert.ok(!empty.includes('stroke-dasharray'), 'zero fill draws no arc');
-  assert.ok(empty.includes('stroke-opacity="0.18"'), 'the faint track ring still shows');
+  assert.ok(!empty.includes('stroke-dasharray'), 'zero fill draws no lit segment');
+  assert.ok(empty.includes('stroke-opacity="0.18"'), 'the faint frame track still shows');
+  assert.ok(empty.includes('<path d="M'), 'the track is drawn as the frame path');
+
   const stateless = decode(face('🚽', 'Pee', 20, ''));
-  assert.ok(!stateless.includes('stroke-dasharray'), 'no state, no ring arc');
-  assert.ok(!stateless.includes('stroke-opacity="0.18"'), 'no state, no ring track');
+  assert.ok(!stateless.includes('stroke-dasharray'), 'no state, no fill');
+  assert.ok(!stateless.includes('<path d="M'), 'no state, no frame');
+});
+
+test('living faces: the lit border length grows with ringFill, up to the perimeter', () => {
+  const lit = (f) => {
+    const m = decode(face('🚽', 'Pee', 20, '', 72, state({ count: 1, goal: 4, ringFill: f })))
+      .match(/stroke-dasharray="([\d.]+) /);
+    return m ? +m[1] : 0;
+  };
+  const [a, b, c] = [0.25, 0.5, 1].map(lit);
+  assert.ok(a < b && b < c, `lit length rises monotonically: ${a},${b},${c}`);
+  // Overshoot (repeatable habits can exceed their goal) clamps to the full
+  // perimeter via Math.min(1, ringFill) — never a longer-than-the-frame dash.
+  assert.equal(lit(1.5), c, 'ringFill past the goal is clamped to the full perimeter');
+  // Full fill ≈ the exact rounded-rect perimeter 2(w+h) − 8r + 2πr, w=h=132, r=17.
+  const P = 2 * (132 + 132) - 8 * 17 + 2 * Math.PI * 17;
+  assert.ok(Math.abs(c - P) < 0.5, `full fill ≈ perimeter ${P.toFixed(2)}, got ${c}`);
 });
 
 test('living faces: dim-when-done mutes the halo and shows a check', () => {
