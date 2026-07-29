@@ -87,7 +87,7 @@ interactive companion **renders** the OLED keys — the states, the motion, the
 patterns — so you can see and feel the grammar instead of imagining it. Treat it as
 the "figures" for these documents:
 
-**▶ [The OLED Key Language — interactive artifact](https://claude.ai/code/artifact/5108026f-5528-4749-a482-d16d1056cb0b)**
+**▶ [The OLED Key Language — interactive artifact](https://stream-deck-habit-tracker.vercel.app/design/ai-human-bridge/key-language.html)**
 
 (Try the *Desaturate* toggle to confirm the states survive without color, press an
 Approval Gate, and arm the two-stage delete. The dark, glow-on-black world is drawn

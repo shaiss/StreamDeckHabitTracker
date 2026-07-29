@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The OLED Key Language — interactive artifact</title>
+  <meta name="description" content="The companion artifact for the AI ⇄ Human Bridge design study: the OLED key design language rendered live." />
+  <link rel="stylesheet" href="/theme.css" />
+  <script src="/nav.js" defer></script>
+  <style>
+    /* This page is the live "figures" for design/ai-human-bridge/. It renders the
+       grammar defined in 02-design-language.md, so the state colors and motions
+       below are NOT free design choices — they are the tokens the study fixes.
+       The Nocturne Ritual tokens (background, chrome, type) come from theme.css;
+       everything in :root below is the study's own fixed vocabulary (doc 2.2). */
+    :root {
+      /* The state channel — frame color, one job each (doc 2.2). */
+      --state-idle:    #3A3F47;
+      --state-working: #2EA3FF;
+      --state-wait:    #FFB000;   /* amber — the signature "your move" */
+      --state-success: #22C55E;
+      --state-blocked: #FF4D4D;
+      --action-danger: #FF4D4D;   /* same hue as blocked, different zone (doc 2.2) */
+
+      /* Agent-identity hues — live ONLY in the status dot (doc 2.2). */
+      --agent-builder: #8b5cf6;   /* violet — "the coach is speaking", kept sacred */
+      --agent-coder:   #2dd4bf;   /* teal  */
+      --agent-research:#ec4899;   /* pink  */
+      --agent-runner:  #a3e635;   /* lime  */
+    }
+
+    /* ---- a single key --------------------------------------------------
+       The face is ~104px, matching the 72–120px range the study assumes.
+       The five zones (doc 2.1): FRAME (the border ring + glow), STATUS DOT
+       (top-left), BADGE (top-right), GLYPH (center), LABEL (bottom). State
+       owns the frame; object identity owns the glyph; agent identity owns the
+       dot — three zones, three jobs, no collision. */
+    .key {
+      --frame: var(--state-idle);
+      --glow: 0px;
+      position: relative;
+      width: 104px; height: 104px;
+      border-radius: 14px;
+      background: radial-gradient(120% 120% at 50% 18%, #1b1f29 0%, #10131b 72%, #0c0e14 100%);
+      border: 3px solid var(--frame);
+      box-shadow: 0 0 var(--glow) color-mix(in oklab, var(--frame), transparent 30%),
+                  inset 0 1px 0 rgba(255,255,255,.05);
+      display: grid;
+      grid-template-rows: 1fr auto;
+      padding: 8px 6px 7px;
+      color: #eef1f6;
+      font-family: "SF Mono", "JetBrains Mono", "Cascadia Mono", Consolas, Menlo, monospace;
+      user-select: none;
+      transition: border-color .25s, box-shadow .25s;
+    }
+    .key.clickable { cursor: pointer; }
+    .key.clickable:hover { transform: translateY(-1px); }
+
+    /* status dot — top-left, agent identity only */
+    .k-dot {
+      position: absolute; top: 7px; left: 8px;
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--dot, transparent);
+      box-shadow: 0 0 6px color-mix(in oklab, var(--dot, transparent), transparent 40%);
+    }
+    /* badge — top-right, the number / index / hotkey (doc 2.4) */
+    .k-badge {
+      position: absolute; top: 6px; right: 7px;
+      font-size: 11px; font-weight: 700; line-height: 1;
+      color: #cfd6e2; opacity: .9;
+    }
+    /* glyph — center, the verb (doc 2.5). carries object identity hue by default. */
+    .k-glyph {
+      grid-row: 1; align-self: center; justify-self: center;
+      font-size: 30px; line-height: 1;
+      color: var(--glyph-hue, #eef1f6);
+      text-shadow: 0 0 12px color-mix(in oklab, var(--glyph-hue, #eef1f6), transparent 45%);
+    }
+    /* label — bottom strip, ≤2 words, uppercase mono (doc 2.4) */
+    .k-label {
+      grid-row: 2; text-align: center;
+      font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+      text-transform: uppercase; line-height: 1.15;
+      color: var(--label-ink, #eef1f6);
+    }
+    /* progress bar slot, used by the sweep motion inside the glyph row */
+    .k-progress {
+      grid-row: 1; align-self: end; justify-self: center;
+      width: 62%; height: 4px; border-radius: 2px;
+      background: rgba(255,255,255,.12); overflow: hidden; margin-bottom: 14px;
+    }
+    .k-progress > i { display: block; height: 100%; width: 60%;
+      background: var(--frame); }
+
+    /* ---- state classes = the frame channel (doc 2.2 / 2.3) -------------
+       Color + motion together; motion is what survives desaturation. */
+    .s-idle     { --frame: var(--state-idle); }
+    .s-working  { --frame: var(--state-working); --glow: 6px; }
+    .s-wait     { --frame: var(--state-wait);    --glow: 10px; }
+    .s-success  { --frame: var(--state-success); --glow: 8px; }
+    .s-blocked  { --frame: var(--state-blocked); --glow: 10px; }
+    .s-confirming { --frame: #ffffff; --glow: 14px; }
+    .is-danger  { --glyph-hue: var(--action-danger); --label-ink: var(--action-danger); }
+
+    /* ---- the motion vocabulary (doc 2.3) — calm by default --------------
+       Breathing ~0.5 Hz (2s), blink ~2 Hz (0.5s). One loud key at a time. */
+    @keyframes breathe {        /* wait — gentle, persistent */
+      0%, 100% { box-shadow: 0 0 4px color-mix(in oklab, var(--frame), transparent 60%),
+                            inset 0 1px 0 rgba(255,255,255,.05); }
+      50%      { box-shadow: 0 0 14px color-mix(in oklab, var(--frame), transparent 20%),
+                            inset 0 1px 0 rgba(255,255,255,.05); }
+    }
+    @keyframes shimmer {        /* working, unknown duration — travelling highlight */
+      0%   { background-position: -120% 0; }
+      100% { background-position: 220% 0; }
+    }
+    @keyframes sweep {          /* working, known progress — a bar filling */
+      0%   { width: 8%; }
+      100% { width: 92%; }
+    }
+    @keyframes blink {          /* blocked / urgent — the only "loud" motion, 2 Hz */
+      0%, 49%   { box-shadow: 0 0 14px color-mix(in oklab, var(--frame), transparent 10%),
+                              inset 0 1px 0 rgba(255,255,255,.05); opacity: 1; }
+      50%, 100% { box-shadow: 0 0 2px color-mix(in oklab, var(--frame), transparent 80%),
+                              inset 0 1px 0 rgba(255,255,255,.05); opacity: .35; }
+    }
+    @keyframes flash {          /* press acknowledged — flash-to-white → settle (doc 2.3) */
+      0%   { background: #ffffff; }
+      100% { background: radial-gradient(120% 120% at 50% 18%, #1b1f29 0%, #10131b 72%, #0c0e14 100%); }
+    }
+    @keyframes dot-pulse {      /* the attention beacon's breathing, applied to the glyph */
+      0%, 100% { opacity: .55; transform: scale(.96); }
+      50%      { opacity: 1;    transform: scale(1.04); }
+    }
+
+    .m-breathe  { animation: breathe 2s ease-in-out infinite; }
+    .m-blink    { animation: blink .5s steps(1, end) infinite; }
+    .m-shimmer .k-glyph {
+      background: linear-gradient(100deg,
+        color-mix(in oklab, var(--glyph-hue, #eef1f6), transparent 55%) 30%,
+        var(--glyph-hue, #eef1f6) 50%,
+        color-mix(in oklab, var(--glyph-hue, #eef1f6), transparent 55%) 70%);
+      background-size: 200% 100%;
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: shimmer 1.8s linear infinite;
+    }
+    .m-sweep .k-progress > i { animation: sweep 2.4s ease-in-out infinite; }
+    .m-flash  { animation: flash .35s ease-out 1; }
+
+    /* armed = the two-stage Confirm's first-press face (doc 3.8) */
+    .is-armed { --frame: var(--action-danger); --glow: 12px; animation: breathe 1s ease-in-out infinite; }
+
+    /* ---- global controls: the two accessibility checks the README names - */
+    /* Desaturate removes color so motion + glyph must carry the state alone (doc 5.2).
+       Reduced motion swaps movement for brightness steps (doc 2.3). */
+    body.desaturate .key,
+    body.desaturate .beacon,
+    body.desaturate .dial { filter: grayscale(1); }
+    body.reduced .key,
+    body.reduced .beacon { animation: none !important; }
+    body.reduced .m-breathe { box-shadow: 0 0 12px color-mix(in oklab, var(--frame), transparent 25%); }
+    body.reduced .m-blink   { animation: none !important; opacity: 1; }
+    body.reduced .m-shimmer .k-glyph,
+    body.reduced .m-sweep .k-progress > i { animation: none !important; }
+    /* when motion is off, brightness steps keep "your move" louder than idle */
+    body.reduced .s-wait    { --glow: 14px; }
+
+    /* ---- page layout --------------------------------------------------- */
+    .wrap.wide { max-width: 980px; }
+    .lead { color: var(--ink2); font-size: 15px; line-height: 1.6; max-width: 70ch; }
+    .controls {
+      display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center;
+      background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md);
+      padding: var(--s2) var(--s3); margin: var(--s4) 0 var(--s5);
+    }
+    .toggle {
+      display: inline-flex; align-items: center; gap: var(--s2);
+      border: 1px solid var(--line); border-radius: var(--r-sm);
+      background: var(--bg); color: var(--fg);
+      padding: var(--s1) var(--s3); font: 600 12.5px/1 var(--font); cursor: pointer;
+    }
+    .toggle[aria-pressed="true"] {
+      background: var(--grad-coach); color: var(--on-violet); border-color: transparent;
+    }
+    .controls .spacer { margin-left: auto; }
+
+    /* rows of specimens */
+    .row { display: flex; flex-wrap: wrap; gap: var(--s4); align-items: flex-end; }
+    .spec { display: flex; flex-direction: column; align-items: center; gap: var(--s2); }
+    .spec .cap { font-size: 11.5px; color: var(--muted); text-align: center; max-width: 116px; }
+    .spec .cap b { color: var(--ink2); font-weight: 600; }
+
+    .section { margin: var(--s6) 0; }
+    .section .section-h { display: flex; align-items: baseline; gap: var(--s3); }
+    .section .section-h .ref { font-size: 11px; color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
+    .blurb { color: var(--ink2); font-size: 13.5px; line-height: 1.6; margin: var(--s2) 0 var(--s4); max-width: 72ch; }
+
+    .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--s5); }
+    .panel + .panel { margin-top: var(--s4); }
+    .panel h3 { margin: 0 0 var(--s1); font-size: 14.5px; font-weight: 650; }
+    .panel .when { color: var(--muted); font-size: 12.5px; margin: 0 0 var(--s4); }
+    .panel .status { margin-top: var(--s3); min-height: 1.2em; }
+
+    /* annotated anatomy key */
+    .anatomy { display: flex; gap: var(--s5); align-items: center; flex-wrap: wrap; }
+    .anatomy .stage { position: relative; }
+    .anatomy dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: var(--s2) var(--s4); font-size: 13px; }
+    .anatomy dt { color: var(--violet-ink); font-weight: 700; }
+    .anatomy dd { margin: 0; color: var(--ink2); }
+
+    /* the attention beacon is a single key, framed large */
+    .beacon { width: 104px; height: 104px; border-radius: 14px;
+      border: 3px solid var(--frame, var(--state-wait));
+      background: radial-gradient(120% 120% at 50% 18%, #1b1f29 0%, #10131b 72%, #0c0e14 100%);
+      display: grid; place-items: center; color: var(--state-wait); font-size: 30px;
+      box-shadow: 0 0 10px color-mix(in oklab, var(--frame, var(--state-wait)), transparent 30%); }
+    .beacon.breathe { animation: breathe 2s ease-in-out infinite; }
+
+    /* dial (Stream Deck +) — the analog channel (doc 3.7) */
+    .dial {
+      width: 96px; height: 96px; border-radius: 50%;
+      background: radial-gradient(120% 120% at 50% 30%, #1b1f29, #0c0e14);
+      border: 3px solid var(--state-wait);
+      display: grid; place-items: center; color: #eef1f6;
+      font-family: "SF Mono", Consolas, monospace; font-size: 22px; font-weight: 700;
+      box-shadow: 0 0 10px color-mix(in oklab, var(--state-wait), transparent 40%);
+    }
+
+    .backnote { margin-top: var(--s6); }
+  </style>
+</head>
+<body>
+  <main class="wrap wide">
+    <header>
+      <div>
+        <h1>The OLED Key Language</h1>
+        <p class="sub">Interactive artifact · companion to the <a href="README.md">AI ⇄ Human Bridge</a> design study</p>
+      </div>
+    </header>
+
+    <p class="lead">
+      The written study fixes a small grammar; this page <em>renders</em> it. Each key is a
+      <b>semantic tile</b> that answers — in under a second, the same way every time —
+      <i>whose turn</i> (the frame), <i>what</i> (the glyph + label), <i>what a press does</i>
+      (the verb), and <i>how urgent</i> (the motion). Press the keys. Toggle
+      <b>Desaturate</b> to confirm the states survive without color, and <b>Reduced motion</b>
+      to see the brightness-only fallback.
+    </p>
+
+    <div class="controls" role="group" aria-label="Global view controls">
+      <button class="toggle" id="desaturate" aria-pressed="false">Desaturate</button>
+      <button class="toggle" id="reduced" aria-pressed="false">Reduced motion</button>
+      <span class="spacer"></span>
+      <span class="hint">Two accessibility checks from the study (docs 2.2 &amp; 5.2).</span>
+    </div>
+
+    <!-- 1 · ANATOMY ===================================================== -->
+    <section class="section">
+      <h2 class="section-h">Key anatomy <span class="ref">doc 2.1 — the five zones</span></h2>
+      <div class="panel">
+        <div class="anatomy">
+          <div class="stage">
+            <div class="key s-wait m-breathe" aria-label="annotated specimen">
+              <span class="k-dot" style="--dot: var(--agent-builder);"></span>
+              <span class="k-badge">²</span>
+              <div class="k-glyph" style="--glyph-hue: #7fa9ff;">✓</div>
+              <div class="k-label">Approve</div>
+            </div>
+          </div>
+          <dl>
+            <dt>Frame</dt><dd>outer ring — <b>state</b> (color) + urgency (motion). The loudest channel; readable across the room.</dd>
+            <dt>Status dot</dt><dd>top-left — <b>which agent</b> owns this (multi-agent only). Object identity never lives here.</dd>
+            <dt>Badge</dt><dd>top-right — the <b>number</b>: count, option index, or hotkey. Never inline in the label.</dd>
+            <dt>Glyph</dt><dd>center — the action's <b>verb</b>; at rest it carries the object's own identity hue.</dd>
+            <dt>Label</dt><dd>bottom — ≤2 words, uppercase mono, high contrast.</dd>
+          </dl>
+        </div>
+        <p class="blurb" style="margin-bottom:0;">
+          <b>State owns the frame; object identity owns the interior; agent identity owns the dot.</b>
+          Three zones, three jobs — that firewall is what lets an amber "your move" frame light up
+          without touching the glyph that says <i>what</i> is waiting.
+        </p>
+      </div>
+    </section>
+
+    <!-- 2 · STATE COLOR SYSTEM ========================================== -->
+    <section class="section" id="states">
+      <h2 class="section-h">The state color system <span class="ref">doc 2.2 — color + motion, redundantly encoded</span></h2>
+      <p class="blurb">
+        Color is reserved almost entirely for <b>turn-state</b>. Each hue has exactly one job, and
+        each state is carried <em>twice</em> — color <i>and</i> motion — so the meaning survives when
+        the color can't. Hit <b>Desaturate</b>: the breathing, blinking, and shimmer still tell you
+        whose turn it is.
+      </p>
+      <div class="panel">
+        <div class="row">
+          <div class="spec">
+            <div class="key s-idle"><div class="k-glyph" style="--glyph-hue:#8f97a6;">◆</div><div class="k-label">Idle</div></div>
+            <div class="cap"><b>idle</b><br>#3A3F47 · still</div>
+          </div>
+          <div class="spec">
+            <div class="key s-working m-shimmer"><div class="k-glyph" style="--glyph-hue:#2EA3FF;">▶</div><div class="k-label">Working</div></div>
+            <div class="cap"><b>working</b><br>#2EA3FF · shimmer</div>
+          </div>
+          <div class="spec">
+            <div class="key s-wait m-breathe"><div class="k-glyph" style="--glyph-hue:#FFB000;">✋</div><div class="k-label">Your move</div></div>
+            <div class="cap"><b>wait</b> · amber<br>#FFB000 · breathing</div>
+          </div>
+          <div class="spec">
+            <div class="key s-success"><div class="k-glyph" style="--glyph-hue:#22C55E;">✓</div><div class="k-label">Done</div></div>
+            <div class="cap"><b>success</b><br>#22C55E · settle</div>
+          </div>
+          <div class="spec">
+            <div class="key s-blocked m-blink"><div class="k-glyph" style="--glyph-hue:#FF4D4D;">!</div><div class="k-label">Blocked</div></div>
+            <div class="cap"><b>blocked</b><br>#FF4D4D · fast blink</div>
+          </div>
+          <div class="spec">
+            <div class="key s-idle is-danger"><div class="k-glyph">✕</div><div class="k-label">Delete</div></div>
+            <div class="cap"><b>danger</b> (action)<br>#FF4D4D · glyph+label, not frame</div>
+          </div>
+        </div>
+        <p class="blurb" style="margin-bottom:0;">
+          <b>Amber is the signature.</b> A dark deck with one amber key breathing is the canonical
+          "you're needed" picture. <b>Blocked</b> and <b>danger</b> share a red but not a channel:
+          blocked is a key's <i>state</i> (frame), danger is an <i>action's</i> property (glyph).
+        </p>
+      </div>
+    </section>
+
+    <!-- 3 · GLYPH GRAMMAR =============================================== -->
+    <section class="section">
+      <h2 class="section-h">The glyph grammar <span class="ref">doc 2.5 — one verb, one glyph, everywhere</span></h2>
+      <p class="blurb">
+        Glyphs name the <b>verb</b> — what pressing <i>does</i> — so the affordance is legible before
+        the label is read. Filled means active/running; outline means available. A small, teachable set.
+      </p>
+      <div class="panel">
+        <div class="row" id="glyph-row"></div>
+      </div>
+    </section>
+
+    <!-- 4 · INTERACTION PATTERNS ======================================== -->
+    <section class="section">
+      <h2 class="section-h">Interaction patterns <span class="ref">doc 3 — composed from the tokens above, nothing new</span></h2>
+      <p class="blurb">
+        These are the "components" of the language: named, learn-once shapes for the recurring
+        moments of supervision. Press them — every committing press <b>flashes white</b> (the deck
+        saying "got it") before the frame shows what your press did.
+      </p>
+
+      <!-- 3.1 Approval Gate -->
+      <div class="panel">
+        <h3>3.1 · Approval Gate <span class="tag">the workhorse</span></h3>
+        <p class="when">When the agent wants to do something with consequences — run a command, push a commit, spend money.</p>
+        <div class="row" id="approval-gate">
+          <div class="spec">
+            <div class="key s-wait m-breathe clickable" data-action="approve">
+              <div class="k-glyph" style="--glyph-hue:#22C55E;">✓</div><div class="k-label">Approve</div>
+            </div>
+            <div class="cap">affirmative · left</div>
+          </div>
+          <div class="spec">
+            <div class="key s-wait m-breathe clickable" data-action="details">
+              <div class="k-glyph" style="--glyph-hue:#7fa9ff;">…</div><div class="k-label">Details</div>
+            </div>
+            <div class="cap">escape hatch · center</div>
+          </div>
+          <div class="spec">
+            <div class="key s-wait m-breathe clickable" data-action="deny">
+              <div class="k-glyph" style="--glyph-hue:#cfd6e2;">✕</div><div class="k-label">Deny</div>
+            </div>
+            <div class="cap">negative · right</div>
+          </div>
+        </div>
+        <p class="status" id="approval-status">Same three-key shape, same order, every time — answerable by position before it's read.</p>
+      </div>
+
+      <!-- 3.2 Choice Picker -->
+      <div class="panel">
+        <h3>3.2 · Choice Picker <span class="tag">one of N</span></h3>
+        <p class="when">When the AI has several valid paths and wants the human to pick — "which fix?", "which branch?".</p>
+        <div class="row" id="choice-picker">
+          <div class="spec"><div class="key s-wait m-breathe clickable" data-pick="rebase"><span class="k-badge">¹</span><div class="k-glyph" style="--glyph-hue:#7fa9ff;">▤</div><div class="k-label">Rebase</div></div><div class="cap">option 1</div></div>
+          <div class="spec"><div class="key s-wait m-breathe clickable" data-pick="merge"><span class="k-badge">²</span><div class="k-glyph" style="--glyph-hue:#7fa9ff;">▤</div><div class="k-label">Merge</div></div><div class="cap">option 2</div></div>
+          <div class="spec"><div class="key s-wait m-breathe clickable" data-pick="squash"><span class="k-badge">³</span><div class="k-glyph" style="--glyph-hue:#7fa9ff;">▤</div><div class="k-label">Squash</div></div><div class="cap">option 3</div></div>
+        </div>
+        <p class="status" id="choice-status">Options are spatial and parallel — compared at a glance, not scrolled. Indices let the AI say "I recommend ②".</p>
+      </div>
+
+      <!-- 3.8 Two-Stage Confirm -->
+      <div class="panel">
+        <h3>3.8 · Two-Stage Confirm <span class="tag nudge">irreversible — try it</span></h3>
+        <p class="when">When a single press would do something you can't undo. Press once to <b>arm</b> (it turns danger-red), press again within ~3s to commit — or let it lapse to disarm.</p>
+        <div class="row">
+          <div class="spec">
+            <div class="key s-wait m-breathe clickable is-danger" id="delete-key">
+              <div class="k-glyph">⚠</div><div class="k-label" id="delete-label">Delete</div>
+            </div>
+            <div class="cap" id="delete-cap">press to arm</div>
+          </div>
+        </div>
+        <p class="status" id="delete-status">Two deliberate acts make an irreversible action nearly impossible to trigger by accident — the physicality <i>is</i> the warning.</p>
+      </div>
+
+      <!-- 3.3 Attention Beacon + 3.5 Mode + 3.6 Nudge -->
+      <div class="panel">
+        <h3>3.3 · Attention Beacon  ·  3.5 · Toggle / Mode  ·  3.6 · Nudge / Interrupt</h3>
+        <p class="when">The whole thesis compressed into one key (beacon); the master dial of supervision (autonomy); and the human-initiated halt.</p>
+        <div class="row" style="align-items:center;">
+          <div class="spec">
+            <div class="beacon breathe clickable" id="beacon" style="--frame: var(--state-wait);" title="click to clear">◆<span style="font-size:12px;vertical-align:super;margin-left:2px;">²</span></div>
+            <div class="cap" id="beacon-cap"><b>beacon</b><br>amber · 2 pending</div>
+          </div>
+          <div class="spec">
+            <div class="key s-idle clickable" id="mode-key" style="--frame: var(--agent-builder); --glow:4px;">
+              <div class="k-glyph" style="--glyph-hue:#8b5cf6;">⚙</div><div class="k-label" id="mode-label">Assisted</div>
+            </div>
+            <div class="cap" id="mode-cap"><b>autonomy</b><br>press to cycle</div>
+          </div>
+          <div class="spec">
+            <div class="key s-idle clickable" data-nudge="pause" style="--frame: var(--state-idle);">
+              <div class="k-glyph" style="--glyph-hue:#cfd6e2;">⏸</div><div class="k-label">Pause</div>
+            </div>
+            <div class="cap">human-initiated</div>
+          </div>
+          <div class="spec">
+            <div class="key s-idle clickable is-danger" data-nudge="stop">
+              <div class="k-glyph">■</div><div class="k-label">Stop</div>
+            </div>
+            <div class="cap">two-stage if it kills work</div>
+          </div>
+        </div>
+        <p class="status" id="misc-status">The beacon is dark when the coach is quiet, amber when it wants you. Autonomy sets how often every <i>other</i> pattern fires.</p>
+      </div>
+
+      <!-- 3.4 Status Board + 3.7 Dial + 3.9 Handoff -->
+      <div class="panel">
+        <h3>3.4 · Status Board  ·  3.7 · Dial (Stream Deck +)  ·  3.9 · Handoff</h3>
+        <p class="when">Ambient displays (a press only drills in); the analog channel for quantities; and the AI raising its hand.</p>
+        <div class="row" style="align-items:center;">
+          <div class="spec">
+            <div class="key s-working m-sweep" style="width:96px;height:96px;">
+              <span class="k-dot" style="--dot: var(--agent-coder);"></span>
+              <div class="k-progress"><i></i></div>
+              <div class="k-label" style="--label-ink:#2EA3FF;">Build</div>
+            </div>
+            <div class="cap"><b>board</b><br>working · coder dot</div>
+          </div>
+          <div class="spec">
+            <div class="key s-wait m-breathe" style="width:96px;height:96px;">
+              <span class="k-dot" style="--dot: var(--agent-runner);"></span>
+              <div class="k-glyph" style="--glyph-hue:#22C55E;">✓</div>
+              <div class="k-label">Tests</div>
+            </div>
+            <div class="cap">flipped to wait — now a gate</div>
+          </div>
+          <div class="spec">
+            <div class="dial" title="turn to scrub, push to commit">$4</div>
+            <div class="cap"><b>dial</b> · MAX $</div>
+          </div>
+          <div class="spec">
+            <div class="key s-wait m-breathe" style="width:96px;height:96px;">
+              <span class="k-badge">!</span>
+              <div class="k-glyph" style="--glyph-hue:#FFB000;">✋</div>
+              <div class="k-label">Review</div>
+            </div>
+            <div class="cap"><b>handoff</b> · "I need a human"</div>
+          </div>
+        </div>
+        <p class="status">The board is the deck earning its keep <i>between</i> decisions — when any tile flips amber, it has quietly become an Approval Gate.</p>
+      </div>
+    </section>
+
+    <p class="note backnote">
+      <b>This is a rendering, not the product.</b> It exists so the grammar in the study can be seen
+      and felt instead of imagined. The study's open questions (doc 5) — how much a 72px key really
+      carries, how loud is too loud, whether the states survive real colorblindness testing — are
+      exactly what a prototype on this repo's real key faces is positioned to answer.
+    </p>
+  </main>
+
+  <script>
+    // ---- global toggles ------------------------------------------------
+    const desaturate = document.getElementById('desaturate');
+    const reduced = document.getElementById('reduced');
+    const toggle = (btn, cls) => {
+      const on = document.body.classList.toggle(cls);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+    desaturate.addEventListener('click', () => toggle(desaturate, 'desaturate'));
+    reduced.addEventListener('click', () => toggle(reduced, 'reduced'));
+
+    // ---- glyph grammar row (doc 2.5) — generated from the verb table ----
+    const VERBS = [
+      ['✓', 'Approve',  '#22C55E'],
+      ['✕', 'Deny',     '#cfd6e2'],
+      ['→', 'Defer',    '#7fa9ff'],
+      ['…', 'Details',  '#7fa9ff'],
+      ['⊕', 'Drill in', '#7fa9ff'],
+      ['‹', 'Back',     '#cfd6e2'],
+      ['▶', 'Run',      '#2EA3FF'],
+      ['■', 'Stop',     '#FF4D4D'],
+      ['▤', 'Options',  '#7fa9ff'],
+      ['⚙', 'Toggle',   '#8b5cf6'],
+    ];
+    const glyphRow = document.getElementById('glyph-row');
+    glyphRow.innerHTML = VERBS.map(([g, l, hue]) => `
+      <div class="spec">
+        <div class="key s-idle"><div class="k-glyph" style="--glyph-hue:${hue};">${g}</div><div class="k-label">${l}</div></div>
+        <div class="cap">${l}</div>
+      </div>`).join('');
+
+    // ---- the press-acknowledgment flash (doc 2.3 / 4.2) ----------------
+    // The committing press flashes the key white, then runs its effect.
+    function flash(keyEl, after) {
+      keyEl.classList.add('m-flash');
+      setTimeout(() => {
+        keyEl.classList.remove('m-flash');
+        if (after) after();
+      }, 350);
+    }
+    // settle a key to a target state, then auto-fade success → idle (doc 4.2)
+    function settle(keyEl, stateClass) {
+      keyEl.className = keyEl.className.replace(/s-\w+/g, '').replace(/m-breathe|m-blink|m-shimmer|m-sweep/g, '').replace(/\s+/g, ' ').trim();
+      keyEl.classList.add(stateClass);
+      if (stateClass === 's-success') {
+        setTimeout(() => keyEl.classList.replace('s-success', 's-idle'), 1600);
+      }
+    }
+
+    // ---- 3.1 Approval Gate ---------------------------------------------
+    const gate = document.getElementById('approval-gate');
+    const gateStatus = document.getElementById('approval-status');
+    gate.addEventListener('click', (e) => {
+      const key = e.target.closest('.key'); if (!key) return;
+      const action = key.dataset.action;
+      flash(key, () => {
+        if (action === 'approve') { settle(key, 's-success'); gateStatus.textContent = '✓ Approved — action emitted to the agent. The tile flashes, settles green, fades to idle.'; }
+        else if (action === 'deny')   { settle(key, 's-idle');    gateStatus.textContent = '✕ Denied — nothing emitted. The gate dismisses.'; }
+        else if (action === 'details'){ settle(key, 's-working'); gateStatus.textContent = '… Details routed to your screen — the key labels the decision, the screen holds the evidence.'; setTimeout(()=>settle(key,'s-idle'),2200); }
+      });
+    });
+
+    // ---- 3.2 Choice Picker ---------------------------------------------
+    const picker = document.getElementById('choice-picker');
+    const choiceStatus = document.getElementById('choice-status');
+    picker.addEventListener('click', (e) => {
+      const key = e.target.closest('.key'); if (!key) return;
+      flash(key, () => {
+        [...picker.querySelectorAll('.key')].forEach(k => settle(k, 's-idle'));
+        settle(key, 's-success');
+        choiceStatus.textContent = `Picked ${key.dataset.pick} (badge ${key.querySelector('.k-badge')?.textContent}). The others settle to idle; the choice returns to the AI.`;
+      });
+    });
+
+    // ---- 3.8 Two-Stage Confirm (arm → fire, with ~3s expiry) -----------
+    const delKey = document.getElementById('delete-key');
+    const delLabel = document.getElementById('delete-label');
+    const delCap = document.getElementById('delete-cap');
+    const delStatus = document.getElementById('delete-status');
+    let armed = false, armTimer = null;
+    function disarm() {
+      armed = false;
+      delKey.classList.remove('is-armed');
+      delKey.classList.add('s-wait', 'm-breathe');
+      delLabel.textContent = 'Delete';
+      delCap.textContent = 'press to arm';
+      clearTimeout(armTimer);
+    }
+    delKey.addEventListener('click', () => {
+      if (!armed) {
+        // first press = ARMING. It must NOT emit and does NOT flash-acknowledge (doc 4.3).
+        armed = true;
+        delKey.classList.remove('s-wait', 'm-breathe');
+        delKey.classList.add('is-armed');
+        delLabel.textContent = 'Confirm?';
+        delCap.textContent = 'press again to fire — or wait';
+        delStatus.textContent = 'Armed. The first press only arms; no token has crossed to the AI yet.';
+        armTimer = setTimeout(() => {
+          if (armed) { disarm(); delStatus.textContent = 'Window lapsed — silently disarmed. Nothing reached the AI.'; }
+        }, 3000);
+      } else {
+        // second press within the window = the committing press.
+        clearTimeout(armTimer);
+        armed = false;
+        flash(delKey, () => { settle(delKey, 's-success'); delLabel.textContent = 'Delete'; delCap.textContent = 'press to arm'; });
+        delStatus.textContent = '⚠ Deleted — the irreversible token crossed the bridge only after two deliberate presses.';
+      }
+    });
+
+    // ---- 3.3 Beacon + 3.5 Mode -----------------------------------------
+    const beacon = document.getElementById('beacon');
+    const beaconCap = document.getElementById('beacon-cap');
+    beacon.addEventListener('click', () => {
+      flash(beacon, () => {
+        beacon.classList.remove('breathe');
+        beacon.style.setProperty('--frame', 'var(--state-success)');
+        beacon.style.color = 'var(--state-success)';
+        beaconCap.innerHTML = '<b>beacon</b><br>cleared · idle';
+        setTimeout(() => {
+          beacon.classList.add('breathe');
+          beacon.style.setProperty('--frame', 'var(--state-wait)');
+          beacon.style.color = 'var(--state-wait)';
+          beaconCap.innerHTML = '<b>beacon</b><br>amber · 2 pending';
+        }, 2200);
+      });
+    });
+
+    const modeKey = document.getElementById('mode-key');
+    const modeLabel = document.getElementById('mode-label');
+    const modeCap = document.getElementById('mode-cap');
+    const MODES = [
+      ['Manual',   'every action gated',        'var(--state-wait)'],
+      ['Assisted', 'gates only risky actions',  'var(--agent-builder)'],
+      ['Auto',     'runs free, reports after',  'var(--state-success)'],
+    ];
+    let modeIdx = 1;
+    modeKey.addEventListener('click', () => {
+      flash(modeKey, () => {
+        modeIdx = (modeIdx + 1) % MODES.length;
+        const [label, desc, frame] = MODES[modeIdx];
+        modeLabel.textContent = label;
+        modeCap.innerHTML = `<b>autonomy · ${label.toLowerCase()}</b><br>${desc}`;
+        modeKey.style.setProperty('--frame', frame);
+      });
+    });
+
+    // ---- 3.6 Nudge -----------------------------------------------------
+    document.querySelectorAll('[data-nudge]').forEach(k => {
+      k.addEventListener('click', () => flash(k, () => {
+        settle(k, 's-success');
+        document.getElementById('misc-status').textContent =
+          `${k.dataset.nudge === 'stop' ? '■ Stop' : '⏸ Pause'} — human-initiated halt. Supervision is bidirectional.`;
+      }));
+    });
+
+    // honor the OS preference as a starting point for reduced motion
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      toggle(reduced, 'reduced');
+    }
+  </script>
+</body>
+</html>
