@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>The OLED Key Language — interactive artifact</title>
-  <meta name="description" content="The companion artifact for the AI ⇄ Human Bridge design study: the OLED key design language rendered live." />
+  <title>The OLED Key Language — a living guide</title>
+  <meta name="description" content="The OLED key design language as a living guide: the full study (thesis, aesthetic, language, patterns, protocol, principles) and its interactive specimens in one place." />
   <link rel="stylesheet" href="/theme.css" />
   <script src="/nav.js" defer></script>
   <style>
@@ -28,6 +28,135 @@
       --agent-research:#ec4899;   /* pink  */
       --agent-runner:  #a3e635;   /* lime  */
     }
+
+    /* ============================================================
+       LIVING-GUIDE LAYOUT — a fixed sidebar rail + a scrollable
+       study column. Added for issue #79; everything below this
+       block down to "END LAYOUT" is NEW. The key specimens, their
+       state classes, and all motion CSS further down are unchanged
+       from the original specimen gallery (PR #73).
+       ============================================================ */
+    .guide {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: var(--s6);
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: var(--s5) var(--s5) calc(var(--s6) * 2);
+      align-items: start;
+    }
+    /* The rail is a fixed-position table of contents on wide screens.
+       It becomes a top horizontal scroller on narrow ones (see @media). */
+    .rail {
+      position: sticky;
+      top: 72px;            /* clear the sticky nav bar from nav.js */
+      max-height: calc(100vh - 88px);
+      overflow-y: auto;
+      padding-right: var(--s2);
+    }
+    .rail h2 {
+      font-size: 11px; font-weight: 700; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--muted);
+      margin: 0 0 var(--s3); padding-left: var(--s2);
+    }
+    .rail ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+    .rail a {
+      display: block; padding: var(--s1) var(--s2); border-radius: var(--r-sm);
+      color: var(--ink2); text-decoration: none;
+      font: 500 13px/1.35 var(--font);
+      border-left: 2px solid transparent;
+      transition: background .12s, color .12s, border-color .12s;
+    }
+    .rail a:hover { background: color-mix(in oklab, var(--violet), transparent 92%); color: var(--fg); }
+    .rail a.active {
+      color: var(--violet-ink); font-weight: 600;
+      border-left-color: var(--violet);
+      background: color-mix(in oklab, var(--violet), transparent 88%);
+    }
+    .rail .rail-meta {
+      margin-top: var(--s4); padding: var(--s3) var(--s2); font-size: 11.5px; line-height: 1.5;
+      color: var(--muted); border-top: 1px solid var(--line);
+    }
+    .rail .rail-meta a { display: inline; padding: 0; border: none; color: var(--violet-ink); font-weight: 600; }
+
+    /* The main column is the readable study. It reuses .wrap.wide's
+       content width so the existing specimen layout is undisturbed. */
+    .study { max-width: 900px; min-width: 0; }
+
+    /* Prose primitives for the study. These layer ON TOP of theme.css
+       helpers (.lead, .blurb, .panel, .note, .tag) already in use; they
+       add nothing new to the palette — only reading rhythm. */
+    .study section[id] { scroll-margin-top: 80px; }   /* offset for sticky nav */
+    .study h2.sec {
+      font-size: 19px; font-weight: 700; letter-spacing: -.01em;
+      margin: var(--s6) 0 var(--s2); color: var(--fg);
+      display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap;
+    }
+    .study h2.sec .num {
+      font-size: 12px; font-weight: 700; letter-spacing: .1em; color: var(--violet-ink);
+      font-family: "SF Mono","JetBrains Mono",Consolas,monospace;
+    }
+    .study h2.sec .ref { font-size: 11.5px; color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
+    .study h3.subsec {
+      font-size: 15px; font-weight: 650; margin: var(--s5) 0 var(--s2); color: var(--fg);
+    }
+    .study p { color: var(--ink2); font-size: 14.5px; line-height: 1.68; margin: 0 0 var(--s3); max-width: 70ch; }
+    .study p.lead { font-size: 15.5px; color: var(--ink2); }
+    .study ul.prose, .study ol.prose { color: var(--ink2); font-size: 14.5px; line-height: 1.68; margin: 0 0 var(--s3); padding-left: 1.3em; max-width: 68ch; }
+    .study ul.prose li, .study ol.prose li { margin-bottom: var(--s1); }
+    .study ul.prose li::marker { color: var(--violet-ink); }
+    .study blockquote {
+      margin: var(--s3) 0; padding: var(--s3) var(--s4);
+      border-left: 3px solid var(--violet);
+      background: color-mix(in oklab, var(--violet), transparent 93%);
+      border-radius: 0 var(--r-sm) var(--r-sm) 0;
+      color: var(--fg); font-size: 14.5px; line-height: 1.6; max-width: 66ch;
+    }
+    .study blockquote p { margin: 0; color: inherit; }
+    .study strong { color: var(--fg); font-weight: 650; }
+    .study .pull { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: var(--s2); margin-top: var(--s4); }
+    .study .pull b { color: var(--ink2); }
+
+    /* Inline token/key/value table reused for the color + motion tables. */
+    .kv { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0 0 var(--s4); }
+    .kv th, .kv td { text-align: left; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--line); vertical-align: top; }
+    .kv th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
+    .kv td code { font-family: "SF Mono","JetBrains Mono",Consolas,monospace; font-size: 12px; color: var(--violet-ink); }
+    .kv .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(255,255,255,.12); }
+
+    /* The grid grammar diagram + state machine are monospace figures. */
+    .figure {
+      background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md);
+      padding: var(--s4) var(--s5); margin: var(--s3) 0 var(--s4); overflow-x: auto;
+    }
+    .figure pre {
+      margin: 0; font-family: "SF Mono","JetBrains Mono","Cascadia Mono",Consolas,monospace;
+      font-size: 12px; line-height: 1.5; color: var(--ink2); white-space: pre;
+    }
+    .figure .cap { font-size: 11.5px; color: var(--muted); margin-top: var(--s2); }
+    .figure .cap b { color: var(--ink2); }
+
+    /* The "what a key answers" table from the thesis. */
+    .q4 { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: var(--s3) 0 var(--s4); }
+    .q4 th, .q4 td { text-align: left; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--line); }
+    .q4 th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+    .q4 td:first-child { font-weight: 650; color: var(--fg); }
+
+    /* Collapse the rail to a top horizontal scroller on narrow screens. */
+    @media (max-width: 860px) {
+      .guide { grid-template-columns: 1fr; gap: 0; padding: var(--s4) var(--s4) var(--s6); }
+      .rail {
+        position: static; max-height: none; overflow: visible;
+        padding: 0 0 var(--s4); margin-bottom: var(--s4); border-bottom: 1px solid var(--line);
+      }
+      .rail h2 { display: none; }
+      .rail ul { flex-direction: row; overflow-x: auto; gap: var(--s1); padding-bottom: var(--s2); -webkit-overflow-scrolling: touch; }
+      .rail a { white-space: nowrap; border-left: none; border-bottom: 2px solid transparent; padding: var(--s1) var(--s2); }
+      .rail a.active { border-left-color: transparent; border-bottom-color: var(--violet); }
+      .rail .rail-meta { display: none; }
+      .study h2.sec { font-size: 17px; }
+    }
+    /* END LAYOUT ================================================= */
 
     /* ---- a single key --------------------------------------------------
        The face is ~104px, matching the 72–120px range the study assumes.
@@ -166,8 +295,7 @@
     /* when motion is off, brightness steps keep "your move" louder than idle */
     body.reduced .s-wait    { --glow: 14px; }
 
-    /* ---- page layout --------------------------------------------------- */
-    .wrap.wide { max-width: 980px; }
+    /* ---- page layout (specimen pieces, reused) ------------------------- */
     .lead { color: var(--ink2); font-size: 15px; line-height: 1.6; max-width: 70ch; }
     .controls {
       display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center;
@@ -231,254 +359,541 @@
   </style>
 </head>
 <body>
-  <main class="wrap wide">
-    <header>
-      <div>
-        <h1>The OLED Key Language</h1>
-        <p class="sub">Interactive artifact · companion to the <a href="README.md">AI ⇄ Human Bridge</a> design study</p>
-      </div>
-    </header>
+  <div class="guide">
+    <!-- ============= SIDEBAR RAIL ============= -->
+    <nav class="rail" aria-label="Guide sections">
+      <h2>The OLED Key Language</h2>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#aesthetic">The aesthetic ground</a></li>
+        <li><a href="#language">The language</a></li>
+        <li><a href="#patterns">Interaction patterns</a></li>
+        <li><a href="#protocol">Layout &amp; protocol</a></li>
+        <li><a href="#principles">Principles &amp; questions</a></li>
+      </ul>
+      <p class="rail-meta">
+        A living guide. The full study lives in
+        <a href="https://github.com/shaiss/StreamDeckHabitTracker/tree/claude/stream-deck-developers-tqy1gj/design/ai-human-bridge">design/ai-human-bridge/</a>
+        — this page renders it.
+      </p>
+    </nav>
 
-    <p class="lead">
-      The written study fixes a small grammar; this page <em>renders</em> it. Each key is a
-      <b>semantic tile</b> that answers — in under a second, the same way every time —
-      <i>whose turn</i> (the frame), <i>what</i> (the glyph + label), <i>what a press does</i>
-      (the verb), and <i>how urgent</i> (the motion). Press the keys. Toggle
-      <b>Desaturate</b> to confirm the states survive without color, and <b>Reduced motion</b>
-      to see the brightness-only fallback.
-    </p>
-
-    <div class="controls" role="group" aria-label="Global view controls">
-      <button class="toggle" id="desaturate" aria-pressed="false">Desaturate</button>
-      <button class="toggle" id="reduced" aria-pressed="false">Reduced motion</button>
-      <span class="spacer"></span>
-      <span class="hint">Two accessibility checks from the study (docs 2.2 &amp; 5.2).</span>
-    </div>
-
-    <!-- 1 · ANATOMY ===================================================== -->
-    <section class="section">
-      <h2 class="section-h">Key anatomy <span class="ref">doc 2.1 — the five zones</span></h2>
-      <div class="panel">
-        <div class="anatomy">
-          <div class="stage">
-            <div class="key s-wait m-breathe" aria-label="annotated specimen">
-              <span class="k-dot" style="--dot: var(--agent-builder);"></span>
-              <span class="k-badge">²</span>
-              <div class="k-glyph" style="--glyph-hue: #7fa9ff;">✓</div>
-              <div class="k-label">Approve</div>
-            </div>
-          </div>
-          <dl>
-            <dt>Frame</dt><dd>outer ring — <b>state</b> (color) + urgency (motion). The loudest channel; readable across the room.</dd>
-            <dt>Status dot</dt><dd>top-left — <b>which agent</b> owns this (multi-agent only). Object identity never lives here.</dd>
-            <dt>Badge</dt><dd>top-right — the <b>number</b>: count, option index, or hotkey. Never inline in the label.</dd>
-            <dt>Glyph</dt><dd>center — the action's <b>verb</b>; at rest it carries the object's own identity hue.</dd>
-            <dt>Label</dt><dd>bottom — ≤2 words, uppercase mono, high contrast.</dd>
-          </dl>
+    <!-- ============= STUDY COLUMN ============= -->
+    <main class="study">
+      <header>
+        <div>
+          <h1>The OLED Key Language</h1>
+          <p class="sub">A living guide · the AI ⇄ Human Bridge design study, rendered</p>
         </div>
-        <p class="blurb" style="margin-bottom:0;">
-          <b>State owns the frame; object identity owns the interior; agent identity owns the dot.</b>
-          Three zones, three jobs — that firewall is what lets an amber "your move" frame light up
-          without touching the glyph that says <i>what</i> is waiting.
+      </header>
+
+      <p class="lead">
+        A Stream Deck-like device — a small grid of glowing, labelled, physically pressable keys —
+        is a surprisingly good surface for <strong>supervising</strong> an AI agent. But if every key
+        looks different, the human has to <em>read</em> the deck like a paragraph every time. This guide
+        defines the <strong>shared visual grammar</strong> that turns the deck into a glanceable decision
+        surface, and renders it live. Each key is a <b>semantic tile</b> that answers — in under a second,
+        the same way every time — four questions:
+      </p>
+
+      <table class="q4">
+        <thead><tr><th>Question</th><th>Channel that answers it</th></tr></thead>
+        <tbody>
+          <tr><td>Whose turn is it? (AI working / waiting on me / idle)</td><td>the <strong>frame</strong> — color + motion</td></tr>
+          <tr><td>What is this?</td><td>the <strong>glyph</strong> (icon) + <strong>label</strong></td></tr>
+          <tr><td>What happens if I press?</td><td>the glyph's <strong>verb</strong> + affordance</td></tr>
+          <tr><td>How urgent?</td><td><strong>motion</strong> rate + brightness</td></tr>
+        </tbody>
+      </table>
+
+      <div class="controls" role="group" aria-label="Global view controls">
+        <button class="toggle" id="desaturate" aria-pressed="false">Desaturate</button>
+        <button class="toggle" id="reduced" aria-pressed="false">Reduced motion</button>
+        <span class="spacer"></span>
+        <span class="hint">Two accessibility checks from the study (docs 2.2 &amp; 5.2).</span>
+      </div>
+
+      <!-- 1 · OVERVIEW =================================================== -->
+      <section id="overview">
+        <h2 class="sec"><span class="num">01</span> Overview <span class="ref">the thesis · doc 1</span></h2>
+
+        <p>
+          AI is moving from <strong>chat</strong> to <strong>supervision</strong>. When an agent runs work in the
+          background — a coding task, a research sweep, a coach reasoning about your habits — the human's job stops
+          being "author every prompt" and becomes "make the few decisions the AI can't make alone." A text box is a
+          poor instrument for that job: it demands foreground focus, it's serial, and every approval is a modal
+          interruption.
         </p>
-      </div>
-    </section>
 
-    <!-- 2 · STATE COLOR SYSTEM ========================================== -->
-    <section class="section" id="states">
-      <h2 class="section-h">The state color system <span class="ref">doc 2.2 — color + motion, redundantly encoded</span></h2>
-      <p class="blurb">
-        Color is reserved almost entirely for <b>turn-state</b>. Each hue has exactly one job, and
-        each state is carried <em>twice</em> — color <i>and</i> motion — so the meaning survives when
-        the color can't. Hit <b>Desaturate</b>: the breathing, blinking, and shimmer still tell you
-        whose turn it is.
-      </p>
-      <div class="panel">
-        <div class="row">
-          <div class="spec">
-            <div class="key s-idle"><div class="k-glyph" style="--glyph-hue:#8f97a6;">◆</div><div class="k-label">Idle</div></div>
-            <div class="cap"><b>idle</b><br>#3A3F47 · still</div>
-          </div>
-          <div class="spec">
-            <div class="key s-working m-shimmer"><div class="k-glyph" style="--glyph-hue:#2EA3FF;">▶</div><div class="k-label">Working</div></div>
-            <div class="cap"><b>working</b><br>#2EA3FF · shimmer</div>
-          </div>
-          <div class="spec">
-            <div class="key s-wait m-breathe"><div class="k-glyph" style="--glyph-hue:#FFB000;">✋</div><div class="k-label">Your move</div></div>
-            <div class="cap"><b>wait</b> · amber<br>#FFB000 · breathing</div>
-          </div>
-          <div class="spec">
-            <div class="key s-success"><div class="k-glyph" style="--glyph-hue:#22C55E;">✓</div><div class="k-label">Done</div></div>
-            <div class="cap"><b>success</b><br>#22C55E · settle</div>
-          </div>
-          <div class="spec">
-            <div class="key s-blocked m-blink"><div class="k-glyph" style="--glyph-hue:#FF4D4D;">!</div><div class="k-label">Blocked</div></div>
-            <div class="cap"><b>blocked</b><br>#FF4D4D · fast blink</div>
-          </div>
-          <div class="spec">
-            <div class="key s-idle is-danger"><div class="k-glyph">✕</div><div class="k-label">Delete</div></div>
-            <div class="cap"><b>danger</b> (action)<br>#FF4D4D · glyph+label, not frame</div>
-          </div>
-        </div>
-        <p class="blurb" style="margin-bottom:0;">
-          <b>Amber is the signature.</b> A dark deck with one amber key breathing is the canonical
-          "you're needed" picture. <b>Blocked</b> and <b>danger</b> share a red but not a channel:
-          blocked is a key's <i>state</i> (frame), danger is an <i>action's</i> property (glyph).
+        <h3 class="subsec">Why the chat box is the wrong tool for supervision</h3>
+        <ul class="prose">
+          <li><strong>It demands foreground focus.</strong> To answer, you context-switch your whole screen back into the conversation.</li>
+          <li><strong>It's serial and modal.</strong> You can't glance at "three agents are waiting" — you deal with them one blocking dialog at a time.</li>
+          <li><strong>It has no ambient state.</strong> Between messages, the AI's status is invisible. Is it working? Stuck? Done? You have to go look.</li>
+          <li><strong>Every decision costs a sentence.</strong> "Yes, approved" is a lot of ceremony for a binary your thumb could answer.</li>
+        </ul>
+        <p>The result is <em>approval fatigue</em> and <em>supervision blindness</em>.</p>
+
+        <h3 class="subsec">Why a grid of keys fits</h3>
+        <ul class="prose">
+          <li><strong>Peripheral &amp; ambient.</strong> A mostly-dark deck with one amber key pulsing is a complete status report you read without turning your head.</li>
+          <li><strong>Colocated I/O.</strong> The screen (AI → human) and the button (human → AI) are the same physical object. You press the thing that's asking.</li>
+          <li><strong>Physical = committal.</strong> A press is a deliberate, embodied act — exactly right for a decision, and it lets dangerous actions <em>feel</em> dangerous.</li>
+          <li><strong>Spatially addressable → muscle memory.</strong> "Approve" is always in the same place; over days your thumb answers without reading.</li>
+          <li><strong>Bounded — and that's the point.</strong> Fifteen keys can't hold a conversation, so the AI <em>can't</em> dump everything on you. Scarcity of keys is scarcity of interruptions.</li>
+        </ul>
+
+        <blockquote>
+          <p>The Stream Deck turns the human into a bank of fast, physical I/O ports the AI can call — a decision
+          surface for supervising agents, without pulling the person back into a chat window.</p>
+        </blockquote>
+
+        <h3 class="subsec">Where the deck is the wrong tool</h3>
+        <p>
+          A study that only lists strengths is marketing. The deck is a poor fit for long-form or nuanced input
+          (that stays in chat), for reading detail (a 72px key labels a decision but can't show the diff — it should
+          <em>route</em> to detail), for high-volume streams (if the AI needs a human 200×/hour, the autonomy is
+          broken), and for rare one-off tasks (muscle memory accrues over <em>repeated</em> supervision). The honest
+          framing: the deck is the fast path for the common, bounded decisions of ongoing supervision, sitting
+          <em>beside</em> the screen and the chat.
         </p>
-      </div>
-    </section>
+      </section>
 
-    <!-- 3 · GLYPH GRAMMAR =============================================== -->
-    <section class="section">
-      <h2 class="section-h">The glyph grammar <span class="ref">doc 2.5 — one verb, one glyph, everywhere</span></h2>
-      <p class="blurb">
-        Glyphs name the <b>verb</b> — what pressing <i>does</i> — so the affordance is legible before
-        the label is read. Filled means active/running; outline means available. A small, teachable set.
+      <!-- 2 · AESTHETIC GROUND =========================================== -->
+      <section id="aesthetic">
+        <h2 class="sec"><span class="num">02</span> The aesthetic ground <span class="ref">Nocturne Ritual · doc 2.2</span></h2>
+
+        <p>
+          The study builds on an aesthetic already in this repo: <strong>Nocturne Ritual</strong>. The deck spends
+          most of its life looking like it, so the language had to reconcile with it rather than replace it. Three
+          ideas form the ground:
+        </p>
+        <ul class="prose">
+          <li><strong>A deep-night canvas.</strong> Near-black backgrounds, dim chrome, negative space as a design element. A mostly-dark deck is not empty — it's <em>quiet</em>, and quiet is information.</li>
+          <li><strong>The rounded square.</strong> Every key is the same rounded-rect tile. Uniformity of shape is what lets color and motion carry meaning instead.</li>
+          <li><strong>Color as identity.</strong> Each ritual object carries one hue, derived from its name and kept for life — hue is memory.</li>
+        </ul>
+
+        <h3 class="subsec">The one sharp disagreement — and its resolution</h3>
+        <p>
+          Here is the study's sharpest disagreement with the aesthetic, named head-on. Nocturne Ritual says
+          <em>color belongs to identity</em>. This study instead spends color on <strong>state</strong>. Both cannot
+          own the frame. The resolution is a <strong>division of the key's real estate</strong>, not a winner:
+        </p>
+        <ul class="prose">
+          <li><strong>State owns the frame; object identity owns the interior.</strong> The "one hue, kept for life" rule moves inward — it colors the <em>glyph and its halo</em> — while the frame ring is reserved for turn-state. A habit key at rest is exactly the Ritual key you already ship; only when the AI needs a decision does the frame light amber.</li>
+          <li><strong>Violet stays sacred.</strong> Violet means "the coach is speaking." The study honors that by putting agent identity in the <em>status dot</em>, never competing with the amber frame. One says <em>who</em>, the other says <em>whose turn</em>.</li>
+          <li><strong>The Ritual palette is the ground; the state palette is the signal.</strong> Everything calm and identity-colored is the resting deck. The six state colors appear only when a human is needed — brief, purposeful, then gone.</li>
+        </ul>
+        <p class="pull"><b>State owns the frame, object identity owns the glyph, agent identity owns the dot.</b> Three zones, three jobs, no collision — that firewall is the whole reconciliation.</p>
+      </section>
+
+      <!-- 3 · THE LANGUAGE =============================================== -->
+      <section id="language">
+        <h2 class="sec"><span class="num">03</span> The language <span class="ref">doc 2 — the grammar</span></h2>
+        <p class="lead">
+          The organizing principle: <strong>one signal, one meaning, everywhere.</strong> A color means exactly one
+          thing. A motion means exactly one thing. A zone holds exactly one kind of information. Consistency is the
+          entire value; a "clever" exception destroys glanceability.
+        </p>
+
+        <!-- 3a · ANATOMY -->
+        <div class="section">
+          <h2 class="section-h">3.1 · Key anatomy <span class="ref">doc 2.1 — the five zones</span></h2>
+          <div class="panel">
+            <div class="anatomy">
+              <div class="stage">
+                <div class="key s-wait m-breathe" aria-label="annotated specimen">
+                  <span class="k-dot" style="--dot: var(--agent-builder);"></span>
+                  <span class="k-badge">²</span>
+                  <div class="k-glyph" style="--glyph-hue: #7fa9ff;">✓</div>
+                  <div class="k-label">Approve</div>
+                </div>
+              </div>
+              <dl>
+                <dt>Frame</dt><dd>outer ring — <b>state</b> (color) + urgency (motion). The loudest channel; readable across the room.</dd>
+                <dt>Status dot</dt><dd>top-left — <b>which agent</b> owns this (multi-agent only). Object identity never lives here.</dd>
+                <dt>Badge</dt><dd>top-right — the <b>number</b>: count, option index, or hotkey. Never inline in the label.</dd>
+                <dt>Glyph</dt><dd>center — the action's <b>verb</b>; at rest it carries the object's own identity hue.</dd>
+                <dt>Label</dt><dd>bottom — ≤2 words, uppercase mono, high contrast.</dd>
+              </dl>
+            </div>
+            <p class="blurb" style="margin-bottom:0;">
+              <b>State owns the frame; object identity owns the interior; agent identity owns the dot.</b>
+              Three zones, three jobs — that firewall is what lets an amber "your move" frame light up
+              without touching the glyph that says <i>what</i> is waiting.
+            </p>
+          </div>
+        </div>
+
+        <!-- 3b · STATE COLOR -->
+        <div class="section" id="states">
+          <h2 class="section-h">3.2 · The state color system <span class="ref">doc 2.2 — color + motion, redundantly encoded</span></h2>
+          <p class="blurb">
+            Color is reserved almost entirely for <b>turn-state</b>. Each hue has exactly one job, and each state is
+            carried <em>twice</em> — color <i>and</i> motion — so the meaning survives when the color can't. Hit
+            <b>Desaturate</b>: the breathing, blinking, and shimmer still tell you whose turn it is.
+          </p>
+          <div class="panel">
+            <div class="row">
+              <div class="spec">
+                <div class="key s-idle"><div class="k-glyph" style="--glyph-hue:#8f97a6;">◆</div><div class="k-label">Idle</div></div>
+                <div class="cap"><b>idle</b><br>#3A3F47 · still</div>
+              </div>
+              <div class="spec">
+                <div class="key s-working m-shimmer"><div class="k-glyph" style="--glyph-hue:#2EA3FF;">▶</div><div class="k-label">Working</div></div>
+                <div class="cap"><b>working</b><br>#2EA3FF · shimmer</div>
+              </div>
+              <div class="spec">
+                <div class="key s-wait m-breathe"><div class="k-glyph" style="--glyph-hue:#FFB000;">✋</div><div class="k-label">Your move</div></div>
+                <div class="cap"><b>wait</b> · amber<br>#FFB000 · breathing</div>
+              </div>
+              <div class="spec">
+                <div class="key s-success"><div class="k-glyph" style="--glyph-hue:#22C55E;">✓</div><div class="k-label">Done</div></div>
+                <div class="cap"><b>success</b><br>#22C55E · settle</div>
+              </div>
+              <div class="spec">
+                <div class="key s-blocked m-blink"><div class="k-glyph" style="--glyph-hue:#FF4D4D;">!</div><div class="k-label">Blocked</div></div>
+                <div class="cap"><b>blocked</b><br>#FF4D4D · fast blink</div>
+              </div>
+              <div class="spec">
+                <div class="key s-idle is-danger"><div class="k-glyph">✕</div><div class="k-label">Delete</div></div>
+                <div class="cap"><b>danger</b> (action)<br>#FF4D4D · glyph+label, not frame</div>
+              </div>
+            </div>
+            <p class="blurb" style="margin-bottom:0;">
+              <b>Amber is the signature.</b> A dark deck with one amber key breathing is the canonical
+              "you're needed" picture. <b>Blocked</b> and <b>danger</b> share a red but not a channel:
+              blocked is a key's <i>state</i> (frame), danger is an <i>action's</i> property (glyph).
+            </p>
+          </div>
+          <table class="kv">
+            <thead><tr><th>Token</th><th>Hue</th><th>Meaning</th><th>Where</th></tr></thead>
+            <tbody>
+              <tr><td><code>state.idle</code></td><td><span class="swatch" style="background:#3A3F47"></span>#3A3F47</td><td>nothing pending; passive affordance</td><td>dim frame, or key off</td></tr>
+              <tr><td><code>state.working</code></td><td><span class="swatch" style="background:#2EA3FF"></span>#2EA3FF</td><td>the AI is busy; you needn't act</td><td>frame, calm motion</td></tr>
+              <tr><td><code>state.wait</code></td><td><span class="swatch" style="background:#FFB000"></span>#FFB000</td><td><strong>your move</strong> — needs a press</td><td>frame, breathing pulse</td></tr>
+              <tr><td><code>state.success</code></td><td><span class="swatch" style="background:#22C55E"></span>#22C55E</td><td>resolved / done (transient)</td><td>frame, brief</td></tr>
+              <tr><td><code>state.blocked</code></td><td><span class="swatch" style="background:#FF4D4D"></span>#FF4D4D</td><td>failed / hard-stopped; needs attention</td><td>frame, urgent</td></tr>
+              <tr><td><code>action.danger</code></td><td><span class="swatch" style="background:#FF4D4D"></span>#FF4D4D</td><td>this <em>press</em> is destructive</td><td>glyph + label tint, not frame</td></tr>
+            </tbody>
+          </table>
+          <p class="pull"><b>Color is never the only signal.</b> Roughly 1 in 12 people has a color-vision deficiency, so every state is redundantly encoded: wait = amber + breathing; working = blue + sweep/shimmer; blocked = red + fast blink + a <code>!</code> glyph; success = green + a check + settle-and-fade.</p>
+        </div>
+
+        <!-- 3c · MOTION -->
+        <div class="section">
+          <h2 class="section-h">3.3 · The motion vocabulary <span class="ref">doc 2.3 — calm by default</span></h2>
+          <p class="blurb">
+            These are screens, not static keycaps, so <b>motion is a first-class token</b> — often more glanceable
+            than color. The governing rule: <strong>calm by default; loud only when earned.</strong> At most
+            <b>one</b> "loud" (fast) key at a time; everything else is still.
+          </p>
+          <table class="kv">
+            <thead><tr><th>Motion</th><th>Meaning</th><th>Feel</th></tr></thead>
+            <tbody>
+              <tr><td>Solid / still</td><td>a settled state (idle, done)</td><td>the default; silence is information</td></tr>
+              <tr><td>Breathing pulse (~0.5 Hz)</td><td><code>wait</code> — your move</td><td>gentle, persistent, ignorable-but-nagging</td></tr>
+              <tr><td>Sweep / progress fill</td><td><code>working</code>, known progress</td><td>a bar or arc filling</td></tr>
+              <tr><td>Indeterminate shimmer</td><td><code>working</code>, unknown duration</td><td>a slow travelling highlight</td></tr>
+              <tr><td>Fast blink (~2 Hz)</td><td><code>blocked</code> / urgent</td><td>the only "loud" motion; rationed hard</td></tr>
+              <tr><td>Flash-to-white → settle</td><td><strong>press acknowledged</strong></td><td>the tactile confirmation of <em>your</em> input</td></tr>
+            </tbody>
+          </table>
+          <p>The press-acknowledgment flash matters more than it looks: it closes the loop. The flash is the deck saying "got it" — then the frame changes state to show what your press did. Motion honors a global "reduced motion" preference by falling back to brightness steps (try the toggle above).</p>
+        </div>
+
+        <!-- 3d · TYPOGRAPHY -->
+        <div class="section">
+          <h2 class="section-h">3.4 · Typography <span class="ref">doc 2.4 — ruthless at 72px</span></h2>
+          <p>A key is 72–120px and read from 2–3 feet away. Type is ruthless:</p>
+          <ul class="prose">
+            <li><strong>One word if possible, two at most.</strong> <code>APPROVE</code>, <code>RUN TESTS</code>, <code>HANDOFF</code>.</li>
+            <li><strong>Uppercase monospace for labels.</strong> Mono is the authentic voice of a control surface; uppercase buys legibility at small sizes.</li>
+            <li><strong>Numbers are badges, not words.</strong> "3 pending" becomes a <code>3</code> badge. Digits never fight the label for the same row.</li>
+            <li><strong>Contrast is non-negotiable.</strong> Label text sits at the top of the contrast range in every state.</li>
+          </ul>
+          <p>The mono / sans split is the type system: <strong>mono is the device's voice, sans is the app's voice.</strong></p>
+        </div>
+
+        <!-- 3e · GLYPH GRAMMAR -->
+        <div class="section">
+          <h2 class="section-h">3.5 · The glyph grammar <span class="ref">doc 2.5 — one verb, one glyph, everywhere</span></h2>
+          <p class="blurb">
+            Glyphs name the <b>verb</b> — what pressing <i>does</i> — so the affordance is legible before the label
+            is read. Filled means active/running; outline means available. A small, teachable set.
+          </p>
+          <div class="panel">
+            <div class="row" id="glyph-row"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4 · INTERACTION PATTERNS ======================================= -->
+      <section id="patterns">
+        <h2 class="sec"><span class="num">04</span> Interaction patterns <span class="ref">doc 3 — composed from the tokens, nothing new</span></h2>
+        <p class="lead">
+          These are the "components" of the language: named, learn-once shapes for the recurring moments of
+          supervision. Each is built entirely from the tokens above — no new visual primitives, only arrangements.
+          Press them — every committing press <b>flashes white</b> (the deck saying "got it") before the frame shows
+          what your press did.
+        </p>
+
+        <!-- 4.1 Approval Gate -->
+        <div class="panel">
+          <h3>4.1 · Approval Gate <span class="tag">the workhorse</span></h3>
+          <p class="when">When the agent wants to do something with consequences — run a command, push a commit, spend money. The single most common exchange in supervision.</p>
+          <div class="row" id="approval-gate">
+            <div class="spec">
+              <div class="key s-wait m-breathe clickable" data-action="approve">
+                <div class="k-glyph" style="--glyph-hue:#22C55E;">✓</div><div class="k-label">Approve</div>
+              </div>
+              <div class="cap">affirmative · left</div>
+            </div>
+            <div class="spec">
+              <div class="key s-wait m-breathe clickable" data-action="details">
+                <div class="k-glyph" style="--glyph-hue:#7fa9ff;">…</div><div class="k-label">Details</div>
+              </div>
+              <div class="cap">escape hatch · center</div>
+            </div>
+            <div class="spec">
+              <div class="key s-wait m-breathe clickable" data-action="deny">
+                <div class="k-glyph" style="--glyph-hue:#cfd6e2;">✕</div><div class="k-label">Deny</div>
+              </div>
+              <div class="cap">negative · right</div>
+            </div>
+          </div>
+          <p class="status" id="approval-status">Same three-key shape, same order, every time — answerable by position before it's read.</p>
+        </div>
+
+        <!-- 4.2 Choice Picker -->
+        <div class="panel">
+          <h3>4.2 · Choice Picker <span class="tag">one of N</span></h3>
+          <p class="when">When the AI has several valid paths and wants the human to pick — "which fix?", "which branch?".</p>
+          <div class="row" id="choice-picker">
+            <div class="spec"><div class="key s-wait m-breathe clickable" data-pick="rebase"><span class="k-badge">¹</span><div class="k-glyph" style="--glyph-hue:#7fa9ff;">▤</div><div class="k-label">Rebase</div></div><div class="cap">option 1</div></div>
+            <div class="spec"><div class="key s-wait m-breathe clickable" data-pick="merge"><span class="k-badge">²</span><div class="k-glyph" style="--glyph-hue:#7fa9ff;">▤</div><div class="k-label">Merge</div></div><div class="cap">option 2</div></div>
+            <div class="spec"><div class="key s-wait m-breathe clickable" data-pick="squash"><span class="k-badge">³</span><div class="k-glyph" style="--glyph-hue:#7fa9ff;">▤</div><div class="k-label">Squash</div></div><div class="cap">option 3</div></div>
+          </div>
+          <p class="status" id="choice-status">Options are spatial and parallel — compared at a glance, not scrolled. Indices let the AI say "I recommend ②".</p>
+        </div>
+
+        <!-- 4.3 Two-Stage Confirm -->
+        <div class="panel">
+          <h3>4.3 · Two-Stage Confirm <span class="tag nudge">irreversible — try it</span></h3>
+          <p class="when">When a single press would do something you can't undo. Press once to <b>arm</b> (it turns danger-red), press again within ~3s to commit — or let it lapse to disarm.</p>
+          <div class="row">
+            <div class="spec">
+              <div class="key s-wait m-breathe clickable is-danger" id="delete-key">
+                <div class="k-glyph">⚠</div><div class="k-label" id="delete-label">Delete</div>
+              </div>
+              <div class="cap" id="delete-cap">press to arm</div>
+            </div>
+          </div>
+          <p class="status" id="delete-status">Two deliberate acts make an irreversible action nearly impossible to trigger by accident — the physicality <i>is</i> the warning.</p>
+        </div>
+
+        <!-- 4.4 Beacon + Mode + Nudge -->
+        <div class="panel">
+          <h3>4.4 · Attention Beacon  ·  4.5 · Toggle / Mode  ·  4.6 · Nudge / Interrupt</h3>
+          <p class="when">The whole thesis compressed into one key (beacon); the master dial of supervision (autonomy); and the human-initiated halt.</p>
+          <div class="row" style="align-items:center;">
+            <div class="spec">
+              <div class="beacon breathe clickable" id="beacon" style="--frame: var(--state-wait);" title="click to clear">◆<span style="font-size:12px;vertical-align:super;margin-left:2px;">²</span></div>
+              <div class="cap" id="beacon-cap"><b>beacon</b><br>amber · 2 pending</div>
+            </div>
+            <div class="spec">
+              <div class="key s-idle clickable" id="mode-key" style="--frame: var(--agent-builder); --glow:4px;">
+                <div class="k-glyph" style="--glyph-hue:#8b5cf6;">⚙</div><div class="k-label" id="mode-label">Assisted</div>
+              </div>
+              <div class="cap" id="mode-cap"><b>autonomy</b><br>press to cycle</div>
+            </div>
+            <div class="spec">
+              <div class="key s-idle clickable" data-nudge="pause" style="--frame: var(--state-idle);">
+                <div class="k-glyph" style="--glyph-hue:#cfd6e2;">⏸</div><div class="k-label">Pause</div>
+              </div>
+              <div class="cap">human-initiated</div>
+            </div>
+            <div class="spec">
+              <div class="key s-idle clickable is-danger" data-nudge="stop">
+                <div class="k-glyph">■</div><div class="k-label">Stop</div>
+              </div>
+              <div class="cap">two-stage if it kills work</div>
+            </div>
+          </div>
+          <p class="status" id="misc-status">The beacon is dark when the coach is quiet, amber when it wants you. Autonomy sets how often every <i>other</i> pattern fires. A supervisor who can only respond isn't supervising — Pause/Stop make intervention a reflex.</p>
+        </div>
+
+        <!-- 4.7 Board + Dial + Handoff -->
+        <div class="panel">
+          <h3>4.7 · Status Board  ·  4.8 · Dial (Stream Deck +)  ·  4.9 · Handoff</h3>
+          <p class="when">Ambient displays (a press only drills in); the analog channel for quantities; and the AI raising its hand.</p>
+          <div class="row" style="align-items:center;">
+            <div class="spec">
+              <div class="key s-working m-sweep" style="width:96px;height:96px;">
+                <span class="k-dot" style="--dot: var(--agent-coder);"></span>
+                <div class="k-progress"><i></i></div>
+                <div class="k-label" style="--label-ink:#2EA3FF;">Build</div>
+              </div>
+              <div class="cap"><b>board</b><br>working · coder dot</div>
+            </div>
+            <div class="spec">
+              <div class="key s-wait m-breathe" style="width:96px;height:96px;">
+                <span class="k-dot" style="--dot: var(--agent-runner);"></span>
+                <div class="k-glyph" style="--glyph-hue:#22C55E;">✓</div>
+                <div class="k-label">Tests</div>
+              </div>
+              <div class="cap">flipped to wait — now a gate</div>
+            </div>
+            <div class="spec">
+              <div class="dial" title="turn to scrub, push to commit">$4</div>
+              <div class="cap"><b>dial</b> · MAX $</div>
+            </div>
+            <div class="spec">
+              <div class="key s-wait m-breathe" style="width:96px;height:96px;">
+                <span class="k-badge">!</span>
+                <div class="k-glyph" style="--glyph-hue:#FFB000;">✋</div>
+                <div class="k-label">Review</div>
+              </div>
+              <div class="cap"><b>handoff</b> · "I need a human"</div>
+            </div>
+          </div>
+          <p class="status">The board is the deck earning its keep <i>between</i> decisions — when any tile flips amber, it has quietly become an Approval Gate. The dial extends the language from <em>choices</em> to <em>quantities</em>; a Handoff is the AI saying "I need a human," not "approve X".</p>
+        </div>
+
+        <h3 class="subsec">Composing patterns</h3>
+        <p>
+          Real supervision is these patterns layered over time on the same grid. A Status Board sits idle across the
+          top; a build finishes and its tile flips to an Approval Gate ("deploy?"). You press <code>DETAILS</code>,
+          the plan routes to your screen, you press <code>APPROVE</code> (two-stage, because it's prod). The tile
+          flashes, settles to working blue, then success green, then fades to idle. None of that required reading a
+          manual — each new pattern was recognizable the first time because it was built from signals you already knew.
+        </p>
+      </section>
+
+      <!-- 5 · LAYOUT & PROTOCOL ========================================== -->
+      <section id="protocol">
+        <h2 class="sec"><span class="num">05</span> Layout &amp; protocol <span class="ref">doc 4 — the grid and the state machine</span></h2>
+
+        <h3 class="subsec">5.1 · The grid grammar</h3>
+        <p>A 5×3 deck (15 keys) is the reference; the conventions scale. The core idea mirrors a phone's UI chrome: <strong>stable zones, so where a thing lives tells you what kind of thing it is.</strong></p>
+        <div class="figure">
+<pre>┌─────┬─────┬─────┬─────┬─────┐
+│  STATUS ROW — ambient, non-interactive / drill-in   │   top row
+├─────┼─────┼─────┼─────┼─────┤
+│  ACTION ZONE — the current decision(s) live here    │   middle rows
+├─────┼─────┼─────┼─────┼─────┤
+│ ‹BACK│     │     │     │MENU▤│   nav row (anchors fixed at the corners)
+└─────┴─────┴─────┴─────┴─────┘</pre>
+          <p class="cap"><b>Top</b> = status board · <b>middle</b> = the decision that needs you · <b>bottom corners</b> = fixed <code>BACK</code> (left) and <code>MENU</code> (right) anchors your thumb hits blind.</p>
+        </div>
+        <ul class="prose">
+          <li><strong>The focus convention.</strong> A decision is staged in the <em>same region every time</em> (center of the action zone) rather than wherever there's a free key. Predictable location beats optimal packing.</li>
+          <li><strong>Paging &amp; progressive disclosure.</strong> Breadth stays shallow; depth comes from <em>pages</em>. A <code>⊕</code> drill-in swaps the grid to a sub-context, always with <code>BACK</code> in its corner.</li>
+          <li><strong>Off is part of the layout.</strong> Unused keys stay dark (OLED truly off). Negative space is a design element — filling every key "because it's there" destroys the signal. Darkness is how the deck says <em>nothing here</em>.</li>
+        </ul>
+
+        <blockquote>
+          <p>The AI drives state and pages <em>within</em> its surface; it never seizes the human's context. Paging is
+          an invitation the deck extends, not a place it drags you. (This repo's <code>docs/DECK-UX.md</code> already
+          drew that consent boundary: the coach may raise its voice in the room it's in, never walk into another.)</p>
+        </blockquote>
+
+        <h3 class="subsec">5.2 · The turn-taking state machine</h3>
+        <p>Under the visuals, each key is a small state machine. The value of the whole system is that <strong>these states look identical on every key</strong> — document 2's frame colors and motions <em>are</em> the rendering of these states.</p>
+        <div class="figure">
+<pre>       ┌──────────────────────────── AI updates ────────────────────────────┐
+       ▼                                                                      │
+    ┌──────┐  AI starts work   ┌─────────┐  AI needs human   ┌──────────┐    │
+    │ IDLE │ ────────────────► │ WORKING │ ────────────────► │   WAIT   │    │
+    └──────┘                   └─────────┘                   └──────────┘    │
+       ▲                            │                          │    │        │
+       │                            │ fails                    │    │ press  │
+       │                            ▼                          │    ▼        │
+       │                       ┌─────────┐                     │ ┌──────────┐│
+       │◄──── fade (timeout) ──│ BLOCKED │◄── press: retry ────┘ │CONFIRMING││
+       │                       └─────────┘                       └──────────┘│
+       │                                                              │       │
+    ┌──────┐                                                          │ result│
+    │ DONE │◄─────────────────────────────────────────────────────────┘◄─────┘
+    └──────┘  (transient — settles, then fades to IDLE)</pre>
+        </div>
+        <p>
+          The critical transition is <strong><code>WORKING → WAIT</code></strong>: the AI <em>yields the turn</em>.
+          That's the moment the deck lights amber and the human is called. <code>WAIT → CONFIRMING</code> is the
+          human taking the turn back (the acknowledgment flash). Turn-taking made physical and visible.
+        </p>
+
+        <h3 class="subsec">5.3 · The per-key data model</h3>
+        <p>The study is about the language, not an implementation, but it should be buildable. The data model per key is deliberately tiny:</p>
+        <div class="figure">
+<pre>{
+  "id": "deploy-gate",
+  "glyph": "check",          <span style="color:var(--muted)">// verb → glyph (doc 2.5)</span>
+  "label": "APPROVE",        <span style="color:var(--muted)">// ≤ 2 words</span>
+  "state": "wait",           <span style="color:var(--muted)">// idle | working | wait | confirming | done | blocked</span>
+  "badge": null,             <span style="color:var(--muted)">// number, or null</span>
+  "agent": "builder",        <span style="color:var(--muted)">// → identity dot hue</span>
+  "danger": true,            <span style="color:var(--muted)">// arms two-stage confirm (3.8)</span>
+  "action": "approve:deploy" <span style="color:var(--muted)">// token returned to the AI on the committing press</span>
+}</pre>
+          <p class="cap"><b>state</b> is what the AI emits. The two-stage <code>armed</code> window is a <em>deck-local</em> substate the bridge tracks for <code>danger</code> keys — it isn't an AI-emitted value, so the enum stays six values.</p>
+        </div>
+        <p>
+          This maps cleanly onto mechanisms agents already have — <strong>tool-use permission prompts</strong>,
+          <strong>human-in-the-loop checkpoints</strong>, and the <strong>elicitation</strong> step where an agent
+          asks a bounded question. The deck is, precisely, a <em>physical renderer for human-in-the-loop requests</em>:
+          anywhere an agent today pops a "can I do this?" dialog, that request can render as a key instead.
+        </p>
+      </section>
+
+      <!-- 6 · PRINCIPLES & OPEN QUESTIONS ================================ -->
+      <section id="principles">
+        <h2 class="sec"><span class="num">06</span> Principles &amp; open questions <span class="ref">doc 5</span></h2>
+
+        <h3 class="subsec">The ten principles</h3>
+        <p>The north stars the rest of the study derives from. When two design choices conflict, these break the tie.</p>
+        <ol class="prose">
+          <li><strong>Glanceability over completeness.</strong> A key must be read in under a second from across the desk.</li>
+          <li><strong>State before content.</strong> Whose turn it is dominates the key.</li>
+          <li><strong>One signal, one meaning.</strong> Consistency is the entire value; clever exceptions are bugs.</li>
+          <li><strong>Calm by default, loud only when earned.</strong> At most one loud key at a time.</li>
+          <li><strong>Physical means committal.</strong> Reserve presses for decisions; make irreversible ones feel irreversible.</li>
+          <li><strong>Spatial consistency.</strong> The same action lives in the same place, forever. Muscle memory is the superpower.</li>
+          <li><strong>Constraint is a feature.</strong> Few keys force the AI to surface only what truly needs a human.</li>
+          <li><strong>Legible when dark.</strong> An off key is a valid, meaningful state.</li>
+          <li><strong>Reversible and forgiving.</strong> <code>BACK</code> is always in its corner; destructive actions are always two-stage.</li>
+          <li><strong>Progressive disclosure.</strong> Depth via paging; breadth stays shallow.</li>
+        </ol>
+
+        <h3 class="subsec">Open questions — what a prototype must answer</h3>
+        <p>This is a study, so the honest deliverable is not just a design but a list of the things the design <em>doesn't yet know</em>.</p>
+        <ul class="prose">
+          <li><strong>Legibility &amp; the physical limit.</strong> How much can a 72px key actually carry? At what distance does it break? Is the verb set recognizable without a legend after a day?</li>
+          <li><strong>Attention economics.</strong> How loud is too loud? Does an always-present amber pulse stop being noticed over weeks (habituation)? Does ambient peripheral display actually beat on-screen notifications?</li>
+          <li><strong>Expressiveness vs. simplicity.</strong> Do the nine patterns cover real agent supervision, or does every domain sprout bespoke layouts? Which bound — six states, six colors, six motions — runs out first?</li>
+          <li><strong>Scale.</strong> What happens at 20 agents? Does the grammar degrade gracefully on a 2×3 (6-key) deck?</li>
+          <li><strong>The physical loop.</strong> How fast is press → response → visible result? What's the fallback when a slow result leaves a key mid-animation?</li>
+          <li><strong>Accessibility (must, not nice-to-have).</strong> Does the redundant motion/glyph encoding carry every state with color removed? Does the reduced-motion fallback preserve every distinction?</li>
+        </ul>
+
+        <blockquote>
+          <p>The prototype is already half-built. Habit Tracker already drives live key faces, already runs a reactive
+          coach, already has an "Ask" takeover and a nudge/consent model. The cheapest experiment that would teach the
+          most: adopt the <strong>frame-vs-interior split</strong> — keep each habit's Ritual hue on the glyph, let the
+          frame ring go amber-breathing only when the coach's "Ask" is pending — add one <strong>Attention Beacon</strong>,
+          and live with it for a week. If the amber frame earns its place, the rest is worth building out.</p>
+        </blockquote>
+      </section>
+
+      <p class="note backnote">
+        <b>This is a rendering, not the product.</b> It exists so the grammar in the study can be seen and felt instead
+        of imagined. The study's open questions — how much a 72px key really carries, how loud is too loud, whether the
+        states survive real colorblindness testing — are exactly what a prototype on this repo's real key faces is
+        positioned to answer.
       </p>
-      <div class="panel">
-        <div class="row" id="glyph-row"></div>
-      </div>
-    </section>
-
-    <!-- 4 · INTERACTION PATTERNS ======================================== -->
-    <section class="section">
-      <h2 class="section-h">Interaction patterns <span class="ref">doc 3 — composed from the tokens above, nothing new</span></h2>
-      <p class="blurb">
-        These are the "components" of the language: named, learn-once shapes for the recurring
-        moments of supervision. Press them — every committing press <b>flashes white</b> (the deck
-        saying "got it") before the frame shows what your press did.
-      </p>
-
-      <!-- 3.1 Approval Gate -->
-      <div class="panel">
-        <h3>3.1 · Approval Gate <span class="tag">the workhorse</span></h3>
-        <p class="when">When the agent wants to do something with consequences — run a command, push a commit, spend money.</p>
-        <div class="row" id="approval-gate">
-          <div class="spec">
-            <div class="key s-wait m-breathe clickable" data-action="approve">
-              <div class="k-glyph" style="--glyph-hue:#22C55E;">✓</div><div class="k-label">Approve</div>
-            </div>
-            <div class="cap">affirmative · left</div>
-          </div>
-          <div class="spec">
-            <div class="key s-wait m-breathe clickable" data-action="details">
-              <div class="k-glyph" style="--glyph-hue:#7fa9ff;">…</div><div class="k-label">Details</div>
-            </div>
-            <div class="cap">escape hatch · center</div>
-          </div>
-          <div class="spec">
-            <div class="key s-wait m-breathe clickable" data-action="deny">
-              <div class="k-glyph" style="--glyph-hue:#cfd6e2;">✕</div><div class="k-label">Deny</div>
-            </div>
-            <div class="cap">negative · right</div>
-          </div>
-        </div>
-        <p class="status" id="approval-status">Same three-key shape, same order, every time — answerable by position before it's read.</p>
-      </div>
-
-      <!-- 3.2 Choice Picker -->
-      <div class="panel">
-        <h3>3.2 · Choice Picker <span class="tag">one of N</span></h3>
-        <p class="when">When the AI has several valid paths and wants the human to pick — "which fix?", "which branch?".</p>
-        <div class="row" id="choice-picker">
-          <div class="spec"><div class="key s-wait m-breathe clickable" data-pick="rebase"><span class="k-badge">¹</span><div class="k-glyph" style="--glyph-hue:#7fa9ff;">▤</div><div class="k-label">Rebase</div></div><div class="cap">option 1</div></div>
-          <div class="spec"><div class="key s-wait m-breathe clickable" data-pick="merge"><span class="k-badge">²</span><div class="k-glyph" style="--glyph-hue:#7fa9ff;">▤</div><div class="k-label">Merge</div></div><div class="cap">option 2</div></div>
-          <div class="spec"><div class="key s-wait m-breathe clickable" data-pick="squash"><span class="k-badge">³</span><div class="k-glyph" style="--glyph-hue:#7fa9ff;">▤</div><div class="k-label">Squash</div></div><div class="cap">option 3</div></div>
-        </div>
-        <p class="status" id="choice-status">Options are spatial and parallel — compared at a glance, not scrolled. Indices let the AI say "I recommend ②".</p>
-      </div>
-
-      <!-- 3.8 Two-Stage Confirm -->
-      <div class="panel">
-        <h3>3.8 · Two-Stage Confirm <span class="tag nudge">irreversible — try it</span></h3>
-        <p class="when">When a single press would do something you can't undo. Press once to <b>arm</b> (it turns danger-red), press again within ~3s to commit — or let it lapse to disarm.</p>
-        <div class="row">
-          <div class="spec">
-            <div class="key s-wait m-breathe clickable is-danger" id="delete-key">
-              <div class="k-glyph">⚠</div><div class="k-label" id="delete-label">Delete</div>
-            </div>
-            <div class="cap" id="delete-cap">press to arm</div>
-          </div>
-        </div>
-        <p class="status" id="delete-status">Two deliberate acts make an irreversible action nearly impossible to trigger by accident — the physicality <i>is</i> the warning.</p>
-      </div>
-
-      <!-- 3.3 Attention Beacon + 3.5 Mode + 3.6 Nudge -->
-      <div class="panel">
-        <h3>3.3 · Attention Beacon  ·  3.5 · Toggle / Mode  ·  3.6 · Nudge / Interrupt</h3>
-        <p class="when">The whole thesis compressed into one key (beacon); the master dial of supervision (autonomy); and the human-initiated halt.</p>
-        <div class="row" style="align-items:center;">
-          <div class="spec">
-            <div class="beacon breathe clickable" id="beacon" style="--frame: var(--state-wait);" title="click to clear">◆<span style="font-size:12px;vertical-align:super;margin-left:2px;">²</span></div>
-            <div class="cap" id="beacon-cap"><b>beacon</b><br>amber · 2 pending</div>
-          </div>
-          <div class="spec">
-            <div class="key s-idle clickable" id="mode-key" style="--frame: var(--agent-builder); --glow:4px;">
-              <div class="k-glyph" style="--glyph-hue:#8b5cf6;">⚙</div><div class="k-label" id="mode-label">Assisted</div>
-            </div>
-            <div class="cap" id="mode-cap"><b>autonomy</b><br>press to cycle</div>
-          </div>
-          <div class="spec">
-            <div class="key s-idle clickable" data-nudge="pause" style="--frame: var(--state-idle);">
-              <div class="k-glyph" style="--glyph-hue:#cfd6e2;">⏸</div><div class="k-label">Pause</div>
-            </div>
-            <div class="cap">human-initiated</div>
-          </div>
-          <div class="spec">
-            <div class="key s-idle clickable is-danger" data-nudge="stop">
-              <div class="k-glyph">■</div><div class="k-label">Stop</div>
-            </div>
-            <div class="cap">two-stage if it kills work</div>
-          </div>
-        </div>
-        <p class="status" id="misc-status">The beacon is dark when the coach is quiet, amber when it wants you. Autonomy sets how often every <i>other</i> pattern fires.</p>
-      </div>
-
-      <!-- 3.4 Status Board + 3.7 Dial + 3.9 Handoff -->
-      <div class="panel">
-        <h3>3.4 · Status Board  ·  3.7 · Dial (Stream Deck +)  ·  3.9 · Handoff</h3>
-        <p class="when">Ambient displays (a press only drills in); the analog channel for quantities; and the AI raising its hand.</p>
-        <div class="row" style="align-items:center;">
-          <div class="spec">
-            <div class="key s-working m-sweep" style="width:96px;height:96px;">
-              <span class="k-dot" style="--dot: var(--agent-coder);"></span>
-              <div class="k-progress"><i></i></div>
-              <div class="k-label" style="--label-ink:#2EA3FF;">Build</div>
-            </div>
-            <div class="cap"><b>board</b><br>working · coder dot</div>
-          </div>
-          <div class="spec">
-            <div class="key s-wait m-breathe" style="width:96px;height:96px;">
-              <span class="k-dot" style="--dot: var(--agent-runner);"></span>
-              <div class="k-glyph" style="--glyph-hue:#22C55E;">✓</div>
-              <div class="k-label">Tests</div>
-            </div>
-            <div class="cap">flipped to wait — now a gate</div>
-          </div>
-          <div class="spec">
-            <div class="dial" title="turn to scrub, push to commit">$4</div>
-            <div class="cap"><b>dial</b> · MAX $</div>
-          </div>
-          <div class="spec">
-            <div class="key s-wait m-breathe" style="width:96px;height:96px;">
-              <span class="k-badge">!</span>
-              <div class="k-glyph" style="--glyph-hue:#FFB000;">✋</div>
-              <div class="k-label">Review</div>
-            </div>
-            <div class="cap"><b>handoff</b> · "I need a human"</div>
-          </div>
-        </div>
-        <p class="status">The board is the deck earning its keep <i>between</i> decisions — when any tile flips amber, it has quietly become an Approval Gate.</p>
-      </div>
-    </section>
-
-    <p class="note backnote">
-      <b>This is a rendering, not the product.</b> It exists so the grammar in the study can be seen
-      and felt instead of imagined. The study's open questions (doc 5) — how much a 72px key really
-      carries, how loud is too loud, whether the states survive real colorblindness testing — are
-      exactly what a prototype on this repo's real key faces is positioned to answer.
-    </p>
-  </main>
+    </main>
+  </div>
 
   <script>
     // ---- global toggles ------------------------------------------------
@@ -529,7 +944,7 @@
       }
     }
 
-    // ---- 3.1 Approval Gate ---------------------------------------------
+    // ---- 4.1 Approval Gate ---------------------------------------------
     const gate = document.getElementById('approval-gate');
     const gateStatus = document.getElementById('approval-status');
     gate.addEventListener('click', (e) => {
@@ -542,7 +957,7 @@
       });
     });
 
-    // ---- 3.2 Choice Picker ---------------------------------------------
+    // ---- 4.2 Choice Picker ---------------------------------------------
     const picker = document.getElementById('choice-picker');
     const choiceStatus = document.getElementById('choice-status');
     picker.addEventListener('click', (e) => {
@@ -554,7 +969,7 @@
       });
     });
 
-    // ---- 3.8 Two-Stage Confirm (arm → fire, with ~3s expiry) -----------
+    // ---- 4.3 Two-Stage Confirm (arm → fire, with ~3s expiry) -----------
     const delKey = document.getElementById('delete-key');
     const delLabel = document.getElementById('delete-label');
     const delCap = document.getElementById('delete-cap');
@@ -589,7 +1004,7 @@
       }
     });
 
-    // ---- 3.3 Beacon + 3.5 Mode -----------------------------------------
+    // ---- 4.4 Beacon + Mode ---------------------------------------------
     const beacon = document.getElementById('beacon');
     const beaconCap = document.getElementById('beacon-cap');
     beacon.addEventListener('click', () => {
@@ -626,7 +1041,7 @@
       });
     });
 
-    // ---- 3.6 Nudge -----------------------------------------------------
+    // ---- 4.6 Nudge -----------------------------------------------------
     document.querySelectorAll('[data-nudge]').forEach(k => {
       k.addEventListener('click', () => flash(k, () => {
         settle(k, 's-success');
@@ -634,6 +1049,27 @@
           `${k.dataset.nudge === 'stop' ? '■ Stop' : '⏸ Pause'} — human-initiated halt. Supervision is bidirectional.`;
       }));
     });
+
+    // ---- rail scroll-spy (issue #79) ----------------------------------
+    // Pure-vanilla, additive: highlights the rail link for whichever study
+    // section is currently in view. No framework; no effect on the specimens.
+    (function activeLink() {
+      const links = document.querySelectorAll('.rail a');
+      const map = new Map();
+      links.forEach(a => { const id = a.getAttribute('href').slice(1); const sec = document.getElementById(id); if (sec) map.set(sec, a); });
+      if (!('IntersectionObserver' in window) || map.size === 0) return;
+      const io = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          const a = map.get(entry.target);
+          if (!a) return;
+          if (entry.isIntersecting) {
+            links.forEach(l => l.classList.remove('active'));
+            a.classList.add('active');
+          }
+        });
+      }, { rootMargin: '-80px 0px -70% 0px', threshold: 0 });
+      map.forEach((_, sec) => io.observe(sec));
+    })();
 
     // honor the OS preference as a starting point for reduced motion
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
