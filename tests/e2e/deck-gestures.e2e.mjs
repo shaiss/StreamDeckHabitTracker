@@ -15,7 +15,7 @@ import { chromium } from 'playwright-core';
 const ROOT = fileURLToPath(new URL('../../public', import.meta.url));
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.gif': 'image/gif', '.png': 'image/png' };
 
-let server, browser, page, port;
+let server, browser, context, page, port;
 let calls = [];        // every /api/log + /api/nudge request, as "METHOD url"
 let logStatus = 200;
 let nudgeFraction = null;   // null = slot 1 holds a plain suggestion
@@ -66,10 +66,12 @@ before(async () => {
   const exe = process.env.CHROME_PATH ||
     (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
   browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
-  page = await browser.newPage();
+  // hasTouch so page.touchscreen.tap exercises the same pointer path phones use.
+  context = await browser.newContext({ hasTouch: true });
+  page = await context.newPage();
 });
 
-after(async () => { await browser?.close(); server?.close(); });
+after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
 async function open({ nudge = null } = {}) {
@@ -167,4 +169,31 @@ test('the Stats key still opens the dashboard on a plain tap', async () => {
   const p = await popup;
   assert.match(p.url(), /\/$/);
   await p.close();
+});
+
+test('keys claim touch-action:none and keep a tap after pointer capture', async () => {
+  const key = await open();
+  const touchAction = await key.evaluate((el) => getComputedStyle(el).touchAction);
+  assert.equal(touchAction, 'none', 'scroll must not steal the key press');
+
+  // Real touch: Playwright's touchscreen goes through the pointer pipeline the
+  // phone uses. A regression that drops pointerup after a tiny move shows up
+  // here even when mouse click() still passes.
+  const box = await key.boundingBox();
+  assert.ok(box, 'key must be visible');
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  await settle();
+  assert.equal(calls.length, 1, 'a touchscreen tap must still log');
+  assert.match(calls[0], /^GET \/api\/log\?hkey=1/);
+});
+
+test('press feedback paints on pointerdown before the double-tap window', async () => {
+  const key = await open();
+  await key.dispatchEvent('pointerdown', { pointerId: 1, pointerType: 'touch', buttons: 1 });
+  assert.equal(await key.evaluate((el) => el.classList.contains('pressed')), true);
+  await key.dispatchEvent('pointerup', { pointerId: 1, pointerType: 'touch', buttons: 0 });
+  // Class clears on up; the deferred tap still lands after DOUBLE_TAP_MS.
+  assert.equal(await key.evaluate((el) => el.classList.contains('pressed')), false);
+  await settle();
+  assert.equal(calls.length, 1);
 });

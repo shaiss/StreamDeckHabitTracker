@@ -41,7 +41,8 @@
       background: var(--chrome); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
       color: var(--fg); font: 14px/1 var(--font); }
     .hnav .brand { display: flex; align-items: center; gap: var(--s2); font-weight: 700; letter-spacing: -.01em;
-      color: inherit; text-decoration: none; margin-right: var(--s3); padding: var(--s1); }
+      color: inherit; text-decoration: none; margin-right: var(--s3); padding: var(--s1);
+      touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
     /* Sanctioned ornament, not a container (WEB-UX §4: the brand dot is one of
        the two circles in the system). Its 10px size and 8px glow radius are
        optical, so they stay literal; the violet is the coach's. */
@@ -51,12 +52,18 @@
     .hnav .links { display: flex; gap: var(--s1); margin-left: auto; }
     .hnav .links a { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3);
       border-radius: var(--r-md); color: inherit; text-decoration: none; opacity: .72;
-      transition: opacity .12s, background .12s; }
+      transition: opacity .12s, background .12s;
+      touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
     .hnav .links a:hover { opacity: 1; background: color-mix(in oklab, var(--violet), transparent 88%); }
     .hnav .links a.active { opacity: 1; background: color-mix(in oklab, var(--violet), transparent 82%);
       box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--violet), transparent 65%); }
     @media (max-width: 620px) {
-      .hnav .links a { padding: var(--s2); }
+      /* Icon-only links were ~30px tall — below the 44px touch floor. Keep the
+         labels hidden, grow the hit box (--s6 + --s3 = 44). */
+      .hnav .links a {
+        padding: var(--s2); min-width: calc(var(--s6) + var(--s3));
+        min-height: calc(var(--s6) + var(--s3)); justify-content: center;
+      }
       .hnav .links a .lbl { display: none; }         /* icons only on phones */
       .hnav .brand .txt { font-size: 13.5px; }
     }`;
