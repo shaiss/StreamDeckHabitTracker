@@ -406,6 +406,11 @@
         .then((r) => {
           flash(el, r.ok);
           if (r.ok) {
+            // Growth funnel Tap: successful virtual-deck habit log (no PII).
+            // Visit = Web Analytics pageview on /deck.html. See PR notes.
+            if (typeof window.va === 'function') {
+              window.va('event', { name: 'virtual_deck_tap' });
+            }
             refresh();               // immediate
             setTimeout(refresh, 9000); // catch the coach's reactive repaint
           }
