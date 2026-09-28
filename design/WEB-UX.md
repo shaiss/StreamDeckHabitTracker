@@ -382,8 +382,11 @@ Numbers that sit in a column or change in place also take
 ```
 
 `.btn` — `--grad-coach` fill, `--on-violet` ink, `--r-md`, `var(--s2) var(--s4)`
-padding, `600 13px/1`. `.btn:disabled` is `opacity: .55` and must stay visually
-distinct. `.btn.ghost` is transparent + `--line` border + `--accent` text.
+padding, `600 13px/1`, and a touch floor of `min-height: calc(var(--s6) +
+var(--s3))` (44px — Apple HIG / WCAG 2.5.5, expressed on the spacing ladder).
+`.btn:disabled` is `opacity: .55` and must stay visually distinct. `.btn.ghost`
+is transparent + `--line` border + `--accent` text. `.linklike` shares the same
+44px floor. Both take `touch-action: manipulation`.
 
 > **Contrast note.** `--on-violet` on the *lightest* stop of `--grad-coach` is
 > 4.23:1, and on `--violet-deep` it is 8.98:1; because the gradient runs 135°,
@@ -392,7 +395,9 @@ distinct. `.btn.ghost` is transparent + `--line` border + `--accent` text.
 > **nothing smaller than 13px/600 ever sits on `--grad-coach`.**
 
 Interaction feedback is `60–150ms` and nothing between the regimes (§ Motion).
-There is no `300ms` anywhere in this product.
+There is no `300ms` *feedback* delay anywhere in this product (the virtual
+deck's double-tap *recognition* window is 300ms, but press feedback paints on
+`pointerdown`).
 
 ### Form field — `.field`, `.field-label`
 

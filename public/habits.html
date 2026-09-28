@@ -20,7 +20,12 @@
     /* the control comes from .field; rowHtml() emits it alongside the .emoji/
        .label/.name/.goal hooks, so only the emoji cell's centering differs */
     .hrow input.emoji { text-align: center; font-size: 20px; padding: var(--s1); }
-    .hrow .del { border: 0; background: transparent; color: var(--muted); font-size: 17px; cursor: pointer; }
+    .hrow .del {
+      border: 0; background: transparent; color: var(--muted); font-size: 17px; cursor: pointer;
+      min-width: calc(var(--s6) + var(--s3)); min-height: calc(var(--s6) + var(--s3));
+      display: inline-flex; align-items: center; justify-content: center;
+      touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+    }
     .hrow .del:hover { color: var(--bad); }
     /* the column placard above .rows — same micro-label spec as theme.css .data-table th */
     .cols { display: grid; grid-template-columns: 64px 1fr 1fr 56px 64px 40px; gap: var(--s3); padding: 0 var(--s4);

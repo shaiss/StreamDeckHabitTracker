@@ -80,9 +80,17 @@
         0 1px 0 rgba(255,255,255,.07),
         0 5px 10px rgba(0,0,0,.75);
       transition: transform .06s ease, filter .06s ease, box-shadow .06s ease;
+      /* Claim the gesture: without this, iOS/Android treat a slight finger
+         wobble as scroll and fire pointercancel — dropping the tap entirely
+         (bindGestures only acts on pointerup). manipulation is not enough on
+         a scrollable page; none keeps the key press alive. */
+      touch-action: none;
       -webkit-tap-highlight-color: transparent;
+      user-select: none; -webkit-user-select: none;
     }
     .k img { width: 100%; height: 100%; display: block; object-fit: cover; pointer-events: none; }
+    /* Face chrome must never be the hit target — events belong on the <button>. */
+    .k .facecss, .k .facecss * { pointer-events: none; }
     /* LCD glass: subtle top sheen over every lit key */
     .k .glass {
       position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
@@ -177,8 +185,21 @@
     .hint { margin-top: var(--s5); text-align: center; max-width: 560px; }
     .hint b { color: var(--ink2); font-weight: 600; }
 
-    /* phone: shrink the whole device (device geometry — see :root above) */
-    @media (max-width: 760px) { :root { --key: 62px; --gap: 8px; --pad: 14px; } .device { border-radius: 20px; } }
+    /* phone: shrink the whole device (device geometry — see :root above).
+       flex-start (not center) so a near-full-height device does not overflow
+       and turn every key press into a scroll → pointercancel. */
+    @media (max-width: 760px) {
+      :root { --key: 62px; --gap: 8px; --pad: 14px; }
+      .device { border-radius: 20px; }
+      body { justify-content: flex-start; }
+    }
+    /* iPhone-class widths (~390): the 62px phone size above is still ~28px too
+       wide once body padding is counted, so horizontal scroll steals taps.
+       Keep keys ≥44px (touch floor) while fitting a 5-key MK.2 row. */
+    @media (max-width: 430px) {
+      :root { --key: 54px; --gap: 6px; --pad: 10px; }
+      .device { border-radius: 16px; }
+    }
     @media (min-width: 761px) and (max-width: 1000px) { :root { --key: 92px; --gap: 11px; --pad: 20px; } }
   </style>
 </head>
@@ -268,10 +289,28 @@
     const LONG_PRESS_MS = 500, DOUBLE_TAP_MS = 300;
 
     function bindGestures(b, { onTap, onLong, onDouble }) {
-      let longTimer = null, pendingTimer = null, longFired = false;
+      let longTimer = null, pendingTimer = null, longFired = false, ptr = null;
       const stop = (t) => { if (t) clearTimeout(t); return null; };
-      b.addEventListener('pointerdown', () => {
+      // Immediate press feedback — without this, double-tap keys sit dead for
+      // DOUBLE_TAP_MS after lift before tap() paints .pressed, so a phone tap
+      // feels like a miss and the second attempt becomes a double-tap.
+      const endDown = () => {
+        longTimer = stop(longTimer);
+        b.classList.remove('pressed');
+        if (ptr != null) {
+          try { b.releasePointerCapture(ptr); } catch (_) {}
+          ptr = null;
+        }
+      };
+      b.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        if (ptr != null) return;
+        ptr = e.pointerId;
+        // Keep pointerup on this key even if the finger drifts a few px —
+        // otherwise mobile Safari cancels the press and the tap never fires.
+        try { b.setPointerCapture(e.pointerId); } catch (_) {}
         longFired = false;
+        b.classList.add('pressed');
         longTimer = stop(longTimer);
         if (!onLong) return;
         longTimer = setTimeout(() => {
@@ -280,14 +319,29 @@
           onLong(b);
         }, LONG_PRESS_MS);
       });
-      b.addEventListener('pointerup', () => {
-        longTimer = stop(longTimer);
-        if (longFired) { longFired = false; return; }   // the hold already acted
+      b.addEventListener('pointerup', (e) => {
+        if (ptr !== e.pointerId) return;
+        const held = longFired;
+        endDown();
+        if (held) { longFired = false; return; }   // the hold already acted
         if (!onDouble) { onTap && onTap(b); return; }   // no window to wait out
         if (pendingTimer) { pendingTimer = stop(pendingTimer); onDouble(b); return; }
         pendingTimer = setTimeout(() => { pendingTimer = null; onTap && onTap(b); }, DOUBLE_TAP_MS);
       });
-      b.addEventListener('pointercancel', () => { longTimer = stop(longTimer); longFired = false; });
+      b.addEventListener('pointercancel', (e) => {
+        if (ptr !== e.pointerId) return;
+        longFired = false;
+        endDown();
+      });
+      // If capture is yanked without up/cancel (OS interruption), do not leave
+      // ptr wedged — later presses would no-op forever on that key.
+      b.addEventListener('lostpointercapture', (e) => {
+        if (ptr !== e.pointerId) return;
+        longFired = false;
+        longTimer = stop(longTimer);
+        b.classList.remove('pressed');
+        ptr = null;
+      });
       // A touch long-press would otherwise raise the OS context menu on top of
       // the undo we just performed.
       b.addEventListener('contextmenu', (e) => e.preventDefault());
