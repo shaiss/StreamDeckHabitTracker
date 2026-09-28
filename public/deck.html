@@ -193,6 +193,13 @@
       .device { border-radius: 20px; }
       body { justify-content: flex-start; }
     }
+    /* iPhone-class widths (~390): the 62px phone size above is still ~28px too
+       wide once body padding is counted, so horizontal scroll steals taps.
+       Keep keys ≥44px (touch floor) while fitting a 5-key MK.2 row. */
+    @media (max-width: 430px) {
+      :root { --key: 54px; --gap: 6px; --pad: 10px; }
+      .device { border-radius: 16px; }
+    }
     @media (min-width: 761px) and (max-width: 1000px) { :root { --key: 92px; --gap: 11px; --pad: 20px; } }
   </style>
 </head>
@@ -325,6 +332,15 @@
         if (ptr !== e.pointerId) return;
         longFired = false;
         endDown();
+      });
+      // If capture is yanked without up/cancel (OS interruption), do not leave
+      // ptr wedged — later presses would no-op forever on that key.
+      b.addEventListener('lostpointercapture', (e) => {
+        if (ptr !== e.pointerId) return;
+        longFired = false;
+        longTimer = stop(longTimer);
+        b.classList.remove('pressed');
+        ptr = null;
       });
       // A touch long-press would otherwise raise the OS context menu on top of
       // the undo we just performed.

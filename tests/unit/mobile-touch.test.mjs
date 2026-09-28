@@ -16,10 +16,14 @@ test('virtual deck keys claim the touch gesture', () => {
     '.k must use touch-action:none so a finger wobble cannot become a scroll cancel');
   assert.match(deck, /setPointerCapture/,
     'bindGestures must capture the pointer so pointerup still fires on drift');
+  assert.match(deck, /lostpointercapture/,
+    'lost capture must clear the active pointer or a key can wedge forever');
   assert.match(deck, /b\.classList\.add\('pressed'\)/,
     'press feedback must paint on pointerdown, not after the double-tap window');
   assert.match(deck, /\.k \.facecss[^\{]*\{[^}]*pointer-events:\s*none/s,
     'face chrome must not be the hit target');
+  assert.match(deck, /@media \(max-width:\s*430px\)[^\{]*\{[^}]*--key:\s*54px/s,
+    'iPhone-class widths must shrink the 5-key row so it fits without horizontal scroll');
 });
 
 test('shared controls meet the 44px touch floor', () => {

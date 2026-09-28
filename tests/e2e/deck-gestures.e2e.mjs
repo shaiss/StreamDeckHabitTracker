@@ -197,3 +197,37 @@ test('press feedback paints on pointerdown before the double-tap window', async 
   await settle();
   assert.equal(calls.length, 1);
 });
+
+test('phone viewport: device fits without horizontal scroll and a tap still logs', async () => {
+  // iPhone-class CSS width where the prior 62px phone size overflowed (~28px)
+  // and turned taps into scroll cancels.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const key = await open();
+  const geometry = await page.evaluate(() => {
+    const device = document.querySelector('.device');
+    const r = device.getBoundingClientRect();
+    return {
+      deviceWidth: r.width,
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      keySize: getComputedStyle(document.querySelector('.k')).width,
+      touchAction: getComputedStyle(document.querySelector('.k')).touchAction
+    };
+  });
+  assert.equal(geometry.touchAction, 'none');
+  assert.ok(parseFloat(geometry.keySize) >= 44, `key must stay ≥44px, got ${geometry.keySize}`);
+  assert.ok(
+    geometry.scrollWidth <= geometry.clientWidth + 1,
+    `horizontal overflow steals taps: scroll=${geometry.scrollWidth} client=${geometry.clientWidth} device=${geometry.deviceWidth}`
+  );
+
+  const box = await key.boundingBox();
+  assert.ok(box, 'habit key visible at phone size');
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  await settle();
+  assert.equal(calls.length, 1, 'phone tap must log via /api/log');
+  assert.match(calls[0], /^GET \/api\/log\?hkey=1/);
+
+  // Restore desktop-ish viewport for any later tests in this worker.
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
