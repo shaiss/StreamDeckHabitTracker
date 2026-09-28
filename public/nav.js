@@ -8,6 +8,19 @@
 // toggles the panel in place via a "toggle-settings" event; on other pages it
 // navigates to /?settings=1 and the dashboard opens the panel on arrival.
 (function () {
+  // Vercel Web Analytics (static HTML). Pageviews land once the insights
+  // script loads; custom events queue on window.va until then. No package —
+  // this site has no build step. Dashboard must have Analytics enabled so
+  // /_vercel/insights/* is served after deploy (see analytics quickstart).
+  window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+  if (!document.querySelector('script[data-va-insights]')) {
+    const s = document.createElement('script');
+    s.defer = true;
+    s.src = '/_vercel/insights/script.js';
+    s.dataset.vaInsights = '';
+    document.head.appendChild(s);
+  }
+
   const ITEMS = [
     { href: '/', icon: '📊', label: 'Dashboard' },
     { href: '/deck.html', icon: '🎛', label: 'Deck' },
