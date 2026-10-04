@@ -375,21 +375,18 @@ test('a question key paints as its own kind of key, not a suggestion', async () 
 
 test('answering an Ask key runs wait → confirming → done frames (#76)', async () => {
   const p = await boot();
+  const lastGood = () => {
+    const hits = p.images().filter((m) => {
+      try { return svgOf(m).includes('>Good<'); } catch { return false; }
+    });
+    return hits.length ? svgOf(hits.at(-1)) : '';
+  };
   try {
     slots = [QUESTION[0], QUESTION[1], null, null];
-    await until(() => {
-      const svg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Good<')));
-      return svg && svg.includes('data-state-frame="wait"');
-    }, { label: 'wait frame on the open question' });
+    await until(() => lastGood().includes('data-state-frame="wait"'), { label: 'wait frame on the open question' });
     await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
-    await until(() => {
-      const svg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Good<')));
-      return svg && svg.includes('data-state-frame="working"');
-    }, { label: 'confirming (working) frame' });
-    await until(() => {
-      const svg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Good<')));
-      return svg && svg.includes('data-state-frame="success"');
-    }, { label: 'done (success) frame' });
+    await until(() => lastGood().includes('data-state-frame="working"'), { label: 'confirming (working) frame' });
+    await until(() => lastGood().includes('data-state-frame="success"'), { label: 'done (success) frame' });
   } finally { p.done(); }
 });
 test('answering goes through /api/log so it stays a real logged row', async () => {
