@@ -172,6 +172,8 @@ test('the virtual deck renders question keys as their own thing', () => {
   assert.match(src, /qface/, 'a question face exists');
   assert.match(src, /def\.qid \? '❓/, 'and is chosen by qid, ahead of nudge/suggestion');
   assert.match(src, /owedFrame\(def\)/, 'pending questions light the wait frame, not a hue swap');
+  assert.match(src, /function playAskAck/, 'Ask ack helper exists on the virtual deck');
+  assert.match(src, /if \(d && d\.qid\) playAskAck\(e2\)/, 'question-key tap is wired to playAskAck');
   assert.match(src, /go\('working',\s*280/, 'Ask ack starts on confirming (working)');
   assert.match(src, /go\('success',\s*1600/, 'Ask ack settles on done (success)');
   assert.match(plugin, /ASK_CONFIRMING_MS = 280/, 'plugin Ask ack uses the same confirming beat');
