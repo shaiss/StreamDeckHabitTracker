@@ -25,11 +25,12 @@ export const FRAME_STATES = Object.freeze(Object.keys(STATE_COLORS));
 // Quantized motion on the plugin poll loop (#74, same idea as urgencyStep).
 // CSS on deck.html animates for real; the plugin only repaints when the step
 // changes. Default tick is 3000ms (HT_TICK_MS). Wait breathes on that tick.
-// Blocked must not use a period that even-divides the tick (1500ms × 2 = 3000
-// aliases to a constant frameStep parity, so the blink never painted). 2500ms
-// makes successive 3000ms samples land on opposite steps.
+// Blocked samples Date.now() the same way, so the period MUST divide 3000 with
+// an odd quotient: otherwise some wall-clock phases advance an even number of
+// buckets and parity sticks (1500→÷2, 2500→phase-dependent ÷1 or ÷2). 1000ms
+// is ÷3 — every default tick flips, and the period stays faster than wait.
 export const FRAME_WAIT_MS = 3000;
-export const FRAME_BLOCKED_MS = 2500;
+export const FRAME_BLOCKED_MS = 1000;
 export const FRAME_WORKING_MS = 4000;
 export const FRAME_SUCCESS_FADE_MS = 2400;
 

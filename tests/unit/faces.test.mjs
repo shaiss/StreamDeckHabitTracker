@@ -221,12 +221,12 @@ test('desaturate: the five states stay distinguishable without hue', () => {
   assert.ok(frameStep('wait', FRAME_WAIT_MS, { reducedMotion: false }) !==
     frameStep('wait', 0, { reducedMotion: false }), 'wait flips on its period');
   const tick = 3000; // plugin default HT_TICK_MS
-  assert.notEqual(frameStep('blocked', 0), frameStep('blocked', tick),
-    'blocked must blink across successive default ticks (1500ms aliases)');
-  assert.notEqual(frameStep('blocked', tick), frameStep('blocked', tick * 2),
-    'blocked parity must keep flipping on the next tick too');
-  assert.equal(Math.floor(tick / FRAME_BLOCKED_MS) % 2, 1,
-    'FRAME_BLOCKED_MS must not even-divide the 3000ms tick');
+  assert.equal(tick % FRAME_BLOCKED_MS, 0, 'blocked period must divide the tick (no remainder → no phase alias)');
+  assert.equal((tick / FRAME_BLOCKED_MS) % 2, 1, 'tick must cover an odd number of blocked periods');
+  for (let t = 0; t < tick; t += 37) {
+    assert.notEqual(frameStep('blocked', t), frameStep('blocked', t + tick),
+      `blocked must flip on every default tick regardless of phase (t=${t})`);
+  }
   assert.ok(frameBright('blocked', 1) > frameBright('blocked', 0), 'blocked blink is a brightness step');
 });
 
