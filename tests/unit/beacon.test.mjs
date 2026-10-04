@@ -78,5 +78,5 @@ test('the virtual deck embeds the identical pending-count rules (drift guard)', 
   assert.match(plugin, /VIOLET_HUE, snap\.badge/, 'coach face stays violet; badge is the count');
   const slotsApi = readFileSync(new URL('../../api/slots.js', import.meta.url), 'utf8');
   assert.match(slotsApi, /isBlocked/, '/api/slots must compute blocked for the plugin poll');
-  assert.match(slotsApi, /blocked:\s*isBlocked/, 'j.blocked must be the server-derived isBlocked() value');
+  assert.match(slotsApi, /blocked:\s*isBlocked\s*\(/, 'j.blocked must be isBlocked(...) not the function itself');
 });
