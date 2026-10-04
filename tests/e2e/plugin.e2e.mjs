@@ -678,6 +678,32 @@ test('an expired arm window disarms silently (#78)', async () => {
   } finally { p.done(); }
 });
 
+test('danger flip while armed clears CONFIRM and does not log (#78)', async () => {
+  // sanitize() can drop danger for an otherwise identical slot. The armed
+  // face and gesture registration must both reset — a stale CONFIRM must not
+  // linger while the next ordinary tap commits.
+  const p = await boot();
+  try {
+    slots = [{ habit: 'Nuke', emoji: '⚠', label: 'DELETE', danger: true, assignedAt: 1 }, null, null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>DELETE<')), { label: 'danger idle face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => p.images().some((m) => {
+      const s = svgOf(m);
+      return s.includes('data-armed="1"') && s.includes('>CONFIRM?<');
+    }), { label: 'armed CONFIRM? face' });
+    assert.equal(logUrls.length, 0, 'press 1 never hits /api/log');
+    slots = [{ habit: 'Nuke', emoji: '⚠', label: 'DELETE', assignedAt: 1 }, null, null, null];
+    await until(() => {
+      const last = p.images().filter((m) => m.context === 'ctx-slot-1').at(-1);
+      if (!last) return false;
+      const s = svgOf(last);
+      return s.includes('>DELETE<') && !s.includes('data-armed="1"') && !s.includes('>CONFIRM?<');
+    }, { label: 'disarmed after danger flip' });
+    assert.equal(logUrls.length, 0, 'danger flip must not emit a token');
+  } finally { p.done(); }
+});
+
 test('the esbuild bundle boots and paints (packaging smoke)', async () => {
   const { bundlePlugin } = await import('../../tools/bundle-plugin.mjs');
   await bundlePlugin();

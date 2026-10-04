@@ -147,6 +147,22 @@ test('a second press that straddles the deadline still commits', () => {
   assert.deepEqual(g.up('del', 4200), [{ id: 'del', gesture: 'commit' }]);
 });
 
+test('a press that starts after the arm deadline does not commit', () => {
+  // A delayed timer can leave armedAt set past ARM_MS. The second press must
+  // still honor the advertised window: start-after-deadline → re-arm, not commit.
+  const g = mk();
+  g.register('del', { danger: true });
+  g.down('del', 1000);
+  g.up('del', 1100);                    // expires 4100; tick never ran
+  g.down('del', 5000);                  // press begins after the window closed
+  assert.deepEqual(g.up('del', 5100), [{ id: 'del', gesture: 'arm' }],
+    'late press re-arms instead of committing outside the window');
+  assert.equal(g.nextDeadline(), 5100 + ARM_MS);
+  g.down('del', 5200);
+  assert.deepEqual(g.up('del', 5300), [{ id: 'del', gesture: 'commit' }],
+    'a press inside the fresh arm window still commits');
+});
+
 test('a hold while armed disarms instead of committing or undoing', () => {
   const g = mk();
   g.register('del', { danger: true });

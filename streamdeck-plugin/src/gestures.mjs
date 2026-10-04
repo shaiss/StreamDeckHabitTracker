@@ -59,10 +59,23 @@ export function createGestures({
     // hold already consumed the press or a double-tap window just opened.
     up(id, now) {
       const s = st(id);
+      const downAt = s.downAt;
       s.downAt = 0;
       if (s.longFired) { s.longFired = false; return []; }   // the hold already fired
       if (s.danger) {
-        if (s.armedAt) { s.armedAt = 0; return [{ id, gesture: 'commit' }]; }
+        if (s.armedAt) {
+          // Commit only if this press began before the arm window closed.
+          // A delayed tick can leave armedAt set past ARM_MS; a press that
+          // starts after expiry must not be a late commit (#78).
+          if (downAt && downAt < s.armedAt + armMs) {
+            s.armedAt = 0;
+            return [{ id, gesture: 'commit' }];
+          }
+          // Window already closed — this press is a fresh arm (same as
+          // post-lapse semantics), not a commit.
+          s.armedAt = now;
+          return [{ id, gesture: 'arm' }];
+        }
         s.armedAt = now;
         return [{ id, gesture: 'arm' }];
       }

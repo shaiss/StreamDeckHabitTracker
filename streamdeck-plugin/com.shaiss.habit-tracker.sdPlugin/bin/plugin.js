@@ -316,7 +316,7 @@ var require_permessage_deflate = __commonJS({
       acceptAsServer(offers) {
         const opts = this._options;
         const accepted = offers.find((params) => {
-          if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && !params.client_max_window_bits) {
+          if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && (typeof params.client_max_window_bits === "number" ? opts.clientMaxWindowBits > params.client_max_window_bits : !params.client_max_window_bits)) {
             return false;
           }
           return true;
@@ -2334,11 +2334,23 @@ var require_websocket = __commonJS({
           this._isServer = false;
           this._redirects = 0;
           if (protocols === void 0) {
-            protocols = [];
+            if (!options || options.protocols === void 0) {
+              protocols = [];
+            } else if (Array.isArray(options.protocols)) {
+              protocols = options.protocols;
+            } else {
+              protocols = [options.protocols];
+            }
           } else if (!Array.isArray(protocols)) {
             if (typeof protocols === "object" && protocols !== null) {
               options = protocols;
-              protocols = [];
+              if (options.protocols === void 0) {
+                protocols = [];
+              } else if (Array.isArray(options.protocols)) {
+                protocols = options.protocols;
+              } else {
+                protocols = [options.protocols];
+              }
             } else {
               protocols = [protocols];
             }
@@ -2535,7 +2547,6 @@ var require_websocket = __commonJS({
           }
           return;
         }
-        this._readyState = _WebSocket.CLOSING;
         this._sender.close(code, data, !this._isServer, (err) => {
           if (err) return;
           this._closeFrameSent = true;
@@ -2543,6 +2554,7 @@ var require_websocket = __commonJS({
             this._socket.end();
           }
         });
+        this._readyState = _WebSocket.CLOSING;
         setCloseTimer(this);
       }
       /**
@@ -2767,6 +2779,7 @@ var require_websocket = __commonJS({
         socketPath: void 0,
         hostname: void 0,
         protocol: void 0,
+        protocols: void 0,
         timeout: void 0,
         method: "GET",
         host: void 0,
@@ -17744,6 +17757,7 @@ function createGestures({
     // hold already consumed the press or a double-tap window just opened.
     up(id, now) {
       const s = st(id);
+      const downAt = s.downAt;
       s.downAt = 0;
       if (s.longFired) {
         s.longFired = false;
@@ -17751,8 +17765,12 @@ function createGestures({
       }
       if (s.danger) {
         if (s.armedAt) {
-          s.armedAt = 0;
-          return [{ id, gesture: "commit" }];
+          if (downAt && downAt < s.armedAt + armMs) {
+            s.armedAt = 0;
+            return [{ id, gesture: "commit" }];
+          }
+          s.armedAt = now;
+          return [{ id, gesture: "arm" }];
         }
         s.armedAt = now;
         return [{ id, gesture: "arm" }];
@@ -17929,7 +17947,7 @@ var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.5.8";
+var VERSION = "2.5.9";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -18296,12 +18314,13 @@ function render(k) {
   k.isQuestion = !!(def && def.qid);
   k.isDetails = !!(def && def.qid && isDetailsKey(def));
   k.isDanger = !!(def && def.danger);
-  const slotSig = def ? `${def.habit}|${def.qid || ""}|${def.label || ""}` : "";
+  const slotSig = def ? `${def.habit}|${def.qid || ""}|${def.label || ""}|d${def.danger ? 1 : 0}` : "";
   if (k.slotSig !== slotSig) {
     k.armed = false;
     k.slotSig = slotSig;
   }
   if (was[0] !== k.isNudge || was[1] !== k.isQuestion || was[2] !== k.isDanger) {
+    if (was[2] && !k.isDanger) k.armed = false;
     gest.register(k.action.id, {
       doubleTap: !k.isNudge && !k.isQuestion && !k.isDanger,
       danger: k.isDanger

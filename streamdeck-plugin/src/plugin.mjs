@@ -78,7 +78,7 @@ const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.8';
+let VERSION = '2.5.9';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -501,12 +501,18 @@ function render(k) {
   k.isQuestion = !!(def && def.qid);
   k.isDetails = !!(def && def.qid && isDetailsKey(def));
   k.isDanger = !!(def && def.danger);
-  const slotSig = def ? `${def.habit}|${def.qid || ''}|${def.label || ''}` : '';
+  // Include danger: sanitize() can flip that boolean alone, and an armed
+  // CONFIRM face must clear when the slot stops being destructive (#78).
+  const slotSig = def
+    ? `${def.habit}|${def.qid || ''}|${def.label || ''}|d${def.danger ? 1 : 0}`
+    : '';
   if (k.slotSig !== slotSig) {
     k.armed = false;
     k.slotSig = slotSig;
   }
   if (was[0] !== k.isNudge || was[1] !== k.isQuestion || was[2] !== k.isDanger) {
+    // register() also clears armedAt when danger drops; keep the face in step.
+    if (was[2] && !k.isDanger) k.armed = false;
     gest.register(k.action.id, {
       doubleTap: !k.isNudge && !k.isQuestion && !k.isDanger,
       danger: k.isDanger
