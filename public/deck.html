@@ -120,6 +120,7 @@
     }
     .facecss .em { font-size: calc(var(--key) * .40); line-height: 1.15; filter: drop-shadow(0 3px 4px rgba(0,0,0,.4)); }
     .facecss .em-tint-success { color: #22C55E; filter: none; }
+    .facecss .em-tint-danger, .facecss .lb-tint-danger { color: #FF4D4D; filter: none; }
     .facecss .lb { font-size: calc(var(--key) * .13); font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6); letter-spacing: .02em; }
     .facecss .lb.mono { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; text-transform: uppercase; letter-spacing: .06em; }
     .facecss .badge { position: absolute; top: 6px; right: 8px; font-size: calc(var(--key) * .085); font-weight: 700; color: rgba(255,255,255,.85); }
@@ -358,7 +359,7 @@
     // Gesture parity with the physical deck (#33): tap logs, hold undoes,
     // double-tap says "big one". Mirrors streamdeck-plugin/src/gestures.mjs —
     // tests/unit/gestures.test.mjs guards these two copies against drifting.
-    const LONG_PRESS_MS = 500, DOUBLE_TAP_MS = 300;
+    const LONG_PRESS_MS = 500, DOUBLE_TAP_MS = 300, ARM_MS = 3000;
 
     function bindGestures(b, { onTap, onLong, onDouble }) {
       let longTimer = null, pendingTimer = null, longFired = false, ptr = null;
@@ -396,7 +397,9 @@
         const held = longFired;
         endDown();
         if (held) { longFired = false; return; }   // the hold already acted
-        if (!onDouble) { onTap && onTap(b); return; }   // no window to wait out
+        // Danger keys (#78) resolve on release: two taps ARE the confirm, so
+        // there is no double-tap window to wait out (and press 1 must arm now).
+        if (b.dataset.danger === '1' || !onDouble) { onTap && onTap(b); return; }
         if (pendingTimer) { pendingTimer = stop(pendingTimer); onDouble(b); return; }
         pendingTimer = setTimeout(() => { pendingTimer = null; onTap && onTap(b); }, DOUBLE_TAP_MS);
       });
@@ -452,7 +455,15 @@
       return null;
     }
 
-    function slotFaceHtml(def, n, pressFrame) {
+    function slotFaceHtml(def, n, pressFrame, armed) {
+      if (armed) {
+        const frame = resolveFrame({ frame: pressFrame }) || owedFrame(def);
+        return '<span class="facecss ' + (def && def.qid ? 'qface' : def && def.nudge ? 'nudgeface' : 'slotface') + '">' +
+          stateFrameHtml(frame) +
+          '<span class="em em-tint-danger">⚠</span>' +
+          '<span class="lb mono lb-tint-danger">CONFIRM?</span></span>' +
+          '<span class="glass"></span><span class="flash"></span>';
+      }
       if (def) {
         const paint = def.qid ? questionPaint(def) : null;
         const cls = def.qid ? 'qface' : def.nudge ? 'nudgeface' : 'slotface';
@@ -466,14 +477,17 @@
           parts.push('--wait-ms:' + waitPeriodMs(urg));
         }
         const style = parts.length ? ' style="' + parts.join(';') + '"' : '';
-        const emCls = paint && paint.glyphTint ? ' em-tint-' + paint.glyphTint : '';
-        const lbCls = paint ? ' mono' : '';
+        const danger = !!def.danger && !paint;
+        const tint = paint && paint.glyphTint ? paint.glyphTint : (danger ? 'danger' : '');
+        const emCls = tint ? ' em-tint-' + tint : '';
+        const lbCls = (paint || danger) ? ' mono' : '';
+        const lbTint = danger ? ' lb-tint-danger' : '';
         const glyph = paint ? paint.glyph : def.emoji;
         const label = paint ? paint.label : (def.label || def.habit);
         return '<span class="facecss ' + cls + '"' + style + '>' + stateFrameHtml(frame) +
           (badge ? '<span class="badge">' + esc(badge) + '</span>' : '') +
           '<span class="em' + emCls + '">' + esc(glyph) + '</span>' +
-          '<span class="lb' + lbCls + '">' + esc(label) + '</span></span>' +
+          '<span class="lb' + lbCls + lbTint + '">' + esc(label) + '</span></span>' +
           '<span class="glass"></span><span class="flash"></span>';
       }
       return '<span class="facecss emptyface"><span class="badge">AI</span>' +
@@ -584,7 +598,9 @@
           delete el.dataset.pressFrame;
           delete el.dataset.settledQid;
         }
-        el.innerHTML = slotFaceHtml(def, n, el.dataset.pressFrame || null);
+        if (def && def.danger) el.dataset.danger = '1';
+        else delete el.dataset.danger;
+        el.innerHTML = slotFaceHtml(def, n, el.dataset.pressFrame || null, el.dataset.armed === '1');
         el.title = def
           ? (def.qid ? (def.question || '') + '  → ' + (questionPaint(def).label) : def.emoji + ' ' + def.label + ' — ' + (def.reason || ''))
           : ('AI slot ' + n + ' — empty');
@@ -619,9 +635,39 @@
       paintSlots();
     }
 
+    const armTimers = new WeakMap();
+    function armThenCommit(el, go) {
+      if (el.dataset.armed === '1') {
+        const t = armTimers.get(el);
+        if (t) clearTimeout(t);
+        armTimers.delete(el);
+        delete el.dataset.armed;
+        go();
+        return;
+      }
+      el.dataset.armed = '1';
+      paintSlots();
+      const t = setTimeout(() => {
+        if (el.dataset.armed !== '1') return;
+        delete el.dataset.armed;
+        armTimers.delete(el);
+        paintSlots();
+      }, ARM_MS);
+      armTimers.set(el, t);
+    }
+
     // Every slot gesture that would log goes through here so DETAILS cannot
     // spend a question via tap, double-tap, or any future handler (#77).
     function commitSlot(e2, n, extra = '') {
+      const d = slots[n - 1];
+      if (d && d.danger) {
+        armThenCommit(e2, () => emitSlot(e2, n, extra));
+        return;
+      }
+      emitSlot(e2, n, extra);
+    }
+
+    function emitSlot(e2, n, extra = '') {
       const d = slots[n - 1];
       if (d && d.qid && isDetailsKey(d)) {
         hint.innerHTML = '<b>' + esc(d.question || 'Details') + '</b>';

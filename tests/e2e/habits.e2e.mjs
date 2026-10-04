@@ -154,8 +154,15 @@ test('dismissing a proposal drops it without touching the roster', async () => {
   assert.deepEqual(roster.rejected, ['add:journal'], 'the refusal is remembered for the next pass');
 });
 
-test('approving a retire archives the key and Restore brings it back', async () => {
-  await page.click('.decide[data-name="Pee"][data-decision="approve"]');
+test('approving a retire takes two deliberate presses and archives the key', async () => {
+  const pee = page.locator('.decide[data-name="Pee"][data-decision="approve"]');
+  await pee.click();
+  await page.waitForFunction(() => {
+    const b = document.querySelector('.decide[data-name="Pee"][data-decision="approve"]');
+    return b && b.textContent.includes('CONFIRM?');
+  });
+  assert.ok((await names()).includes('Pee'), 'press 1 must not retire');
+  await pee.click();
   await settled('retired');
   assert.equal((await names()).includes('Pee'), false);
   assert.equal(await page.$eval('#archSect', (s) => s.hidden), false);
@@ -191,4 +198,17 @@ test('a per-habit daily goal round-trips through the manager (living key faces #
     return r?.querySelector('.goal')?.value;
   });
   assert.equal(goalVal, '8', 'goal input must rehydrate to 8 after reload');
+});
+
+test('removing a habit row takes two deliberate presses (#78)', async () => {
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('.hrow');
+  const before = await names();
+  assert.ok(before.length >= 1);
+  const del = page.locator('.hrow').filter({ has: page.locator(`.name[value="${before[0]}"]`) }).locator('.del');
+  await del.click();
+  assert.deepEqual(await names(), before, 'press 1 must not drop the row');
+  assert.match(await del.textContent(), /CONFIRM\?/);
+  await del.click();
+  assert.equal((await names()).includes(before[0]), false);
 });

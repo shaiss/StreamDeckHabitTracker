@@ -23,6 +23,7 @@ let mockRosterPending = 0;
 let mockBlocked = false;
 let mockQuestion = false;
 let mockPicker = false;
+let mockDanger = false;
 
 before(async () => {
   server = createServer((req, res) => {
@@ -45,7 +46,12 @@ before(async () => {
       res.end(JSON.stringify({
         configured: true, aiReady: true, suggestedAt: now,
         habits: [{ name: 'Drink', emoji: '💧', label: 'Drink' }],
-        slots: mockPicker
+        slots: mockDanger
+          ? [
+              { habit: 'Nuke', emoji: '⚠', label: 'DELETE', danger: true, assignedAt: 1 },
+              null, null, null
+            ]
+          : mockPicker
           ? [
               { habit: 'FixPick', emoji: '▤', label: 'REBASE', qid: 'qpick',
                 question: 'Which fix?', pattern: 'picker', choiceIndex: 1,
@@ -106,7 +112,7 @@ before(async () => {
 after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false } = {}) {
+async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false } = {}) {
   calls = [];
   logStatus = 200;
   nudgeFraction = nudge;
@@ -114,6 +120,7 @@ async function open({ nudge = null, roster = 0, blocked = false, question = fals
   mockBlocked = blocked;
   mockQuestion = question;
   mockPicker = picker;
+  mockDanger = danger;
   await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.k[data-habit="0"]');
   return page.locator('.k[data-habit="0"]');
@@ -370,4 +377,42 @@ test('a Choice Picker badges indices and settles siblings on press (#77)', async
   await page.locator('.k[data-slot="1"]').click();
   await page.waitForFunction(() => document.querySelector('.k[data-slot="1"] .frame-working, .k[data-slot="1"] .frame-success'));
   await page.waitForFunction(() => document.querySelector('.k[data-slot="2"] .frame-idle'));
+});
+
+test('press 1 on a danger key arms CONFIRM? and emits nothing (#78)', async () => {
+  await open({ danger: true });
+  const slot = page.locator('.k[data-slot="1"]');
+  await page.waitForSelector('.k[data-slot="1"] .em-tint-danger');
+  await slot.click();
+  await page.waitForFunction(() => {
+    const el = document.querySelector('.k[data-slot="1"]');
+    return el && el.dataset.armed === '1' && /CONFIRM\?/.test(el.textContent);
+  });
+  await settle();
+  assert.equal(calls.length, 0, 'arming must not hit /api/log');
+  assert.equal(await page.$eval('.k[data-slot="1"] .flash.show', (e) => !!e).catch(() => false), false,
+    'press 1 does not flash-acknowledge');
+});
+
+test('press 2 within the window commits; a lapsed window disarms silently (#78)', async () => {
+  await open({ danger: true });
+  const slot = page.locator('.k[data-slot="1"]');
+  await slot.click();
+  await page.waitForFunction(() => document.querySelector('.k[data-slot="1"]')?.dataset.armed === '1');
+  await slot.click();
+  await settle();
+  assert.equal(calls.length, 1, 'the committing press logs once');
+  assert.match(calls[0], /^GET \/api\/log\?slot=1/);
+  assert.ok(await page.$eval('.k[data-slot="1"] .flash.show', (e) => !!e), 'commit flashes');
+
+  calls = [];
+  await open({ danger: true });
+  const slot2 = page.locator('.k[data-slot="1"]');
+  await slot2.click();
+  await page.waitForFunction(() => document.querySelector('.k[data-slot="1"]')?.dataset.armed === '1');
+  await page.waitForTimeout(3200);
+  await page.waitForFunction(() => document.querySelector('.k[data-slot="1"]')?.dataset.armed !== '1');
+  assert.equal(calls.length, 0, 'a lapsed window emits nothing');
+  const label = await page.$eval('.k[data-slot="1"] .lb', (e) => e.textContent);
+  assert.notEqual(label, 'CONFIRM?', 'face reverts after disarm');
 });

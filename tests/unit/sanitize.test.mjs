@@ -88,6 +88,15 @@ test('honors ttlMinutes only inside [15,720]; otherwise falls back to defaultTtl
   assert.equal('expiresAt' in noDefault[0], false);
 });
 
+test('danger is an exact boolean passthrough, never inferred (#78)', () => {
+  const yes = sanitize([{ habit: 'Nuke', danger: true }]);
+  assert.equal(yes[0].danger, true);
+  const no = sanitize([{ habit: 'Safe', danger: 'true' }]);
+  assert.equal('danger' in no[0], false);
+  const off = sanitize([{ habit: 'Off' }]);
+  assert.equal('danger' in off[0], false);
+});
+
 test('non-array or empty input yields [] (never throws)', () => {
   assert.deepEqual(sanitize(null), []);
   assert.deepEqual(sanitize(undefined), []);

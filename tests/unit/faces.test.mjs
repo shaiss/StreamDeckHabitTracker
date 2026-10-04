@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { face, hueFor, STATE_COLORS, FRAME_STATES, resolveFrame, frameStep, frameBright, FRAME_WAIT_MS, FRAME_BLOCKED_MS, FRAME_TICK_MS, FRAME_WAIT_PERIODS, waitPeriodMs, owedFrame } from '../../streamdeck-plugin/src/faces.mjs';
+import { face, hueFor, STATE_COLORS, FRAME_STATES, resolveFrame, frameStep, frameBright, FRAME_WAIT_MS, FRAME_BLOCKED_MS, FRAME_TICK_MS, FRAME_WAIT_PERIODS, waitPeriodMs, owedFrame, ACTION_DANGER, ARM_GLYPH, ARM_LABEL, glyphTintColor } from '../../streamdeck-plugin/src/faces.mjs';
 
 const decode = (uri) => {
   assert.match(uri, /^data:image\/svg\+xml;base64,/);
@@ -323,4 +323,20 @@ test('Attention Beacon: interior stays violet coach across idle/wait/blocked (#7
   assert.equal(idleHalo, '#7f47e1', 'Coach interior is hue 262 violet, not some other shared color');
   assert.equal(haloStop(wait), idleHalo);
   assert.equal(haloStop(blocked), idleHalo);
+});
+
+test('danger tints glyph + label without becoming a frame state (#78)', () => {
+  assert.equal(ACTION_DANGER, STATE_COLORS.blocked);
+  assert.equal(glyphTintColor('danger'), ACTION_DANGER);
+  assert.equal(glyphTintColor('success'), STATE_COLORS.success);
+  assert.ok(!FRAME_STATES.includes('danger') && !FRAME_STATES.includes('armed'));
+  const svg = decode(face(ARM_GLYPH, ARM_LABEL, 262, '', 78, {
+    grammar: true, mono: true, glyphTint: 'danger', armed: true
+  }));
+  assert.match(svg, /data-armed="1"/);
+  assert.doesNotMatch(svg, /data-state-frame=/);
+  const glyph = (svg.match(new RegExp(`<text\\b[^>]*>${ARM_GLYPH}</text>`)) || [])[0] || '';
+  assert.match(glyph, new RegExp(`fill="${ACTION_DANGER}"`));
+  const labels = [...svg.matchAll(/<text\b[^>]*>CONFIRM\?<\/text>/g)].map((m) => m[0]);
+  assert.ok(labels.some((t) => t.includes(`fill="${ACTION_DANGER}"`)), 'armed label is danger-red');
 });
