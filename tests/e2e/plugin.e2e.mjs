@@ -447,6 +447,29 @@ test('DETAILS routes to context rather than committing', async () => {
   } finally { p.done(); }
 });
 
+test('a settled sibling lights wait again when a later question lands on it', async () => {
+  const p = await boot();
+  try {
+    slots = [...PICKER(), null];
+    appearSlot(p, 2);
+    await until(() => svgCtx(p, 'ctx-slot-2').includes('data-state-frame="wait"'),
+      { label: 'first question wait on the sibling' });
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => svgCtx(p, 'ctx-slot-2').includes('data-state-frame="idle"'),
+      { label: 'sibling settled to idle' });
+    const later = Date.now();
+    slots = [null, {
+      habit: 'LunchSat', emoji: '✓', label: 'APPROVE', question: 'Second ask?',
+      qid: 'qlater', answer: 'yes', verb: 'approve', gateRole: 'approve',
+      pattern: 'gate', glyphTint: 'success',
+      assignedAt: later, expiresAt: later + 3600_000
+    }, null, null];
+    await until(() => svgCtx(p, 'ctx-slot-2').includes('>APPROVE<')
+      && svgCtx(p, 'ctx-slot-2').includes('data-state-frame="wait"'),
+      { label: 'new question wait on the previously settled sibling' });
+  } finally { p.done(); }
+});
+
 test('a Choice Picker badges options and settling siblings on press', async () => {
   const p = await boot();
   try {

@@ -17891,7 +17891,7 @@ var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.5.5";
+var VERSION = "2.5.6";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -18215,11 +18215,13 @@ function settleQuestionSiblings(k) {
     if (other === k || other.kind !== "slot") continue;
     const od = slotDefOf(other);
     if (!od || od.qid !== def.qid) continue;
+    other.settledQid = def.qid;
     other.pressFrame = true;
     setKeyFrame(other, "idle");
     try {
       render(other);
-    } catch {
+    } finally {
+      other.pressFrame = other.settledQid === def.qid;
     }
   }
 }
@@ -18258,6 +18260,11 @@ function render(k) {
     gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
   }
   const now = Date.now();
+  const qid = def && def.qid;
+  if (k.settledQid && k.settledQid !== qid) {
+    k.pressFrame = false;
+    k.settledQid = null;
+  }
   if (!k.pressFrame) {
     const next = owedFrame(def, now);
     setKeyFrame(k, next, now);
@@ -18351,18 +18358,19 @@ function dispatch({ id, gesture }) {
     if (k.isQuestion) dismissQuestion(k);
     else if (k.isNudge) dismissNudge(k);
     else undo(k);
-  } else if (gesture === "doubletap") tap(k, { intensity: "high" });
-  else {
-    if (k.isQuestion && k.isDetails) {
-      showQuestionContext(k);
-      return;
-    }
-    if (k.isQuestion) {
-      beginAskAck(k);
-      settleQuestionSiblings(k);
-    }
-    tap(k);
+  } else if (gesture === "doubletap") commitSlotKey(k, { intensity: "high" });
+  else commitSlotKey(k);
+}
+function commitSlotKey(k, extra) {
+  if (k.isQuestion && k.isDetails) {
+    showQuestionContext(k);
+    return;
   }
+  if (k.isQuestion) {
+    beginAskAck(k);
+    settleQuestionSiblings(k);
+  }
+  tap(k, extra);
 }
 function armGestures() {
   if (gestTimer) {

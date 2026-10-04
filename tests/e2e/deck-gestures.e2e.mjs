@@ -348,6 +348,18 @@ test('DETAILS shows the question and does not log (#77)', async () => {
   assert.equal(calls.length, 0, 'DETAILS must not commit');
 });
 
+test('DETAILS double-tap also refuses to log (#77)', async () => {
+  await open({ question: true });
+  const details = page.locator('.k[data-slot="2"]');
+  await page.waitForSelector('.k[data-slot="2"] .qface');
+  await details.click();
+  await page.waitForTimeout(60);
+  await details.click();
+  await settle();
+  assert.equal(calls.length, 0, 'DETAILS must not log on any gesture');
+  assert.match(await page.$eval('#hint', (e) => e.textContent), /lunch/i);
+});
+
 test('a Choice Picker badges indices and settles siblings on press (#77)', async () => {
   await open({ picker: true });
   await page.waitForSelector('.k[data-slot="1"] .qface .frame-wait');

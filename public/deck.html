@@ -313,19 +313,8 @@
       for (let n = 1; n <= 4; n++) {
         const el = keyEl({
           title: 'AI slot ' + n,
-          onTap: (e2) => {
-            const d = slots[n - 1];
-            if (d && d.qid && isDetailsKey(d)) {
-              hint.innerHTML = '<b>' + esc(d.question || 'Details') + '</b>';
-              return;
-            }
-            if (d && d.qid) {
-              playAskAck(e2);
-              settleQuestionSiblings(n, d.qid);
-            }
-            tap(e2, '/api/log?slot=' + n);
-          },
-          onDouble: (e2) => tap(e2, '/api/log?slot=' + n + '&intensity=high'),
+          onTap: (e2) => commitSlot(e2, n),
+          onDouble: (e2) => commitSlot(e2, n, '&intensity=high'),
           // Nudge-ness is decided by the server and can flip between polls, so
           // resolve it at press time, not when the key was built: a hold on a
           // nudge means "not today", on a suggestion it means undo (#35).
@@ -590,6 +579,11 @@
       document.querySelectorAll('.k[data-slot]').forEach((el) => {
         const n = +el.dataset.slot;
         const def = slots[n - 1];
+        const qid = (def && def.qid) || '';
+        if (el.dataset.settledQid && el.dataset.settledQid !== qid) {
+          delete el.dataset.pressFrame;
+          delete el.dataset.settledQid;
+        }
         el.innerHTML = slotFaceHtml(def, n, el.dataset.pressFrame || null);
         el.title = def
           ? (def.qid ? (def.question || '') + '  → ' + (questionPaint(def).label) : def.emoji + ' ' + def.label + ' — ' + (def.reason || ''))
@@ -617,9 +611,25 @@
         const i = +el.dataset.slot;
         if (i === pressedN) return;
         const d = slots[i - 1];
-        if (d && d.qid === qid) el.dataset.pressFrame = 'idle';
+        if (d && d.qid === qid) {
+          el.dataset.pressFrame = 'idle';
+          el.dataset.settledQid = qid;
+        }
       });
       paintSlots();
+    }
+
+    // Every slot gesture that would log goes through here so DETAILS cannot
+    // spend a question via tap, double-tap, or any future handler (#77).
+    function commitSlot(e2, n, extra = '') {
+      const d = slots[n - 1];
+      if (d && d.qid && isDetailsKey(d)) {
+        hint.innerHTML = '<b>' + esc(d.question || 'Details') + '</b>';
+        return;
+      }
+      if (d && d.qid) playAskAck(e2);
+      if (d && d.qid) settleQuestionSiblings(n, d.qid);
+      tap(e2, '/api/log?slot=' + n + extra);
     }
 
     function playAskAck(el) {

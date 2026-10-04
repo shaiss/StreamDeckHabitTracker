@@ -30,7 +30,8 @@ test('a yes/no question becomes a 3-key Approval Gate in fixed order', () => {
   assert.deepEqual(q.keys.map((k) => k.answer), ['yes', 'details', 'no']);
   assert.equal(approve.glyphTint, 'success');
   assert.equal(deny.glyphTint, undefined, 'deny stays neutral');
-  assert.equal(approve.question, RAW.text, 'the text rides on every key');
+  assert.ok(q.keys.every((k) => k.habit === RAW.habit), 'every gate key logs the same habit');
+  assert.ok(q.keys.every((k) => k.question === RAW.text), 'the text rides on every key');
   assert.equal(approve.expiresAt, NOW + QUESTION_TTL_MS);
 });
 
@@ -209,13 +210,20 @@ test('the virtual deck renders question keys through the shared grammar', () => 
   assert.match(src, /owedFrame\(def\)/, 'pending questions light the wait frame, not a hue swap');
   assert.match(src, /function playAskAck/, 'Ask ack helper exists on the virtual deck');
   assert.match(src, /if \(d && d\.qid\) playAskAck\(e2\)/, 'question-key tap is wired to playAskAck');
+  assert.match(src, /function commitSlot/, 'all slot gestures share one commit path');
+  assert.match(src, /onTap: \(e2\) => commitSlot\(e2, n\)/);
+  assert.match(src, /onDouble: \(e2\) => commitSlot\(e2, n, '&intensity=high'\)/,
+    'double-tap uses the same DETAILS guard as tap');
   assert.match(src, /go\('working',\s*280/, 'Ask ack starts on confirming (working)');
   assert.match(src, /go\('success',\s*1600/, 'Ask ack settles on done (success)');
   assert.match(src, /settleQuestionSiblings/, 'picker siblings settle to idle');
-  assert.match(src, /isDetailsKey/, 'DETAILS routes to context, not /api/log');
+  assert.match(src, /isDetailsKey\(d\)/, 'DETAILS routes to context, not /api/log');
   assert.match(plugin, /ASK_CONFIRMING_MS = 280/, 'plugin Ask ack uses the same confirming beat');
   assert.match(plugin, /setKeyFrame\(k, 'working'\)/);
   assert.match(plugin, /setKeyFrame\(k, 'success'\)/);
   assert.match(plugin, /showQuestionContext/, 'DETAILS opens context rather than committing');
+  assert.match(plugin, /function commitSlotKey/, 'plugin double-tap shares the DETAILS guard');
   assert.match(plugin, /settleQuestionSiblings/);
+  assert.match(plugin, /k\.settledQid && k\.settledQid !== qid/,
+    'sibling press latch clears when a later question lands on that key');
 });

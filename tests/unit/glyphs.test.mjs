@@ -66,6 +66,6 @@ test('both renderers import the same module — they cannot fork the map', () =>
   assert.match(faces, /from '\.\.\/\.\.\/public\/glyphs\.js'/);
   assert.match(plugin, /from '\.\.\/\.\.\/public\/glyphs\.js'/);
   assert.match(deck, /from '\/glyphs\.js'/);
-  assert.match(deck, /questionPaint/);
-  assert.match(plugin, /questionPaint/);
+  assert.match(deck, /questionPaint\(/);
+  assert.match(plugin, /questionPaint\(/);
 });

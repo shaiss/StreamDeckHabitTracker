@@ -76,7 +76,7 @@ const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.5';
+let VERSION = '2.5.6';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -452,9 +452,14 @@ function settleQuestionSiblings(k) {
     if (other === k || other.kind !== 'slot') continue;
     const od = slotDefOf(other);
     if (!od || od.qid !== def.qid) continue;
+    // Latch idle only while this qid is still on the key. render() drops the
+    // latch when the assignment changes so a later question can light wait.
+    // Keep pressFrame through this paint even if render throws — pump/tick
+    // would otherwise restore wait on the still-open question.
+    other.settledQid = def.qid;
     other.pressFrame = true;
     setKeyFrame(other, 'idle');
-    try { render(other); } catch { /* next tick */ }
+    try { render(other); } finally { other.pressFrame = other.settledQid === def.qid; }
   }
 }
 
@@ -495,6 +500,11 @@ function render(k) {
     gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
   }
   const now = Date.now();
+  const qid = def && def.qid;
+  if (k.settledQid && k.settledQid !== qid) {
+    k.pressFrame = false;
+    k.settledQid = null;
+  }
   if (!k.pressFrame) {
     const next = owedFrame(def, now);
     setKeyFrame(k, next, now);
@@ -610,15 +620,17 @@ function dispatch({ id, gesture }) {
     if (k.isQuestion) dismissQuestion(k);
     else if (k.isNudge) dismissNudge(k);
     else undo(k);
-  } else if (gesture === 'doubletap') tap(k, { intensity: 'high' });
-  else {
-    if (k.isQuestion && k.isDetails) { showQuestionContext(k); return; }
-    if (k.isQuestion) {
-      beginAskAck(k);
-      settleQuestionSiblings(k);
-    }
-    tap(k);
+  } else if (gesture === 'doubletap') commitSlotKey(k, { intensity: 'high' });
+  else commitSlotKey(k);
+}
+
+function commitSlotKey(k, extra) {
+  if (k.isQuestion && k.isDetails) { showQuestionContext(k); return; }
+  if (k.isQuestion) {
+    beginAskAck(k);
+    settleQuestionSiblings(k);
   }
+  tap(k, extra);
 }
 
 // One timer, armed for the single soonest gesture deadline — a 3s pump could
