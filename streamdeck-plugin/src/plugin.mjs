@@ -4,9 +4,10 @@
 //  - …habit  settings: { base, index (0-based position), key? }
 //  - …slot   settings: { base, slot (1-16), key? } — 1-4 render from the
 //    front slots array, 5-16 from the coach page (#52)
-//  - …coach  settings: { base, coachPage (default 1), key? } — a persistent
-//    key with a live attention face (silent / asking / nudging); tap jumps
-//    to the Coach page of the bundled profile (#53, needs #50)
+//  - …coach  settings: { base, coachPage (default 1), key? } — the Attention
+//    Beacon (#75): idle/dark when quiet, wait-frame + count when the coach
+//    is owed a decision, blocked-frame when something hard-stopped. Tap
+//    jumps to the Coach page (signpost only — never logs). (#53, needs #50)
 //
 // Generated keys also carry { page: N } so the appeared-key set derives which
 // page of our profile is visible — see visibility.mjs (#53).
@@ -38,6 +39,7 @@ import { nudgeUrgency, urgencyStep } from '../../lib/nudge.js';
 // The takeover gate (#54) lives server-adjacent for the same reason: the
 // deck and the backend must not disagree about when the coach may navigate.
 import { takeoverDue, RESTORE_MS, SUPPRESS_MS } from '../../lib/takeover.js';
+import { beaconOf } from '../../lib/beacon.js';
 
 // A key dragged straight from the action list arrives with Settings: {} —
 // there is no Property Inspector, so without a compiled-in default it would
@@ -72,7 +74,7 @@ const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.1';
+let VERSION = '2.5.2';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -90,6 +92,8 @@ let todayCache = null;    // { habitName: {count, goal, doneToday, streak, ringF
 // plugin-side inputs. Budget and kill switch are ALSO held server-side
 // (habits:nudge) and re-checked at claim time — the local copies just avoid
 // pointless HTTP when the answer is already no.
+let rosterPendingCache = 0;      // queued roster proposals (#75 beacon count)
+let blockedCache = false;        // poll-level hard-stop (#75 blocked frame)
 let consentCache = 'off';        // coachNav from the poll; off until told otherwise
 let lastKeypressAt = 0;          // human-priority lock: last physical keypress
 let lastPageChangeAt = 0;        // …and last page change (appeared-key churn)
@@ -154,18 +158,15 @@ function escalate(now) {
         if (urgencyStep(def, now) === k.urgencyStep) continue;
         try { render(k); } catch { /* next tick retries */ }
       } else if (k.kind === 'coach') {
-        // The coach face mirrors the loudest live nudge, so it escalates on
-        // the same quantized steps as the nudge key itself (#53). When the
-        // nudge expires CLIENT-side the poll payload doesn't change, so the
-        // one repaint that drops the ❗ face has to happen here too.
-        const def = liveNudge(now);
-        if (!def) {
-          if (k.urgencyStep !== undefined) {
-            try { render(k); } catch { /* next tick retries */ }   // clears urgencyStep
-          }
-          continue;
-        }
-        if (urgencyStep(def, now) === k.urgencyStep) continue;
+        // The beacon's pending count can drop CLIENT-side when a nudge or
+        // question expires — the poll payload stays the same, so the tick
+        // has to notice. Frame breathing is handled below via frameStep.
+        const snap = beaconOf({
+          slots: slotCache, coachPage: coachCache,
+          rosterPending: rosterPendingCache, blocked: blockedCache
+        }, now);
+        const sig = snap.frame + ':' + snap.pending;
+        if (sig === k.beaconSig) continue;
         try { render(k); } catch { /* next tick retries */ }
       }
     }
@@ -229,14 +230,19 @@ function refreshSlots(now) {
       const habits = j.habits || [];
       const today = j.today || {};
       consentCache = j.coachNav || 'off';   // #54: flipping consent off lands within one poll
+      const rosterPending = Number(j.rosterPending) || 0;
+      const blocked = !!j.blocked;
       const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) ||
-        !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage);
+        !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage) ||
+        rosterPendingCache !== rosterPending || blockedCache !== blocked;
       const habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(habits);
       const todayChanged = !todayCache || JSON.stringify(todayCache) !== JSON.stringify(today);
       slotCache = slots;
       coachCache = coachPage;
       habitCache = habits;
       todayCache = today;
+      rosterPendingCache = rosterPending;
+      blockedCache = blocked;
       for (const k of keys.values()) {
         // One bad face must not strand the rest of the deck on stale images.
         try {
@@ -251,9 +257,10 @@ function refreshSlots(now) {
     });
 }
 
-// The coach key's attention face (#53): silent, asking (a live question
-// pair), or nudging — mirroring the loudest thing on the front page so the
-// coach has an ambient presence that consumes no slot.
+// Attention Beacon (#75) on the existing coach action (#53). Interior is
+// always the coach glyph + violet (identity); the frame channel from #74
+// carries idle / wait / blocked. Hue swaps (amber nudge, magenta question)
+// are deliberately not used here — that's C (#76) on the decision keys.
 // Opt-in turn-state (#74). Callers in B–D set k.frame; until they do, paint
 // is byte-identical to the pre-frame faces. HT_REDUCED_MOTION=1 freezes the
 // brightness step the same way prefers-reduced-motion does on deck.html.
@@ -272,18 +279,22 @@ function withFrame(k, state, now = Date.now()) {
 
 function renderCoach(k) {
   const now = Date.now();
-  const nudge = liveNudge(now);
-  const asking = (slotCache || []).find((s) => s && s.qid && (!s.expiresAt || s.expiresAt > now));
-  k.urgencyStep = nudge ? urgencyStep(nudge, now) : undefined;
-  if (nudge) {
-    k.action.setImage(face(nudge.emoji || '🧭', 'Coach', NUDGE_HUE, '❗', 90, withFrame(k, { urgency: nudgeUrgency(nudge, now) }, now)));
-  } else if (asking) {
-    k.action.setImage(face('🧭', 'Coach', QUESTION_HUE, '❓', 78, withFrame(k, null, now)));
-  } else if (slotCache) {
-    k.action.setImage(face('🧭', 'Coach', VIOLET_HUE, '', undefined, withFrame(k, null, now)));
-  } else {
-    k.action.setImage(face('🧭', '…', SILVER_HUE, '', 22, withFrame(k, null, now)));   // first poll pending
+  if (!slotCache) {
+    k.frame = null;
+    k.beaconSig = '';
+    k.action.setImage(face('🧭', '…', SILVER_HUE, '', 22));   // first poll pending
+    return;
   }
+  const snap = beaconOf({
+    slots: slotCache, coachPage: coachCache,
+    rosterPending: rosterPendingCache, blocked: blockedCache
+  }, now);
+  if (k.frame !== snap.frame) k.frameSince = now;
+  k.frame = snap.frame;
+  k.beaconSig = snap.frame + ':' + snap.pending;
+  // Identity is sacred: same glyph, same violet, same sat. Frame + count badge
+  // do the talking. Do NOT pass urgency — that would brighten the interior.
+  k.action.setImage(face('🧭', 'Coach', VIOLET_HUE, snap.badge, 72, withFrame(k, null, now)));
 }
 
 // Tap on the coach key: jump to the Coach page of the bundled profile. Only
@@ -516,8 +527,8 @@ function dispatch({ id, gesture }) {
   const k = keys.get(id);
   if (!k) return;                                  // key vanished mid-gesture
   if (k.kind === 'coach') {
-    // The coach key logs nothing. Tap navigates (#53); long-press is the
-    // hardware kill switch — 24h of takeover silence (#54).
+    // The beacon logs nothing and never answers a question (#75). Tap
+    // navigates (#53); long-press is the hardware kill switch (#54).
     if (gesture === 'longpress') suppressTakeovers(k);
     else coachNavigate(k);
     return;

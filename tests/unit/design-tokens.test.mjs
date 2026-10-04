@@ -252,6 +252,15 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   assert.ok(!plugin.includes("STATE_DANGER") && !faces.includes("frame === 'danger'"),
     'danger is not a frame state');
 
+  // Attention Beacon (#75): both renderers pin the same coach interior + frames.
+  assert.ok(deck.includes('.coachface'), 'virtual deck must have a coach/beacon face class');
+  assert.ok(deck.includes('data-beacon'), 'virtual deck must place the page-0 beacon key');
+  assert.ok(plugin.includes("face('🧭', 'Coach', VIOLET_HUE, snap.badge"),
+    'plugin coach face stays violet; badge is the pending count');
+  assert.ok(plugin.includes("from '../../lib/beacon.js'"), 'plugin counts via lib/beacon.js');
+  assert.ok(deck.includes("blocked ? 'blocked' : pending > 0 ? 'wait' : 'idle'"),
+    'virtual deck uses the same frame ranking as lib/beacon.js');
+
   // The base gradient under every key face.
   for (const stop of ['#141827', '#0a0c13']) {
     assert.ok(faces.includes(stop), `faces.mjs lost the base stop ${stop}`);

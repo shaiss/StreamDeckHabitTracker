@@ -1,4 +1,4 @@
-// GET /api/slots -> { configured, aiReady, model, suggestedAt, slots: [def|null x4], coachPage: [def|null x12], today, track?, deck? }
+// GET /api/slots -> { configured, aiReady, model, suggestedAt, slots: [def|null x4], coachPage: [def|null x12], rosterPending, today, track?, deck? }
 // def = { habit, emoji, label, reason, assignedAt }
 // today = { [habitName]: { count, goal, doneToday, streak, ringFill } } (living key faces, #32)
 // Query: ?tz=<minutes> (viewer getTimezoneOffset; default 0=UTC) sets the day
@@ -6,7 +6,8 @@
 // heartbeat; ?deck=<pluginVersion> records the physical deck's own poll.
 // Read by the dashboard and by the Stream Deck plugin (CORS open, read-only).
 import { waitUntil } from '@vercel/functions';
-import { getSlots, getCoachPage, getProfile, isConfigured, getSlotHistory, all, getDeckState, setDeckState } from '../lib/store.js';
+import { getSlots, getCoachPage, getProfile, getRoster, isConfigured, getSlotHistory, all, getDeckState, setDeckState } from '../lib/store.js';
+import { normalizeRoster } from '../lib/roster.js';
 import { zaiKey, zaiModel } from '../lib/ai.js';
 import { getHabits } from '../lib/habits.js';
 import { normalizeConsent } from '../lib/takeover.js';
@@ -31,10 +32,11 @@ export default async function handler(req, res) {
       return;
     }
     const q = req.query || {};
-    const [doc, coachPage, profile] = await Promise.all([
+    const [doc, coachPage, profile, roster] = await Promise.all([
       getSlots(),
       getCoachPage(),
-      getProfile().catch(() => null)
+      getProfile().catch(() => null),
+      getRoster().catch(() => null)
     ]);
     // Living key faces (#32): per-habit today state for the deck. tz is the
     // viewer's getTimezoneOffset() in minutes (UTC-5 → 300); default UTC. We
@@ -50,7 +52,10 @@ export default async function handler(req, res) {
     // on every poll, so flipping it off lands within one poll beat.
     const out = {
       ...base, suggestedAt: doc.suggestedAt, slots: doc.slots, coachPage: coachPage.slots,
-      coachNav: normalizeConsent(profile?.coachNav), today
+      coachNav: normalizeConsent(profile?.coachNav), today,
+      // Count-only: the Attention Beacon (#75) adds this to the pending tally
+      // without pulling the full roster doc onto every plugin poll.
+      rosterPending: normalizeRoster(roster).proposals.length
     };
     // ?track=1 (dashboard only — keeps the plugin's poll light): behavioral
     // scorecard of past suggestions vs actual taps, plus the hardware

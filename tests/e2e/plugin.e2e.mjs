@@ -43,7 +43,7 @@ const nudgeAt = (fraction) => {
 };
 
 let http, httpPort;
-let slots, today, pollUrls, logUrls, hangPolls, logNotFound;
+let slots, today, pollUrls, logUrls, hangPolls, logNotFound, pollExtra;
 const hung = [];
 
 before(async () => {
@@ -53,7 +53,11 @@ before(async () => {
       pollUrls.push(req.url);
       if (hangPolls > 0) { hangPolls--; hung.push(res); return; }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ configured: true, habits: HABITS, suggestedAt: 1, slots, ...(today ? { today } : {}) }));
+      res.end(JSON.stringify({
+        configured: true, habits: HABITS, suggestedAt: 1, slots,
+        ...(today ? { today } : {}),
+        ...(pollExtra || {})
+      }));
       return;
     }
     if (url === '/api/log') {
@@ -106,6 +110,7 @@ async function boot({ entry = SRC } = {}) {
   logUrls = [];
   hangPolls = 0;
   logNotFound = false;
+  pollExtra = {};
 
   const wss = new WebSocketServer({ port: 0 });
   const wsPort = wss.address().port;
@@ -386,6 +391,80 @@ test('a question key registers no double-tap — an answer is one act', async ()
     await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
     await until(() => logUrls.length >= 2, { label: 'two immediate taps' });
     assert.ok(!logUrls.some((u) => u.includes('intensity=')), 'never an intensity on an answer');
+  } finally { p.done(); }
+});
+
+// --- Attention Beacon (#75) on the existing coach action ---
+
+function appearCoach(p) {
+  p.emit({
+    event: 'willAppear', action: 'com.shaiss.habit-tracker.coach', context: 'ctx-coach',
+    device: 'dev-1',
+    payload: {
+      settings: { base: `http://127.0.0.1:${httpPort}`, coachPage: 1, page: 0 },
+      coordinates: { column: 4, row: 2 }, controller: 'Keypad', isInMultiAction: false
+    }
+  });
+}
+const coachSvg = (p) => {
+  const hits = p.images().filter((m) => m.context === 'ctx-coach');
+  return hits.length ? svgOf(hits.at(-1)) : '';
+};
+
+test('beacon is idle/violet when nothing is pending; wait+count on a live nudge', async () => {
+  const p = await boot();
+  try {
+    appearCoach(p);
+    await until(() => coachSvg(p).includes('data-state-frame="idle"'), { label: 'idle beacon' });
+    let svg = coachSvg(p);
+    assert.ok(svg.includes('🧭'), 'coach glyph');
+    assert.match(svg, />Coach</);
+    assert.doesNotMatch(svg, /data-state-frame="wait"/);
+    slots = [nudgeAt(0.2), null, null, null];
+    await until(() => coachSvg(p).includes('data-state-frame="wait"'), { label: 'wait beacon' });
+    svg = coachSvg(p);
+    assert.match(svg, />1</, 'badge is the pending count');
+    assert.ok(svg.includes('🧭'), 'glyph unchanged');
+    assert.match(svg, />Coach</, 'label unchanged');
+    assert.doesNotMatch(svg, />❗</, 'no hue-swap ❗ badge — the frame talks');
+  } finally { p.done(); }
+});
+
+test('a question pair counts as one; rosterPending adds; tap navigates and never logs', async () => {
+  const p = await boot();
+  try {
+    appearCoach(p);
+    await until(() => coachSvg(p).includes('🧭'), { label: 'coach appeared' });
+    slots = [QUESTION[0], QUESTION[1], null, null];
+    pollExtra = { rosterPending: 2 };
+    await until(() => coachSvg(p).includes('>3<'), { label: '1 question + 2 roster' });
+    assert.match(coachSvg(p), /data-state-frame="wait"/);
+    logUrls.length = 0;
+    const before = p.sent.filter((m) => m.event === 'switchToProfile').length;
+    await p.press('ctx-coach', 'com.shaiss.habit-tracker.coach');
+    await until(() => p.sent.some((m) => m.event === 'switchToProfile'), { label: 'switchToProfile' });
+    const nav = p.sent.filter((m) => m.event === 'switchToProfile').at(-1);
+    assert.ok(p.sent.filter((m) => m.event === 'switchToProfile').length > before);
+    assert.equal(nav.payload.page, 1, 'drills into the Coach page');
+    assert.equal(logUrls.length, 0, 'beacon never commits a decision');
+  } finally { p.done(); }
+});
+
+test('blocked poll paints the red blink frame and still keeps the violet interior', async () => {
+  const p = await boot();
+  try {
+    appearCoach(p);
+    await until(() => coachSvg(p).includes('data-state-frame="idle"'), { label: 'idle first' });
+    const haloStop = (svg) => (svg.match(/<radialGradient[\s\S]*?stop-color="(#[0-9a-f]+)"/i) || [])[1];
+    const idleHalo = haloStop(coachSvg(p));
+    pollExtra = { blocked: true };
+    slots = [nudgeAt(0.1), null, null, null];
+    await until(() => coachSvg(p).includes('data-state-frame="blocked"'), { label: 'blocked beacon' });
+    const svg = coachSvg(p);
+    assert.ok(svg.includes('>!<'), 'blocked ! on the frame');
+    assert.ok(svg.includes('🧭'));
+    assert.equal(haloStop(svg), idleHalo,
+      'interior halo must not swap to amber/red');
   } finally { p.done(); }
 });
 

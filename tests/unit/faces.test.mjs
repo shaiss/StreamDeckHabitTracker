@@ -238,3 +238,24 @@ test('state frame does not disturb living-face interior (#32/#64)', () => {
   assert.ok(framed.includes('stroke-dasharray'), 'the #64 fill is still there');
   assert.ok(framed.includes('data-state-frame="wait"'), 'and the outer wait frame is too');
 });
+
+test('Attention Beacon: interior stays violet coach across idle/wait/blocked (#75)', () => {
+  const at = (frame, badge) => svgOf(face('🧭', 'Coach', 262, badge, 72, { frame, now: 0 }));
+  const idle = at('idle', '');
+  const wait = at('wait', '2');
+  const blocked = at('blocked', '2');
+  assert.equal(stripFrame(wait), stripFrame(at('idle', '2')), 'wait vs idle: only the frame differs');
+  assert.equal(stripFrame(wait), stripFrame(blocked), 'blocked vs wait: only the frame differs');
+  assert.ok(idle.includes('🧭') && wait.includes('🧭') && blocked.includes('🧭'));
+  assert.equal(frameGroup(idle).name, 'idle');
+  assert.equal(frameGroup(wait).name, 'wait');
+  assert.equal(frameGroup(blocked).name, 'blocked');
+  assert.ok(cues(blocked).bang, 'blocked ! lives on the frame, not the glyph');
+  assert.match(wait, />2</, 'pending count is the top-right badge');
+  assert.doesNotMatch(idle, />2</);
+  const haloStop = (svg) => (svg.match(/<radialGradient[\s\S]*?stop-color="(#[0-9a-f]+)"/i) || [])[1];
+  const idleHalo = haloStop(idle);
+  assert.ok(idleHalo, 'idle has a votive halo');
+  assert.equal(haloStop(wait), idleHalo);
+  assert.equal(haloStop(blocked), idleHalo);
+});
