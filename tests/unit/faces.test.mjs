@@ -165,13 +165,16 @@ test('an Approval Gate approve glyph is tinted success; deny stays interior ink'
   const yesGlyph = (yes.match(/<text\b[^>]*>✓<\/text>/) || [])[0] || '';
   assert.match(yesGlyph, /fill="#22C55E"/, 'affirmative glyph is success green');
   assert.match(yesGlyph, /ui-monospace/, 'gate glyphs use the mono voice');
-  assert.match(yes, />APPROVE</);
+  const yesLabel = (yes.match(/<text\b[^>]*>APPROVE<\/text>/) || [])[0] || '';
+  assert.match(yesLabel, /ui-monospace/, 'APPROVE label stays the mono voice');
   assert.match(yes, /data-state-frame="wait"/);
   const no = decode(face('✕', 'DENY', 300, '', 78, { frame: 'wait', grammar: true, mono: true }));
   const noGlyph = (no.match(/<text\b[^>]*>✕<\/text>/) || [])[0] || '';
   assert.match(noGlyph, /fill="#e9edf4"/, 'deny glyph is neutral, not danger-red');
   assert.match(noGlyph, /ui-monospace/);
   assert.doesNotMatch(noGlyph, /fill="#22C55E"/);
+  const noLabel = (no.match(/<text\b[^>]*>DENY<\/text>/) || [])[0] || '';
+  assert.match(noLabel, /ui-monospace/, 'DENY label stays the mono voice');
 });
 
 test('wait periods always flip on a 3000ms tick, at any wall-clock phase', () => {

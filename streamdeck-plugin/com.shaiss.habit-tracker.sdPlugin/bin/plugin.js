@@ -17891,7 +17891,7 @@ var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.5.6";
+var VERSION = "2.5.7";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -18220,6 +18220,7 @@ function settleQuestionSiblings(k) {
     setKeyFrame(other, "idle");
     try {
       render(other);
+    } catch {
     } finally {
       other.pressFrame = other.settledQid === def.qid;
     }

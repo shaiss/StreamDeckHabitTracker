@@ -226,4 +226,6 @@ test('the virtual deck renders question keys through the shared grammar', () => 
   assert.match(plugin, /settleQuestionSiblings/);
   assert.match(plugin, /k\.settledQid && k\.settledQid !== qid/,
     'sibling press latch clears when a later question lands on that key');
+  assert.match(plugin, /try \{ render\(other\); \} catch \{ \/\* next tick \*\/ \}/,
+    'a sibling face failure must not abort the answer log');
 });

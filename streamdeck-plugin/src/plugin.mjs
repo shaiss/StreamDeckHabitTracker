@@ -76,7 +76,7 @@ const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.6';
+let VERSION = '2.5.7';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -459,7 +459,8 @@ function settleQuestionSiblings(k) {
     other.settledQid = def.qid;
     other.pressFrame = true;
     setKeyFrame(other, 'idle');
-    try { render(other); } finally { other.pressFrame = other.settledQid === def.qid; }
+    try { render(other); } catch { /* next tick */ }
+    finally { other.pressFrame = other.settledQid === def.qid; }
   }
 }
 
