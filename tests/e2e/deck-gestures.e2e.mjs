@@ -403,7 +403,9 @@ test('press 2 within the window commits; a lapsed window disarms silently (#78)'
   await settle();
   assert.equal(calls.length, 1, 'the committing press logs once');
   assert.match(calls[0], /^GET \/api\/log\?slot=1/);
-  assert.ok(await page.$eval('.k[data-slot="1"] .flash.show', (e) => !!e), 'commit flashes');
+  assert.notEqual(await page.$eval('.k[data-slot="1"]', (e) => e.dataset.armed || ''), '1',
+    'commit consumes the arm');
+  assert.match(await page.$eval('#hint', (e) => e.textContent), /Logged/);
 
   calls = [];
   await open({ danger: true });
