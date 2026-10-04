@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { face, hueFor, STATE_COLORS, FRAME_STATES, resolveFrame, frameStep, frameBright, FRAME_WAIT_MS } from '../../streamdeck-plugin/src/faces.mjs';
+import { face, hueFor, STATE_COLORS, FRAME_STATES, resolveFrame, frameStep, frameBright, FRAME_WAIT_MS, FRAME_BLOCKED_MS } from '../../streamdeck-plugin/src/faces.mjs';
 
 const decode = (uri) => {
   assert.match(uri, /^data:image\/svg\+xml;base64,/);
@@ -220,6 +220,13 @@ test('desaturate: the five states stay distinguishable without hue', () => {
   assert.equal(frameStep('blocked', 99999, { reducedMotion: true }), 0);
   assert.ok(frameStep('wait', FRAME_WAIT_MS, { reducedMotion: false }) !==
     frameStep('wait', 0, { reducedMotion: false }), 'wait flips on its period');
+  const tick = 3000; // plugin default HT_TICK_MS
+  assert.notEqual(frameStep('blocked', 0), frameStep('blocked', tick),
+    'blocked must blink across successive default ticks (1500ms aliases)');
+  assert.notEqual(frameStep('blocked', tick), frameStep('blocked', tick * 2),
+    'blocked parity must keep flipping on the next tick too');
+  assert.equal(Math.floor(tick / FRAME_BLOCKED_MS) % 2, 1,
+    'FRAME_BLOCKED_MS must not even-divide the 3000ms tick');
   assert.ok(frameBright('blocked', 1) > frameBright('blocked', 0), 'blocked blink is a brightness step');
 });
 

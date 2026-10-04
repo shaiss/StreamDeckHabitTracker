@@ -17407,7 +17407,7 @@ var STATE_COLORS = Object.freeze({
 });
 var FRAME_STATES = Object.freeze(Object.keys(STATE_COLORS));
 var FRAME_WAIT_MS = 3e3;
-var FRAME_BLOCKED_MS = 1500;
+var FRAME_BLOCKED_MS = 2500;
 var FRAME_WORKING_MS = 4e3;
 var FRAME_SUCCESS_FADE_MS = 2400;
 function resolveFrame(state) {

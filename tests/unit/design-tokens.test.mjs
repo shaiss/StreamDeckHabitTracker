@@ -234,15 +234,17 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   }
   assert.ok(faces.includes('data-state-frame='), 'faces.mjs must tag the state-frame group');
   for (const [cls, motion] of [
-    ['.frame-idle', null],
-    ['.frame-working', 'frame-shimmer'],
-    ['.frame-wait', 'frame-breathe'],
-    ['.frame-success', 'frame-settle'],
-    ['.frame-blocked', 'frame-blink']
+    ['.facecss .frame-idle', null],
+    ['.facecss .frame-working', 'frame-shimmer'],
+    ['.facecss .frame-wait', 'frame-breathe'],
+    ['.facecss .frame-success', 'frame-settle'],
+    ['.facecss .frame-blocked', 'frame-blink']
   ]) {
-    assert.ok(deck.includes(cls), `deck.html lost ${cls}`);
+    assert.ok(deck.includes(cls), `deck.html lost ${cls} (must beat .facecss .stateframe)`);
     if (motion) assert.ok(deck.includes(`@keyframes ${motion}`), `deck.html lost @keyframes ${motion}`);
   }
+  assert.ok(deck.includes('src.frame ?? src.frameState'),
+    'virtual deck must resolve frame or frameState like faces.mjs');
   assert.ok(deck.includes('prefers-reduced-motion'), 'deck.html must honor reduced motion for frames');
   assert.ok(plugin.includes('HT_REDUCED_MOTION'), 'plugin.mjs lost the reduced-motion env gate');
   assert.ok(plugin.includes('frameStep'), 'plugin.mjs must drive frame motion off frameStep');

@@ -180,21 +180,23 @@
       position: absolute; inset: 2px; border-radius: 14px;
       border: 2px solid transparent; pointer-events: none; box-sizing: border-box;
     }
-    .frame-idle    { border-color: #3A3F47; color: #3A3F47; opacity: .38; }
-    .frame-working { border-color: #2EA3FF; color: #2EA3FF; opacity: .85;
+    /* Equal-or-higher specificity than `.facecss .stateframe` so border-color
+       beats the transparent shorthand. Bare `.frame-*` lost that fight. */
+    .facecss .frame-idle    { border-color: #3A3F47; color: #3A3F47; opacity: .38; }
+    .facecss .frame-working { border-color: #2EA3FF; color: #2EA3FF; opacity: .85;
       border-style: dashed; animation: frame-shimmer 1.8s linear infinite; }
-    .frame-wait    { border-color: #FFB000; color: #FFB000; opacity: 1;
+    .facecss .frame-wait    { border-color: #FFB000; color: #FFB000; opacity: 1;
       border-width: 2.6px; animation: frame-breathe 2s ease-in-out infinite; }
-    .frame-success { border-color: #22C55E; color: #22C55E;
+    .facecss .frame-success { border-color: #22C55E; color: #22C55E;
       animation: frame-settle 1.6s ease-out 1 forwards; }
-    .frame-blocked { border-color: #FF4D4D; color: #FF4D4D;
+    .facecss .frame-blocked { border-color: #FF4D4D; color: #FF4D4D;
       animation: frame-blink .5s steps(1, end) infinite; }
-    .frame-success::after, .frame-blocked::after {
+    .facecss .frame-success::after, .facecss .frame-blocked::after {
       position: absolute; top: 2px; left: 6px; font-size: calc(var(--key) * .10);
       font-weight: 700; line-height: 1; color: inherit;
     }
-    .frame-success::after { content: '✓'; }
-    .frame-blocked::after { content: '!'; }
+    .facecss .frame-success::after { content: '✓'; }
+    .facecss .frame-blocked::after { content: '!'; }
     @keyframes frame-breathe {
       0%, 100% { opacity: .55; box-shadow: 0 0 4px currentColor; }
       50%      { opacity: 1;   box-shadow: 0 0 12px currentColor; }
@@ -212,14 +214,14 @@
       100% { opacity: .28; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .frame-working, .frame-wait, .frame-success, .frame-blocked {
+      .facecss .frame-working, .facecss .frame-wait, .facecss .frame-success, .facecss .frame-blocked {
         animation: none;
       }
-      .frame-idle    { opacity: .38; }
-      .frame-working { opacity: .7; }
-      .frame-wait    { opacity: 1; }
-      .frame-success { opacity: .7; }
-      .frame-blocked { opacity: 1; }
+      .facecss .frame-idle    { opacity: .38; }
+      .facecss .frame-working { opacity: .7; }
+      .facecss .frame-wait    { opacity: 1; }
+      .facecss .frame-success { opacity: .7; }
+      .facecss .frame-blocked { opacity: 1; }
     }
 
     /* Stream Deck style OK / alert overlay flash — sanctioned: it is painted on
@@ -421,7 +423,7 @@
         const cls = def.qid ? 'qface' : def.nudge ? 'nudgeface' : 'slotface';
         const badge = def.qid ? '❓ ' + n : def.nudge ? '❗ ' + n : 'AI ' + n;
         const style = def.nudge ? ' style="--urg:' + urgencyOf(def).toFixed(3) + '"' : '';
-        return '<span class="facecss ' + cls + '"' + style + '>' + stateFrameHtml(def.frame) + '<span class="badge">' + badge + '</span>' +
+        return '<span class="facecss ' + cls + '"' + style + '>' + stateFrameHtml(resolveFrame(def)) + '<span class="badge">' + badge + '</span>' +
           '<span class="em">' + esc(def.emoji) + '</span><span class="lb">' + esc(def.label || def.habit) + '</span></span>' +
           '<span class="glass"></span><span class="flash"></span>';
       }
@@ -431,10 +433,16 @@
     }
     const esc = (s) => String(s).replace(/</g, '&lt;');
 
-    // Opt-in turn-state frame (#74). Callers in B–D pass def.frame; absent
-    // means the virtual key stays a byte-parity mirror of today's faces.
+    // Opt-in turn-state frame (#74). Same alias as faces.mjs resolveFrame
+    // (`frame` or `frameState`). Absent / unknown → no element, same as today.
+    function resolveFrame(src) {
+      if (!src) return null;
+      const f = src.frame ?? src.frameState ?? null;
+      if (!f || !/^(idle|working|wait|success|blocked)$/.test(f)) return null;
+      return f;
+    }
     function stateFrameHtml(frame) {
-      if (!frame || !/^(idle|working|wait|success|blocked)$/.test(frame)) return '';
+      if (!frame) return '';
       return '<span class="stateframe frame-' + frame + '"></span>';
     }
 
@@ -476,7 +484,7 @@
         }
       }
       return '<span class="facecss habitface ' + (done ? 'dim' : '') + '" style="--hue:' + hue + '">' +
-        stateFrameHtml(st && st.frame) + extras + '<span class="em">' + esc(def.emoji || '•') + '</span>' +
+        stateFrameHtml(resolveFrame(st)) + extras + '<span class="em">' + esc(def.emoji || '•') + '</span>' +
         '<span class="lb">' + esc(def.label || def.name) + '</span></span>' +
         '<span class="glass"></span><span class="flash"></span>';
     }
