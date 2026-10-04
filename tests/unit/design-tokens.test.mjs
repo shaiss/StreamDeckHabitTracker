@@ -224,11 +224,17 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   const nudgeCss = (deck.match(/\.nudgeface\s*\{[^}]+\}/) || [])[0] || '';
   assert.ok(nudgeCss, 'virtual deck has .nudgeface');
   assert.ok(!nudgeCss.includes('--urg'), 'nudge halo must not use urgency-dependent styling');
+  assert.ok(!nudgeCss.includes('var(--urg'), 'nudge halo must not bind urgency into the gradient');
+  assert.ok(!deck.includes('58% + var(--urg,0) * 12%'),
+    'virtual deck must not put halo-lightness urgency on the nudge interior');
+  assert.ok(!deck.includes('.3 + var(--urg,0) * .5'),
+    'virtual deck must not put ring-slope urgency on the nudge interior');
   assert.ok(nudgeCss.includes('var(--hue'), 'nudge interior is the habit identity hue');
   const waitCss = (deck.match(/\.facecss \.frame-wait\s*\{[^}]+\}/) || [])[0] || '';
+  assert.ok(waitCss, 'virtual deck has .frame-wait');
   assert.ok(waitCss.includes('var(--urg'), 'urgency stays on .frame-wait');
   assert.ok(waitCss.includes('--wait-ms'), 'wait pulse period is a frame property');
-  assert.ok(plugin.includes('owedFrame'), 'plugin derives wait from qid/nudge, not hue');
+  assert.ok(plugin.includes('owedFrame('), 'plugin derives wait from qid/nudge, not hue');
   assert.ok(deck.includes('function owedFrame'), 'virtual deck derives wait from qid/nudge');
   assert.ok(plugin.includes('beginAskAck') && deck.includes('function playAskAck'),
     'Ask answer keys must run wait → confirming → done on both renderers');
