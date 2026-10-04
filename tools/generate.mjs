@@ -309,8 +309,9 @@ for (let n = 1; n <= slotCount; n++) {
   );
 }
 
-// Coach key (#53): lives on the front page, paints its attention state from
-// the same /api/slots poll, and jumps to the Coach page (index 1) on tap.
+// Coach key (#53 / #75 Attention Beacon): lives on the front page, paints
+// idle/wait/blocked from the same /api/slots poll, and jumps to the Coach
+// page (index 1) on tap — never logs.
 if (coachKeyCount) {
   place({
     ActionID: randomUUID().toUpperCase(),

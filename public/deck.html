@@ -121,7 +121,7 @@
     .facecss .em { font-size: calc(var(--key) * .40); line-height: 1.15; filter: drop-shadow(0 3px 4px rgba(0,0,0,.4)); }
     .facecss .lb { font-size: calc(var(--key) * .13); font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6); letter-spacing: .02em; }
     .facecss .badge { position: absolute; top: 6px; right: 8px; font-size: calc(var(--key) * .085); font-weight: 700; color: rgba(255,255,255,.85); }
-    .slotface { background:
+    .slotface, .coachface { background:
       radial-gradient(circle at 50% 36%, hsla(262,72%,58%,.62) 0%, hsla(262,72%,45%,.18) 42%, transparent 68%),
       linear-gradient(180deg,#141827,#0a0c13); }
     /* the coach speaking louder: a proactive nudge burns amber, not violet.
@@ -276,6 +276,9 @@
     const face = document.getElementById('face');
     const hint = document.getElementById('hint');
     let slots = [null, null, null, null];
+    let coachPage = [];
+    let rosterPending = 0;
+    let beaconBlocked = false;
     let habits = [];
     let today = {};   // habitName -> {count, goal, doneToday, streak, ringFill} (#32)
     let built = false;
@@ -325,7 +328,23 @@
         el.dataset.slot = n;
         face.appendChild(el);
       }
-      const used = habits.length + 1 + 4; // habits + stats + AI slots
+      // Attention Beacon (#75): the page-0 coach key. Faces only — a press
+      // never logs, dismisses, or answers. Hardware drills to the Coach page;
+      // here the signpost is a hint (this preview is a single page).
+      const beacon = keyEl({
+        title: 'Coach beacon — tap for context (never logs)',
+        onTap: (e2) => {
+          const b = beaconOf({ slots, coachPage, rosterPending, blocked: beaconBlocked });
+          hint.innerHTML = b.blocked
+            ? '<b>Coach blocked</b> — something hard-stopped. Check the AI keys or habit manager. Nothing was logged.'
+            : (b.pending
+              ? '<b>Coach needs you</b> — ' + b.pending + ' pending. The AI keys and habit manager hold the decisions; this key is a signpost.'
+              : '<b>Coach is quiet</b> — nothing pending.');
+        }
+      });
+      beacon.dataset.beacon = '1';
+      face.appendChild(beacon);
+      const used = habits.length + 1 + 4 + 1; // habits + stats + AI slots + beacon
       for (let i = 0; i < Math.max(0, 15 - used); i++) {
         const off = document.createElement('button');
         off.className = 'k off'; off.disabled = true; off.tabIndex = -1;
@@ -433,6 +452,32 @@
     }
     const esc = (s) => String(s).replace(/</g, '&lt;');
 
+    // Attention Beacon (#75). Same rules as lib/beacon.js — drift-guarded in
+    // tests/unit/beacon.test.mjs. No import: this page has no build step.
+    function liveSlot(s, now) {
+      return !!(s && (!s.expiresAt || s.expiresAt > now));
+    }
+    function beaconOf(poll, now) {
+      now = now || Date.now();
+      const list = [].concat(poll.slots || [], poll.coachPage || []);
+      let pending = 0;
+      const qids = new Set();
+      let blocked = !!poll.blocked;
+      for (const s of list) {
+        if (!liveSlot(s, now)) continue;
+        if (s.nudge) pending += 1;
+        if (s.qid) qids.add(s.qid);
+        if (s.blocked) blocked = true;
+      }
+      pending += qids.size;
+      const roster = poll.rosterPending != null
+        ? (+poll.rosterPending || 0)
+        : ((poll.roster && poll.roster.proposals && poll.roster.proposals.length) || 0);
+      pending += Math.max(0, roster);
+      const frame = blocked ? 'blocked' : pending > 0 ? 'wait' : 'idle';
+      return { pending, blocked, frame, badge: pending > 0 ? String(pending) : '' };
+    }
+
     // Opt-in turn-state frame (#74). Same alias as faces.mjs resolveFrame
     // (`frame` or `frameState`). Absent / unknown → no element, same as today.
     function resolveFrame(src) {
@@ -509,6 +554,21 @@
           ? (def.qid ? '❓ ' + def.question + '  → ' + def.label : def.emoji + ' ' + def.label + ' — ' + (def.reason || ''))
           : ('AI slot ' + n + ' — empty');
       });
+      paintBeacon();
+    }
+
+    function paintBeacon() {
+      const el = document.querySelector('.k[data-beacon]');
+      if (!el) return;
+      const b = beaconOf({ slots, coachPage, rosterPending, blocked: beaconBlocked });
+      const badge = b.badge ? '<span class="badge">' + esc(b.badge) + '</span>' : '';
+      // Interior is always coachface (violet 🧭). Frame class does idle/wait/blocked.
+      el.innerHTML = '<span class="facecss coachface">' + stateFrameHtml(b.frame) + badge +
+        '<span class="em">🧭</span><span class="lb">Coach</span></span>' +
+        '<span class="glass"></span><span class="flash"></span>';
+      el.title = b.blocked
+        ? 'Coach blocked — tap for context (does not decide)'
+        : (b.pending ? b.pending + ' pending — tap for context (does not decide)' : 'Coach quiet');
     }
 
     function flash(el, ok) {
@@ -577,6 +637,9 @@
       fetch('/api/slots?tz=' + tz).then((r) => r.json()).then((j) => {
         habits = j.habits || habits;
         slots = j.slots || slots;
+        coachPage = j.coachPage || [];
+        rosterPending = Number(j.rosterPending) || 0;
+        beaconBlocked = !!j.blocked;
         today = j.today || {};
         if (!built && habits.length) build();
         paintSlots();
@@ -592,7 +655,7 @@
     // A nudge's urgency changes with the clock, not with the payload, so the
     // poll alone would never escalate it. Repaint on its own beat while one is
     // live (the plugin does the same via its tick — see escalate()).
-    setInterval(() => { if (slots.some((s) => s && s.nudge)) paintSlots(); }, 20000);
+    setInterval(() => { if (slots.some((s) => s && s.nudge) || document.querySelector('.k[data-beacon] .frame-wait, .k[data-beacon] .frame-blocked')) paintSlots(); }, 20000);
   </script>
 </body>
 </html>

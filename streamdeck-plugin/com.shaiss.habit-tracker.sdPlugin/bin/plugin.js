@@ -17723,6 +17723,35 @@ function takeoverDue({
   return { due: true, reason: "ok" };
 }
 
+// lib/beacon.js
+function liveSlot(s, now = Date.now()) {
+  return !!(s && (!s.expiresAt || s.expiresAt > now));
+}
+function pendingCount(input = {}, now = Date.now()) {
+  const slots = [...input.slots || [], ...input.coachPage || []];
+  let n = 0;
+  const qids = /* @__PURE__ */ new Set();
+  for (const s of slots) {
+    if (!liveSlot(s, now)) continue;
+    if (s.nudge) n += 1;
+    if (s.qid) qids.add(s.qid);
+  }
+  n += qids.size;
+  const roster = input.rosterPending != null ? Number(input.rosterPending) || 0 : Array.isArray(input.roster && input.roster.proposals) ? input.roster.proposals.length : 0;
+  return n + Math.max(0, roster);
+}
+function isBlocked(input = {}, now = Date.now()) {
+  if (input.blocked) return true;
+  const slots = [...input.slots || [], ...input.coachPage || []];
+  return slots.some((s) => liveSlot(s, now) && s.blocked);
+}
+function beaconOf(input = {}, now = Date.now()) {
+  const pending = pendingCount(input, now);
+  const blocked = isBlocked(input, now);
+  const frame = blocked ? "blocked" : pending > 0 ? "wait" : "idle";
+  return { pending, blocked, frame, badge: pending > 0 ? String(pending) : "" };
+}
+
 // streamdeck-plugin/src/plugin.mjs
 var DEFAULT_BASE = "https://stream-deck-habit-tracker.vercel.app";
 var baseOf = (s) => (s && s.base || DEFAULT_BASE).replace(/\/+$/, "");
@@ -17735,7 +17764,7 @@ var NUDGE_HUE = 38;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.5.1";
+var VERSION = "2.5.2";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -17746,6 +17775,8 @@ var slotCache = null;
 var coachCache = null;
 var habitCache = null;
 var todayCache = null;
+var rosterPendingCache = 0;
+var blockedCache = false;
 var consentCache = "off";
 var lastKeypressAt = 0;
 var lastPageChangeAt = 0;
@@ -17798,17 +17829,14 @@ function escalate(now) {
         } catch {
         }
       } else if (k.kind === "coach") {
-        const def = liveNudge(now);
-        if (!def) {
-          if (k.urgencyStep !== void 0) {
-            try {
-              render(k);
-            } catch {
-            }
-          }
-          continue;
-        }
-        if (urgencyStep(def, now) === k.urgencyStep) continue;
+        const snap = beaconOf({
+          slots: slotCache,
+          coachPage: coachCache,
+          rosterPending: rosterPendingCache,
+          blocked: blockedCache
+        }, now);
+        const sig = snap.frame + ":" + snap.pending;
+        if (sig === k.beaconSig) continue;
         try {
           render(k);
         } catch {
@@ -17857,13 +17885,17 @@ function refreshSlots(now) {
     const habits = j.habits || [];
     const today = j.today || {};
     consentCache = j.coachNav || "off";
-    const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) || !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage);
+    const rosterPending = Number(j.rosterPending) || 0;
+    const blocked = !!j.blocked;
+    const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) || !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage) || rosterPendingCache !== rosterPending || blockedCache !== blocked;
     const habitsChanged = !habitCache || JSON.stringify(habitCache) !== JSON.stringify(habits);
     const todayChanged = !todayCache || JSON.stringify(todayCache) !== JSON.stringify(today);
     slotCache = slots;
     coachCache = coachPage;
     habitCache = habits;
     todayCache = today;
+    rosterPendingCache = rosterPending;
+    blockedCache = blocked;
     for (const k of keys.values()) {
       try {
         if (slotsChanged && (k.kind === "slot" || k.kind === "coach")) render(k);
@@ -17890,18 +17922,22 @@ function withFrame(k, state, now = Date.now()) {
 }
 function renderCoach(k) {
   const now = Date.now();
-  const nudge = liveNudge(now);
-  const asking = (slotCache || []).find((s) => s && s.qid && (!s.expiresAt || s.expiresAt > now));
-  k.urgencyStep = nudge ? urgencyStep(nudge, now) : void 0;
-  if (nudge) {
-    k.action.setImage(face(nudge.emoji || "\u{1F9ED}", "Coach", NUDGE_HUE, "\u2757", 90, withFrame(k, { urgency: nudgeUrgency(nudge, now) }, now)));
-  } else if (asking) {
-    k.action.setImage(face("\u{1F9ED}", "Coach", QUESTION_HUE, "\u2753", 78, withFrame(k, null, now)));
-  } else if (slotCache) {
-    k.action.setImage(face("\u{1F9ED}", "Coach", VIOLET_HUE, "", void 0, withFrame(k, null, now)));
-  } else {
-    k.action.setImage(face("\u{1F9ED}", "\u2026", SILVER_HUE, "", 22, withFrame(k, null, now)));
+  if (!slotCache) {
+    k.frame = null;
+    k.beaconSig = "";
+    k.action.setImage(face("\u{1F9ED}", "\u2026", SILVER_HUE, "", 22));
+    return;
   }
+  const snap = beaconOf({
+    slots: slotCache,
+    coachPage: coachCache,
+    rosterPending: rosterPendingCache,
+    blocked: blockedCache
+  }, now);
+  if (k.frame !== snap.frame) k.frameSince = now;
+  k.frame = snap.frame;
+  k.beaconSig = snap.frame + ":" + snap.pending;
+  k.action.setImage(face("\u{1F9ED}", "Coach", VIOLET_HUE, snap.badge, 72, withFrame(k, null, now)));
 }
 function coachNavigate(k) {
   const raw = parseInt(k.settings.coachPage, 10);
