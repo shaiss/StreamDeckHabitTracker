@@ -3916,13 +3916,15 @@ var EventEmitter = class {
   }
 };
 
-// node_modules/@elgato/utils/dist/objects.js
+// node_modules/@elgato/utils/dist/objects/freeze.js
 function freeze(value) {
   if (value !== void 0 && value !== null && typeof value === "object" && !Object.isFrozen(value)) {
     Object.freeze(value);
     Object.values(value).forEach(freeze);
   }
 }
+
+// node_modules/@elgato/utils/dist/objects/get.js
 function get(source, path5) {
   const props = path5.split(".");
   return props.reduce((obj, prop) => obj && obj[prop], source);
@@ -4959,10 +4961,10 @@ function jsonStringifyReplacer(_, value) {
   return value;
 }
 function cached(getter) {
-  const set2 = false;
+  const set3 = false;
   return {
     get value() {
-      if (!set2) {
+      if (!set3) {
         const value = getter();
         Object.defineProperty(this, "value", { value });
         return value;
@@ -4988,10 +4990,10 @@ function floatSafeRemainder(val, step) {
   return valInt % stepInt / 10 ** decCount;
 }
 function defineLazy(object2, key, getter) {
-  const set2 = false;
+  const set3 = false;
   Object.defineProperty(object2, key, {
     get() {
-      if (!set2) {
+      if (!set3) {
         const value = getter();
         object2[key] = value;
         return value;
@@ -15576,12 +15578,15 @@ var FileTarget = class {
     });
   }
   /**
-   * Re-indexes the existing log files associated with this file target, removing old log files whose index exceeds the {@link FileTargetOptions.maxFileCount}, and renaming the
-   * remaining log files, leaving index "0" free for a new log file.
+   * Re-indexes the existing log files associated with this file target, removing old log files whose
+   * index exceeds the `maxFileCount`, and renaming the remaining log files, leaving index "0" free
+   * for a new log file.
    */
   reIndex() {
     if (!fs.existsSync(this.#options.dest)) {
-      fs.mkdirSync(this.#options.dest);
+      fs.mkdirSync(this.#options.dest, {
+        recursive: true
+      });
       return;
     }
     const logFiles = this.getLogFiles();
@@ -15847,9 +15852,6 @@ var softwareMinimumVersion = new Lazy(() => {
   }
   return new Version(manifest.value.Software.MinimumVersion);
 });
-function getSDKVersion() {
-  return manifest.value?.SDKVersion ?? null;
-}
 function getSoftwareMinimumVersion() {
   return softwareMinimumVersion.value;
 }
@@ -15860,12 +15862,59 @@ function getManifest() {
 // node_modules/@elgato/streamdeck/dist/plugin/settings.js
 import { randomUUID } from "node:crypto";
 
+// node_modules/@elgato/streamdeck/dist/plugin/actions/cache.js
+var SettingsCache = class {
+  /**
+   * Underlying map of action ID to cached settings.
+   */
+  #entries = /* @__PURE__ */ new Map();
+  /**
+   * Clears the cached settings.
+   */
+  clear() {
+    this.#entries.clear();
+  }
+  /**
+   * Removes the cached settings for the specified action.
+   * @param id Action instance identifier.
+   */
+  delete(id) {
+    this.#entries.delete(id);
+  }
+  /**
+   * Gets the cached settings for the specified action.
+   * @param id Action instance identifier.
+   * @returns The cached settings when present; otherwise `undefined`.
+   */
+  get(id) {
+    const settings2 = this.#entries.get(id);
+    return settings2 !== void 0 ? structuredClone(settings2) : void 0;
+  }
+  /**
+   * Sets the cached settings for the specified action.
+   * @param id Action instance identifier.
+   * @param settings The settings to cache.
+   */
+  set(id, settings2) {
+    this.#entries.set(id, structuredClone(settings2));
+  }
+};
+var settingsCache = new SettingsCache();
+
 // node_modules/@elgato/streamdeck/dist/plugin/actions/config.js
 var actionConfig = {
   /**
-   * Determines whether settings requests should use message identifiers and action settings cache behavior.
+   * Determines the behavior of when `onDidReceiveSettings` and `onDidReceiveGlobalSettings` are fired.
+   *
+   * - `false` (default) — `onDidReceiveSettings` and `onDidReceiveGlobalSettings` are only fired
+   * after the settings are updated within the property inspector.
+   * - `true` — `onDidReceiveSettings` and `onDidReceiveGlobalSettings` are fired after the settings
+   * are updated within the property inspector, and after calling `action.getSettings()` and
+   * `streamDeck.settings.getGlobalSettings()` respectively.
+   *
+   * This option replaces `useExperimentalMessageIdentifiers`, with inverted behavior.
    */
-  useExperimentalMessageIdentifiers: false
+  useLegacySettingsBehavior: false
 };
 
 // node_modules/@elgato/streamdeck/dist/plugin/actions/store.js
@@ -16034,12 +16083,6 @@ var SendToPluginEvent = class extends Event {
 };
 
 // node_modules/@elgato/streamdeck/dist/plugin/validation.js
-function requiresSDKVersion(minimumVersion, feature) {
-  const sdkVersion = getSDKVersion();
-  if (sdkVersion !== null && minimumVersion > sdkVersion) {
-    throw new Error(`[ERR_NOT_SUPPORTED]: ${feature} requires manifest SDK version ${minimumVersion} or higher, but found version ${sdkVersion}; please update the "SDKVersion" in the plugin's manifest to ${minimumVersion} or higher.`);
-  }
-}
 function requiresVersion(minimumVersion, streamDeckVersion, feature) {
   const required3 = {
     major: Math.floor(minimumVersion),
@@ -16060,26 +16103,43 @@ function requiresVersion(minimumVersion, streamDeckVersion, feature) {
 // node_modules/@elgato/streamdeck/dist/plugin/settings.js
 var settings = {
   /**
-   * Available from Stream Deck 7.1; determines whether message identifiers should be sent when getting
-   * action-instance or global settings.
+   * Determines the behavior of when `onDidReceiveSettings` and `onDidReceiveGlobalSettings` are fired.
    *
-   * When `true`, the did-receive events associated with settings are only emitted when the action-instance
-   * or global settings are changed in the property inspector.
-   * @returns The value.
+   * - `false` (default) — `onDidReceiveSettings` and `onDidReceiveGlobalSettings` are only fired
+   * after the settings are updated within the property inspector.
+   * - `true` — `onDidReceiveSettings` and `onDidReceiveGlobalSettings` are fired after the settings
+   * are updated within the property inspector, and after calling `action.getSettings()` and
+   * `streamDeck.settings.getGlobalSettings()` respectively.
+   *
+   * This option replaces `useExperimentalMessageIdentifiers`, with inverted behavior.
    */
-  get useExperimentalMessageIdentifiers() {
-    return actionConfig.useExperimentalMessageIdentifiers;
+  get useLegacySettingsBehavior() {
+    return actionConfig.useLegacySettingsBehavior;
   },
   /**
-   * Available from Stream Deck 7.1; determines whether message identifiers should be sent when getting
-   * action-instance or global settings.
+   * Determines the behavior of when `onDidReceiveSettings` and `onDidReceiveGlobalSettings` are fired.
    *
-   * When `true`, the did-receive events associated with settings are only emitted when the action-instance
-   * or global settings are changed in the property inspector.
+   * - `false` (default) — `onDidReceiveSettings` and `onDidReceiveGlobalSettings` are only fired
+   * after the settings are updated within the property inspector.
+   * - `true` — `onDidReceiveSettings` and `onDidReceiveGlobalSettings` are fired after the settings
+   * are updated within the property inspector, and after calling `action.getSettings()` and
+   * `streamDeck.settings.getGlobalSettings()` respectively.
+   *
+   * This option replaces `useExperimentalMessageIdentifiers`, with inverted behavior.
    */
-  set useExperimentalMessageIdentifiers(value) {
-    requiresVersion(7.1, connection.version, "Message identifiers");
-    actionConfig.useExperimentalMessageIdentifiers = value;
+  set useLegacySettingsBehavior(value) {
+    const prev = actionConfig.useLegacySettingsBehavior;
+    if (prev === value) {
+      return;
+    }
+    try {
+      actionConfig.useLegacySettingsBehavior = value;
+      validateSettingsBehavior();
+      settingsCache.clear();
+    } catch (err) {
+      actionConfig.useLegacySettingsBehavior = prev;
+      throw err;
+    }
   },
   /**
    * Gets the global settings associated with the plugin.
@@ -16097,30 +16157,34 @@ var settings = {
     });
   },
   /**
-   * Occurs when the global settings are requested, or when the the global settings were updated in
-   * the property inspector.
+   * Occurs when the global settings are updated within the property inspector.
+   *
+   * When `streamDeck.settings.useLegacySettingsBehavior` is set to `true`, this event will also
+   * occur when calling `getGlobalSettings()`.
    * @template T The type of settings associated with the action.
    * @param listener Function to be invoked when the event occurs.
    * @returns A disposable that removes the listener.
    */
   onDidReceiveGlobalSettings: (listener) => {
     return connection.disposableOn("didReceiveGlobalSettings", (ev) => {
-      if (settings.useExperimentalMessageIdentifiers && ev.id) {
+      if (!settings.useLegacySettingsBehavior && ev.id) {
         return;
       }
       listener(new DidReceiveGlobalSettingsEvent(ev));
     });
   },
   /**
-   * Occurs when the settings associated with an action instance are requested, or when the the settings
-   * were updated in the property inspector.
+   * Occurs when the settings, associated with an action, are updated within the property inspector.
+   *
+   * When `streamDeck.settings.useLegacySettingsBehavior` is set to `true`, this event will also
+   * occur when calling `getSettings()` on an action.
    * @template T The type of settings associated with the action.
    * @param listener Function to be invoked when the event occurs.
    * @returns A disposable that removes the listener.
    */
   onDidReceiveSettings: (listener) => {
     return connection.disposableOn("didReceiveSettings", (ev) => {
-      if (settings.useExperimentalMessageIdentifiers && ev.id) {
+      if (!settings.useLegacySettingsBehavior && ev.id) {
         return;
       }
       const action2 = actionStore.getActionById(ev.context);
@@ -16147,6 +16211,11 @@ var settings = {
     });
   }
 };
+function validateSettingsBehavior() {
+  if (!settings.useLegacySettingsBehavior) {
+    requiresVersion(7.1, connection.version, "Default onDidReceiveSettings/onDidReceiveGlobalSettings behavior");
+  }
+}
 
 // node_modules/@elgato/streamdeck/dist/plugin/ui.js
 var UIController = class {
@@ -16257,42 +16326,6 @@ var UIController = class {
 };
 var ui = new UIController();
 
-// node_modules/@elgato/streamdeck/dist/plugin/actions/action.js
-import { randomUUID as randomUUID2 } from "node:crypto";
-
-// node_modules/@elgato/streamdeck/dist/plugin/actions/cache.js
-var SettingsCache = class {
-  /**
-   * Underlying map of action ID to cached settings.
-   */
-  #entries = /* @__PURE__ */ new Map();
-  /**
-   * Removes the cached settings for the specified action.
-   * @param id Action instance identifier.
-   */
-  delete(id) {
-    this.#entries.delete(id);
-  }
-  /**
-   * Gets the cached settings for the specified action.
-   * @param id Action instance identifier.
-   * @returns The cached settings when present; otherwise `undefined`.
-   */
-  get(id) {
-    const settings2 = this.#entries.get(id);
-    return settings2 !== void 0 ? structuredClone(settings2) : void 0;
-  }
-  /**
-   * Sets the cached settings for the specified action.
-   * @param id Action instance identifier.
-   * @param settings The settings to cache.
-   */
-  set(id, settings2) {
-    this.#entries.set(id, structuredClone(settings2));
-  }
-};
-var settingsCache = new SettingsCache();
-
 // node_modules/@elgato/streamdeck/dist/plugin/devices/store.js
 var __items2 = /* @__PURE__ */ new Map();
 var ReadOnlyDeviceStore = class extends Enumerable {
@@ -16388,12 +16421,13 @@ var ActionContext = class {
   }
 };
 
-// node_modules/@elgato/streamdeck/dist/plugin/actions/action.js
+// node_modules/@elgato/streamdeck/dist/plugin/actions/action-base.js
+import { randomUUID as randomUUID2 } from "node:crypto";
 var REQUEST_TIMEOUT = 15 * 1e3;
-var Action = class extends ActionContext {
+var ActionBase = class extends ActionContext {
   /**
-   * Gets the resources (files) associated with this action; these resources are embedded into the
-   * action when it is exported, either individually, or as part of a profile.
+   * Gets the resources (files) associated with this action; these resources are embedded into the action when it is
+   * exported, either individually, or as part of a profile.
    *
    * Available from Stream Deck 7.1.
    * @returns The resources.
@@ -16405,11 +16439,10 @@ var Action = class extends ActionContext {
   }
   /**
    * Gets the settings associated this action instance.
-   * @template U The type of settings associated with the action.D
    * @returns Promise containing the action instance's settings.
    */
   async getSettings() {
-    if (actionConfig.useExperimentalMessageIdentifiers) {
+    if (!actionConfig.useLegacySettingsBehavior) {
       const cached2 = settingsCache.get(this.id);
       if (cached2 !== void 0) {
         logger.trace(JSON.stringify({
@@ -16439,8 +16472,15 @@ var Action = class extends ActionContext {
     return this.controllerType === "Keypad";
   }
   /**
-   * Sets the resources (files) associated with this action; these resources are embedded into the
-   * action when it is exported, either individually, or as part of a profile.
+   * Determines whether this instance is an Infobar.
+   * @returns `true` when this instance is an Infobar; otherwise `false`.
+   */
+  isNeoInfobar() {
+    return this.controllerType === "Neo";
+  }
+  /**
+   * Sets the resources (files) associated with this action; these resources are embedded into the action when it is
+   * exported, either individually, or as part of a profile.
    *
    * Available from Stream Deck 7.1.
    * @example
@@ -16460,7 +16500,7 @@ var Action = class extends ActionContext {
     });
   }
   /**
-   * Sets the settings associated with this action instance. Use in conjunction with {@link Action.getSettings}.
+   * Sets the settings associated with this action instance.
    * @param value Settings to persist.
    * @returns `Promise` resolved when the settings are sent to Stream Deck.
    */
@@ -16470,16 +16510,6 @@ var Action = class extends ActionContext {
       event: "setSettings",
       context: this.id,
       payload: value
-    });
-  }
-  /**
-   * Temporarily shows an alert (i.e. warning), in the form of an exclamation mark in a yellow triangle, on this action instance. Used to provide visual feedback when an action failed.
-   * @returns `Promise` resolved when the request to show an alert has been sent to Stream Deck.
-   */
-  showAlert() {
-    return connection.send({
-      event: "showAlert",
-      context: this.id
     });
   }
   /**
@@ -16511,9 +16541,9 @@ var Action = class extends ActionContext {
 };
 
 // node_modules/@elgato/streamdeck/dist/plugin/actions/dial.js
-var DialAction = class extends Action {
+var DialAction = class extends ActionBase {
   /**
-   * Private backing field for {@link DialAction.coordinates}.
+   * Private backing field for the coordinates.
    */
   #coordinates;
   /**
@@ -16536,7 +16566,7 @@ var DialAction = class extends Action {
   }
   /**
    * Sets the feedback for the current layout associated with this action instance, allowing for the visual items to be updated. Layouts are a powerful way to provide dynamic information
-   * to users, and can be assigned in the manifest, or dynamically via {@link Action.setFeedbackLayout}.
+   * to users, and can be assigned in the manifest, or dynamically via {@link DialAction.setFeedbackLayout}.
    *
    * The {@link feedback} payload defines which items within the layout will be updated, and are identified by their property name (defined as the `key` in the layout's definition).
    * The values can either by a complete new definition, a `string` for layout item types of `text` and `pixmap`, or a `number` for layout item types of `bar` and `gbar`.
@@ -16552,7 +16582,7 @@ var DialAction = class extends Action {
   }
   /**
    * Sets the layout associated with this action instance. The layout must be either a built-in layout identifier, or path to a local layout JSON file within the plugin's folder.
-   * Use in conjunction with {@link Action.setFeedback} to update the layout's current items' settings.
+   * Use in conjunction with {@link DialAction.setFeedback} to update the layout's current items' settings.
    * @param layout Name of a pre-defined layout, or relative path to a custom one.
    * @returns `Promise` resolved when the new layout has been sent to Stream Deck.
    */
@@ -16609,6 +16639,16 @@ var DialAction = class extends Action {
     });
   }
   /**
+   * Shows a temporary alert (i.e. warning) indicator on the touch strip associated with the action.
+   * @returns `Promise` resolved when the request to show an alert has been sent to Stream Deck.
+   */
+  showAlert() {
+    return connection.send({
+      event: "showAlert",
+      context: this.id
+    });
+  }
+  /**
    * @inheritdoc
    */
   toJSON() {
@@ -16620,9 +16660,9 @@ var DialAction = class extends Action {
 };
 
 // node_modules/@elgato/streamdeck/dist/plugin/actions/key.js
-var KeyAction = class extends Action {
+var KeyAction = class extends ActionBase {
   /**
-   * Private backing field for {@link KeyAction.coordinates}.
+   * Private backing field for the coordinates.
    */
   #coordinates;
   /**
@@ -16707,7 +16747,18 @@ var KeyAction = class extends Action {
     });
   }
   /**
-   * Temporarily shows an "OK" (i.e. success), in the form of a check-mark in a green circle, on this action instance. Used to provide visual feedback when an action successfully
+   * Shows a temporary alert (i.e. warning), in the form of an exclamation mark in a yellow triangle, on the key.
+   * @returns `Promise` resolved when the request to show an alert has been sent to Stream Deck.
+   */
+  showAlert() {
+    return connection.send({
+      event: "showAlert",
+      context: this.id
+    });
+  }
+  /**
+   * Temporarily shows an "OK" (i.e. success), in the form of a check-mark in a green circle, on this action instance.
+   * Used to provide visual feedback when an action successfully
    * executed.
    * @returns `Promise` resolved when the request to show an "OK" has been sent to Stream Deck.
    */
@@ -16729,6 +16780,74 @@ var KeyAction = class extends Action {
   }
 };
 
+// node_modules/@elgato/streamdeck/dist/plugin/actions/neo-infobar.js
+var NeoInfobarAction = class extends ActionBase {
+  /**
+   * Private backing field for the coordinates.
+   */
+  #coordinates;
+  /**
+   * Initializes a new instance of the {@see NeoInfobarAction} class.
+   * @param source Source of the action.
+   */
+  constructor(source) {
+    super(source);
+    if (source.payload.controller !== "Neo") {
+      throw new Error("Unable to create NeoInfobarAction; source event controller is not 'Neo'");
+    }
+    this.#coordinates = Object.freeze(source.payload.coordinates);
+  }
+  /**
+   * Coordinates of the Infobar.
+   * @returns The coordinates.
+   */
+  get coordinates() {
+    return this.#coordinates;
+  }
+  /**
+   * Sets the feedback for the current layout associated with this action instance, allowing for the visual items to be
+   * updated. Layouts are a powerful way to provide dynamic information to users, and can be assigned in the manifest,
+   * or dynamically via `setFeedbackLayout`.
+   *
+   * The `feedback` payload defines which items within the layout will be updated, and are identified by their property
+   * name (defined as the `key` in the layout's definition). The values can either be a complete new definition, a `string`
+   * for layout item types of `text` and `pixmap`, or a `number` for layout item types of `bar` and `gbar`.
+   * @param feedback Object containing information about the layout items to be updated.
+   * @returns `Promise` resolved when the request to set the `feedback` has been sent to Stream Deck.
+   */
+  setFeedback(feedback) {
+    return connection.send({
+      event: "setFeedback",
+      context: this.id,
+      payload: feedback
+    });
+  }
+  /**
+   * Sets the layout associated with this action instance. The layout must be a path to a local layout JSON file within
+   * the plugin's folder. Use in conjunction with `setFeedback` to update the layout's current items' settings.
+   * @param layout Relative path to the layout file.
+   * @returns `Promise` resolved when the new layout has been sent to Stream Deck.
+   */
+  setFeedbackLayout(layout) {
+    return connection.send({
+      event: "setFeedbackLayout",
+      context: this.id,
+      payload: {
+        layout
+      }
+    });
+  }
+  /**
+   * @inheritdoc
+   */
+  toJSON() {
+    return {
+      ...super.toJSON(),
+      coordinates: this.coordinates
+    };
+  }
+};
+
 // node_modules/@elgato/streamdeck/dist/plugin/actions/service.js
 var manifest2 = new Lazy(() => getManifest());
 var ActionService = class extends ReadOnlyActionStore {
@@ -16738,14 +16857,14 @@ var ActionService = class extends ReadOnlyActionStore {
   constructor() {
     super();
     connection.prependListener("willAppear", (ev) => {
-      const action2 = ev.payload.controller === "Encoder" ? new DialAction(ev) : new KeyAction(ev);
+      const action2 = this.#createAction(ev);
       actionStore.set(action2);
-      if (actionConfig.useExperimentalMessageIdentifiers) {
+      if (!actionConfig.useLegacySettingsBehavior) {
         settingsCache.set(ev.context, ev.payload.settings);
       }
     });
     connection.prependListener("didReceiveSettings", (ev) => {
-      if (actionConfig.useExperimentalMessageIdentifiers) {
+      if (!actionConfig.useLegacySettingsBehavior) {
         settingsCache.set(ev.context, ev.payload.settings);
       }
     });
@@ -16797,7 +16916,7 @@ var ActionService = class extends ReadOnlyActionStore {
     });
   }
   /**
-   * Occurs when the resources were updated within the property inspector.
+   * Occurs when the resources are updated within the property inspector.
    * @param listener Function to be invoked when the event occurs.
    * @returns A disposable that, when disposed, removes the listener.
    */
@@ -16841,7 +16960,7 @@ var ActionService = class extends ReadOnlyActionStore {
     });
   }
   /**
-   * Occurs when the user updates an action's title settings in the Stream Deck application. See also {@link Action.setTitle}.
+   * Occurs when the user updates an action's title settings in the Stream Deck application.
    * @template T The type of settings associated with the action.
    * @param listener Function to be invoked when the event occurs.
    * @returns A disposable that, when disposed, removes the listener.
@@ -16939,6 +17058,21 @@ var ActionService = class extends ReadOnlyActionStore {
     route(this.onTouchTap, action2.onTouchTap);
     route(this.onWillAppear, action2.onWillAppear);
     route(this.onWillDisappear, action2.onWillDisappear);
+  }
+  /**
+   * Creates an instance of an action from its associated controller.
+   * @param ev Event that contains the controller.
+   * @returns The action instance.
+   */
+  #createAction(ev) {
+    switch (ev.payload.controller) {
+      case "Encoder":
+        return new DialAction(ev);
+      case "Neo":
+        return new NeoInfobarAction(ev);
+      default:
+        return new KeyAction(ev);
+    }
   }
 };
 var actionService = new ActionService();
@@ -17119,7 +17253,6 @@ function switchToProfile(deviceId, profile, page) {
 // node_modules/@elgato/streamdeck/dist/plugin/system.js
 var system_exports = {};
 __export(system_exports, {
-  getSecrets: () => getSecrets,
   onApplicationDidLaunch: () => onApplicationDidLaunch,
   onApplicationDidTerminate: () => onApplicationDidTerminate,
   onDidReceiveDeepLink: () => onDidReceiveDeepLink,
@@ -17145,17 +17278,6 @@ function openUrl(url2) {
     payload: {
       url: url2
     }
-  });
-}
-function getSecrets() {
-  requiresVersion(6.9, connection.version, "Secrets");
-  requiresSDKVersion(3, "Secrets");
-  return new Promise((resolve) => {
-    connection.once("didReceiveSecrets", (ev) => resolve(ev.payload.secrets));
-    connection.send({
-      event: "getSecrets",
-      context: connection.registrationParameters.pluginUUID
-    });
   });
 }
 
@@ -17255,10 +17377,10 @@ var streamDeck = {
   },
   /**
    * Connects the plugin to the Stream Deck.
-   * @returns A promise resolved when a connection has been established.
    */
-  connect() {
-    return connection.connect();
+  async connect() {
+    validateSettingsBehavior();
+    await connection.connect();
   }
 };
 var plugin_default = streamDeck;
@@ -17276,6 +17398,49 @@ function hueFor(name) {
 }
 
 // streamdeck-plugin/src/faces.mjs
+var STATE_COLORS = Object.freeze({
+  idle: "#3A3F47",
+  working: "#2EA3FF",
+  wait: "#FFB000",
+  success: "#22C55E",
+  blocked: "#FF4D4D"
+});
+var FRAME_STATES = Object.freeze(Object.keys(STATE_COLORS));
+var FRAME_WAIT_MS = 3e3;
+var FRAME_BLOCKED_MS = 1500;
+var FRAME_WORKING_MS = 4e3;
+var FRAME_SUCCESS_FADE_MS = 2400;
+function resolveFrame(state) {
+  if (!state) return null;
+  const f = state.frame ?? state.frameState ?? null;
+  if (f == null || f === "") return null;
+  return Object.prototype.hasOwnProperty.call(STATE_COLORS, f) ? f : null;
+}
+function frameStep(frame, now = 0, opts = {}) {
+  if (!frame || frame === "idle" || opts.reducedMotion) return 0;
+  if (frame === "wait") return Math.floor(now / FRAME_WAIT_MS) % 2;
+  if (frame === "blocked") return Math.floor(now / FRAME_BLOCKED_MS) % 2;
+  if (frame === "working") return Math.floor(now / (FRAME_WORKING_MS / 4)) % 4;
+  if (frame === "success") {
+    const age = Math.max(0, now - (opts.since ?? now));
+    return Math.min(4, Math.floor(age / (FRAME_SUCCESS_FADE_MS / 4)));
+  }
+  return 0;
+}
+function frameBright(frame, step = 0, opts = {}) {
+  if (!frame || frame === "idle") return 0;
+  if (opts.reducedMotion) {
+    if (frame === "wait" || frame === "blocked") return 1;
+    if (frame === "working") return 0.55;
+    if (frame === "success") return 0.7;
+    return 0;
+  }
+  if (frame === "wait") return step ? 1 : 0.45;
+  if (frame === "blocked") return step ? 1 : 0.18;
+  if (frame === "working") return 0.35 + step / 3 * 0.65;
+  if (frame === "success") return Math.max(0.22, 1 - step / 4);
+  return 0;
+}
 var esc2 = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]);
 function hslToHex(h, s, l) {
   s /= 100;
@@ -17302,6 +17467,29 @@ function face(emoji3, label, hue, badge, sat = 72, state = null) {
   const ringWidth = (1.5 + 1.5 * urg).toFixed(1);
   const badgeFill = hslToHex(hue, 80, 80);
   const frameR = 17, frameX = 6, frameY = 6, frameW = S - 12, frameH = S - 12;
+  const stateX = 2, stateY = 2, stateW = S - 4, stateH = S - 4, stateR = 21, stateSw = 2;
+  const frameName = resolveFrame(state);
+  let stateFrame = "";
+  if (frameName) {
+    const reduced = !!(state && state.reducedMotion);
+    const step = state && typeof state.frameStep === "number" ? state.frameStep : frameStep(frameName, state && state.now || 0, { reducedMotion: reduced, since: state && state.frameSince });
+    const bright = state && typeof state.frameBright === "number" ? Math.max(0, Math.min(1, state.frameBright)) : frameBright(frameName, step, { reducedMotion: reduced });
+    const color = STATE_COLORS[frameName];
+    let opacity;
+    if (frameName === "idle") opacity = 0.38;
+    else if (frameName === "wait") opacity = (0.62 + 0.38 * bright).toFixed(2);
+    else if (frameName === "working") opacity = (0.5 + 0.5 * bright).toFixed(2);
+    else if (frameName === "blocked") opacity = (0.2 + 0.8 * bright).toFixed(2);
+    else opacity = (0.35 + 0.65 * bright).toFixed(2);
+    const sw = frameName === "wait" ? 2.6 : stateSw;
+    stateFrame = `<g data-state-frame="${frameName}"><rect x="${stateX}" y="${stateY}" width="${stateW}" height="${stateH}" rx="${stateR}" fill="none" stroke="${color}" stroke-opacity="${opacity}" stroke-width="${sw}"` + (frameName === "working" ? ` stroke-dasharray="10 7"` : "") + `/>`;
+    if (frameName === "success") {
+      stateFrame += `<text x="14" y="22" text-anchor="start" font-size="13" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${color}" fill-opacity="0.95">\u2713</text>`;
+    } else if (frameName === "blocked") {
+      stateFrame += `<text x="14" y="22" text-anchor="start" font-size="14" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${color}" fill-opacity="0.95">!</text>`;
+    }
+    stateFrame += `</g>`;
+  }
   let progressFrame = "";
   if (state && typeof state.ringFill === "number") {
     const r = frameR, x = frameX, y = frameY, w = frameW, h = frameH, cx = x + w / 2;
@@ -17327,7 +17515,7 @@ function face(emoji3, label, hue, badge, sat = 72, state = null) {
       }
     }
   }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="${haloHi}" stop-opacity="${haloOpacity}"/><stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/><stop offset="1" stop-color="${haloLo}" stop-opacity="0"/></radialGradient></defs><rect width="${S}" height="${S}" fill="url(#b)"/><rect width="${S}" height="${S}" fill="url(#h)"/><rect x="${frameX}" y="${frameY}" width="${frameW}" height="${frameH}" rx="${frameR}" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` + progressFrame + `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc2(emoji3)}</text><text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#000000" fill-opacity="0.55">${lbl}</text><text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#e9edf4">${lbl}</text>` + tally + // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="${haloHi}" stop-opacity="${haloOpacity}"/><stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/><stop offset="1" stop-color="${haloLo}" stop-opacity="0"/></radialGradient></defs><rect width="${S}" height="${S}" fill="url(#b)"/><rect width="${S}" height="${S}" fill="url(#h)"/><rect x="${frameX}" y="${frameY}" width="${frameW}" height="${frameH}" rx="${frameR}" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` + stateFrame + progressFrame + `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc2(emoji3)}</text><text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#000000" fill-opacity="0.55">${lbl}</text><text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#e9edf4">${lbl}</text>` + tally + // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
   // the only corner mark a habit face ever shows.
   (done ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="12" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.95">\u2713</text>` : badge ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="11" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.9">${esc2(badge)}</text>` : "") + `</svg>`;
   return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
@@ -17546,7 +17734,8 @@ var VIOLET_HUE = 262;
 var NUDGE_HUE = 38;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
-var VERSION = "2.5.0";
+var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
+var VERSION = "2.5.1";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -17598,32 +17787,43 @@ function pump() {
   escalate(now);
 }
 function escalate(now) {
-  if (!slotCache) return;
-  for (const k of keys.values()) {
-    if (k.kind === "slot" && k.isNudge) {
-      const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
-      if (!def || !def.nudge) continue;
-      if (urgencyStep(def, now) === k.urgencyStep) continue;
-      try {
-        render(k);
-      } catch {
-      }
-    } else if (k.kind === "coach") {
-      const def = liveNudge(now);
-      if (!def) {
-        if (k.urgencyStep !== void 0) {
-          try {
-            render(k);
-          } catch {
-          }
+  if (slotCache) {
+    for (const k of keys.values()) {
+      if (k.kind === "slot" && k.isNudge) {
+        const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
+        if (!def || !def.nudge) continue;
+        if (urgencyStep(def, now) === k.urgencyStep) continue;
+        try {
+          render(k);
+        } catch {
         }
-        continue;
+      } else if (k.kind === "coach") {
+        const def = liveNudge(now);
+        if (!def) {
+          if (k.urgencyStep !== void 0) {
+            try {
+              render(k);
+            } catch {
+            }
+          }
+          continue;
+        }
+        if (urgencyStep(def, now) === k.urgencyStep) continue;
+        try {
+          render(k);
+        } catch {
+        }
       }
-      if (urgencyStep(def, now) === k.urgencyStep) continue;
-      try {
-        render(k);
-      } catch {
-      }
+    }
+  }
+  if (reducedMotion()) return;
+  for (const k of keys.values()) {
+    if (!k.frame) continue;
+    const step = frameStep(k.frame, now, { reducedMotion: false, since: k.frameSince });
+    if (step === k.frameStep) continue;
+    try {
+      render(k);
+    } catch {
     }
   }
 }
@@ -17676,19 +17876,31 @@ function refreshSlots(now) {
     if (sched.pollSettled(seq)) inflightCtrl = null;
   });
 }
+function withFrame(k, state, now = Date.now()) {
+  if (!k.frame) return state;
+  const reduced = reducedMotion();
+  k.frameStep = frameStep(k.frame, now, { reducedMotion: reduced, since: k.frameSince });
+  return Object.assign({}, state || {}, {
+    frame: k.frame,
+    frameSince: k.frameSince,
+    frameStep: k.frameStep,
+    reducedMotion: reduced,
+    now
+  });
+}
 function renderCoach(k) {
   const now = Date.now();
   const nudge = liveNudge(now);
   const asking = (slotCache || []).find((s) => s && s.qid && (!s.expiresAt || s.expiresAt > now));
   k.urgencyStep = nudge ? urgencyStep(nudge, now) : void 0;
   if (nudge) {
-    k.action.setImage(face(nudge.emoji || "\u{1F9ED}", "Coach", NUDGE_HUE, "\u2757", 90, { urgency: nudgeUrgency(nudge, now) }));
+    k.action.setImage(face(nudge.emoji || "\u{1F9ED}", "Coach", NUDGE_HUE, "\u2757", 90, withFrame(k, { urgency: nudgeUrgency(nudge, now) }, now)));
   } else if (asking) {
-    k.action.setImage(face("\u{1F9ED}", "Coach", QUESTION_HUE, "\u2753", 78));
+    k.action.setImage(face("\u{1F9ED}", "Coach", QUESTION_HUE, "\u2753", 78, withFrame(k, null, now)));
   } else if (slotCache) {
-    k.action.setImage(face("\u{1F9ED}", "Coach", VIOLET_HUE, ""));
+    k.action.setImage(face("\u{1F9ED}", "Coach", VIOLET_HUE, "", void 0, withFrame(k, null, now)));
   } else {
-    k.action.setImage(face("\u{1F9ED}", "\u2026", SILVER_HUE, "", 22));
+    k.action.setImage(face("\u{1F9ED}", "\u2026", SILVER_HUE, "", 22, withFrame(k, null, now)));
   }
 }
 function coachNavigate(k) {
@@ -17800,9 +18012,9 @@ function render(k) {
     const def2 = habitCache ? habitCache[idx] : null;
     if (def2) {
       const st = todayCache && todayCache[def2.name] || null;
-      k.action.setImage(face(def2.emoji || "\u2022", def2.label || def2.habit, hueFor(def2.name), "", void 0, st));
-    } else if (habitCache) k.action.setImage(face("\xB7", "empty", SILVER_HUE, "", 22));
-    else k.action.setImage(face("\u23F3", "\u2026", SILVER_HUE, "", 22));
+      k.action.setImage(face(def2.emoji || "\u2022", def2.label || def2.habit, hueFor(def2.name), "", void 0, withFrame(k, st)));
+    } else if (habitCache) k.action.setImage(face("\xB7", "empty", SILVER_HUE, "", 22, withFrame(k)));
+    else k.action.setImage(face("\u23F3", "\u2026", SILVER_HUE, "", 22, withFrame(k)));
     return;
   }
   const n = parseInt(s.slot, 10) || 1;
@@ -17814,7 +18026,7 @@ function render(k) {
     gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
   }
   if (def && def.qid) {
-    k.action.setImage(face(def.emoji || "\u2753", def.label || def.habit, QUESTION_HUE, "\u2753 " + n, 78));
+    k.action.setImage(face(def.emoji || "\u2753", def.label || def.habit, QUESTION_HUE, "\u2753 " + n, 78, withFrame(k)));
   } else if (def && def.nudge) {
     k.urgencyStep = urgencyStep(def);
     k.action.setImage(face(
@@ -17823,12 +18035,12 @@ function render(k) {
       NUDGE_HUE,
       "\u2757 " + n,
       90,
-      { urgency: nudgeUrgency(def) }
+      withFrame(k, { urgency: nudgeUrgency(def) })
     ));
   } else if (def) {
-    k.action.setImage(face(def.emoji || "\u2728", def.label || def.habit, VIOLET_HUE, "AI " + n));
+    k.action.setImage(face(def.emoji || "\u2728", def.label || def.habit, VIOLET_HUE, "AI " + n, void 0, withFrame(k)));
   } else {
-    k.action.setImage(face("\u2728", "Slot " + n, SILVER_HUE, "AI", 22));
+    k.action.setImage(face("\u2728", "Slot " + n, SILVER_HUE, "AI", 22, withFrame(k)));
   }
 }
 function logUrl(k, extra = "") {

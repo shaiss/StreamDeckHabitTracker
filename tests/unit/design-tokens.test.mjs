@@ -77,7 +77,9 @@ const HEX_ALLOW = {
     '#0e0f12', '#17181b', '#060708',            // faceplate, stand
     '#000', '#050506', '#0c0d10', '#050607',    // key well, unlit key
     '#141827', '#0a0c13', '#12151f',            // key-face base gradient
-    '#fff'                                      // key-face label ink
+    '#fff',                                     // key-face label ink
+    '#3A3F47', '#2EA3FF', '#FFB000',            // #74 state-frame palette
+    '#22C55E', '#FF4D4D'
   ],
   // mind.html has no hex left: the dreamscape floor is --bg → --bg2 and the
   // violet stop is color-mix(var(--violet)), so it flips with the theme.
@@ -217,6 +219,37 @@ test('the virtual deck still mirrors the plugin key faces', () => {
     assert.ok(src.includes(ring), `${file} changed the ring escalation slope`);
   }
 
+  // Turn-state frame (#74 / study §2.2): five palette hexes + the five
+  // CSS classes. State owns the outer ring; identity stays interior.
+  for (const [token, hex] of [
+    ['STATE_IDLE', '#3A3F47'],
+    ['STATE_WORKING', '#2EA3FF'],
+    ['STATE_WAIT', '#FFB000'],
+    ['STATE_SUCCESS', '#22C55E'],
+    ['STATE_BLOCKED', '#FF4D4D']
+  ]) {
+    assert.ok(plugin.includes(`${token} = '${hex}'`), `plugin.mjs lost ${token}`);
+    assert.ok(faces.includes(hex), `faces.mjs lost state color ${hex}`);
+    assert.ok(deck.includes(hex), `deck.html lost state color ${hex}`);
+  }
+  assert.ok(faces.includes('data-state-frame='), 'faces.mjs must tag the state-frame group');
+  for (const [cls, motion] of [
+    ['.frame-idle', null],
+    ['.frame-working', 'frame-shimmer'],
+    ['.frame-wait', 'frame-breathe'],
+    ['.frame-success', 'frame-settle'],
+    ['.frame-blocked', 'frame-blink']
+  ]) {
+    assert.ok(deck.includes(cls), `deck.html lost ${cls}`);
+    if (motion) assert.ok(deck.includes(`@keyframes ${motion}`), `deck.html lost @keyframes ${motion}`);
+  }
+  assert.ok(deck.includes('prefers-reduced-motion'), 'deck.html must honor reduced motion for frames');
+  assert.ok(plugin.includes('HT_REDUCED_MOTION'), 'plugin.mjs lost the reduced-motion env gate');
+  assert.ok(plugin.includes('frameStep'), 'plugin.mjs must drive frame motion off frameStep');
+  assert.ok(faces.includes('stroke-dasharray="10 7"'), 'working frame needs a non-hue mark (dash)');
+  assert.ok(!plugin.includes("STATE_DANGER") && !faces.includes("frame === 'danger'"),
+    'danger is not a frame state');
+
   // The base gradient under every key face.
   for (const stop of ['#141827', '#0a0c13']) {
     assert.ok(faces.includes(stop), `faces.mjs lost the base stop ${stop}`);
@@ -227,7 +260,7 @@ test('the virtual deck still mirrors the plugin key faces', () => {
 // ------------------------------------------------- 6. the guide is honest
 test('design/WEB-UX.md documents the exceptions the code actually takes', () => {
   const guide = read('design/WEB-UX.md');
-  for (const claim of ['faces.mjs', 'lib-hue.mjs', 'ORB_COLORS', '--violet-ink', '--amber', '--grad-coach']) {
+  for (const claim of ['faces.mjs', 'lib-hue.mjs', 'ORB_COLORS', '--violet-ink', '--amber', '--grad-coach', 'STATE_WAIT', '#FFB000']) {
     assert.ok(guide.includes(claim), `the guide never mentions ${claim}`);
   }
   // Every sanctioned file in this test must be argued for in §7.

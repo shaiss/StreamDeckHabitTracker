@@ -27,7 +27,7 @@
 // reason; keys show the manifest's default action images until the first
 // poll paints them.
 import streamDeck, { SingletonAction, action } from '@elgato/streamdeck';
-import { face, hueFor } from './faces.mjs';
+import { face, hueFor, frameStep } from './faces.mjs';
 import { createScheduler } from './scheduler.mjs';
 import { createGestures } from './gestures.mjs';
 import { deriveVisibility } from './visibility.mjs';
@@ -58,9 +58,21 @@ const NUDGE_HUE = 38;     // the coach speaking LOUDER — proactive nudge keys
 const QUESTION_HUE = 300; // the coach ASKING — a linked 👍/👎 pair (#34)
 const SILVER_HUE = 222;   // neutral / pending
 
+// Turn-state frame palette (#74 / study §2.2). Meaning lives here with the
+// other hue constants; faces.mjs and deck.html keep matching copies. `danger`
+// is an action property (child E), not a frame state.
+const STATE_IDLE = '#3A3F47';
+const STATE_WORKING = '#2EA3FF';
+const STATE_WAIT = '#FFB000';
+const STATE_SUCCESS = '#22C55E';
+const STATE_BLOCKED = '#FF4D4D';
+void STATE_IDLE; void STATE_WORKING; void STATE_WAIT; void STATE_SUCCESS; void STATE_BLOCKED;
+
+const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
+
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.0';
+let VERSION = '2.5.1';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -134,28 +146,40 @@ function pump() {
 // would never repaint, and repainting every tick would be invisible churn.
 // Repaint only when the quantized urgency step moves.
 function escalate(now) {
-  if (!slotCache) return;
-  for (const k of keys.values()) {
-    if (k.kind === 'slot' && k.isNudge) {
-      const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
-      if (!def || !def.nudge) continue;
-      if (urgencyStep(def, now) === k.urgencyStep) continue;
-      try { render(k); } catch { /* next tick retries */ }
-    } else if (k.kind === 'coach') {
-      // The coach face mirrors the loudest live nudge, so it escalates on
-      // the same quantized steps as the nudge key itself (#53). When the
-      // nudge expires CLIENT-side the poll payload doesn't change, so the
-      // one repaint that drops the ❗ face has to happen here too.
-      const def = liveNudge(now);
-      if (!def) {
-        if (k.urgencyStep !== undefined) {
-          try { render(k); } catch { /* next tick retries */ }   // clears urgencyStep
+  if (slotCache) {
+    for (const k of keys.values()) {
+      if (k.kind === 'slot' && k.isNudge) {
+        const def = slotCache[(parseInt(k.settings.slot, 10) || 1) - 1];
+        if (!def || !def.nudge) continue;
+        if (urgencyStep(def, now) === k.urgencyStep) continue;
+        try { render(k); } catch { /* next tick retries */ }
+      } else if (k.kind === 'coach') {
+        // The coach face mirrors the loudest live nudge, so it escalates on
+        // the same quantized steps as the nudge key itself (#53). When the
+        // nudge expires CLIENT-side the poll payload doesn't change, so the
+        // one repaint that drops the ❗ face has to happen here too.
+        const def = liveNudge(now);
+        if (!def) {
+          if (k.urgencyStep !== undefined) {
+            try { render(k); } catch { /* next tick retries */ }   // clears urgencyStep
+          }
+          continue;
         }
-        continue;
+        if (urgencyStep(def, now) === k.urgencyStep) continue;
+        try { render(k); } catch { /* next tick retries */ }
       }
-      if (urgencyStep(def, now) === k.urgencyStep) continue;
-      try { render(k); } catch { /* next tick retries */ }
     }
+  }
+  // State-frame motion (#74): same quantized-step gate as nudge urgency — the
+  // poll payload does not change while a wait breathes or a blocked key
+  // blinks, so the tick has to drive the repaint. Reduced-motion is a single
+  // steady brightness (step always 0), so it never queues a motion redraw.
+  if (reducedMotion()) return;
+  for (const k of keys.values()) {
+    if (!k.frame) continue;
+    const step = frameStep(k.frame, now, { reducedMotion: false, since: k.frameSince });
+    if (step === k.frameStep) continue;
+    try { render(k); } catch { /* next tick retries */ }
   }
 }
 
@@ -230,19 +254,35 @@ function refreshSlots(now) {
 // The coach key's attention face (#53): silent, asking (a live question
 // pair), or nudging — mirroring the loudest thing on the front page so the
 // coach has an ambient presence that consumes no slot.
+// Opt-in turn-state (#74). Callers in B–D set k.frame; until they do, paint
+// is byte-identical to the pre-frame faces. HT_REDUCED_MOTION=1 freezes the
+// brightness step the same way prefers-reduced-motion does on deck.html.
+function withFrame(k, state, now = Date.now()) {
+  if (!k.frame) return state;
+  const reduced = reducedMotion();
+  k.frameStep = frameStep(k.frame, now, { reducedMotion: reduced, since: k.frameSince });
+  return Object.assign({}, state || {}, {
+    frame: k.frame,
+    frameSince: k.frameSince,
+    frameStep: k.frameStep,
+    reducedMotion: reduced,
+    now
+  });
+}
+
 function renderCoach(k) {
   const now = Date.now();
   const nudge = liveNudge(now);
   const asking = (slotCache || []).find((s) => s && s.qid && (!s.expiresAt || s.expiresAt > now));
   k.urgencyStep = nudge ? urgencyStep(nudge, now) : undefined;
   if (nudge) {
-    k.action.setImage(face(nudge.emoji || '🧭', 'Coach', NUDGE_HUE, '❗', 90, { urgency: nudgeUrgency(nudge, now) }));
+    k.action.setImage(face(nudge.emoji || '🧭', 'Coach', NUDGE_HUE, '❗', 90, withFrame(k, { urgency: nudgeUrgency(nudge, now) }, now)));
   } else if (asking) {
-    k.action.setImage(face('🧭', 'Coach', QUESTION_HUE, '❓', 78));
+    k.action.setImage(face('🧭', 'Coach', QUESTION_HUE, '❓', 78, withFrame(k, null, now)));
   } else if (slotCache) {
-    k.action.setImage(face('🧭', 'Coach', VIOLET_HUE, ''));
+    k.action.setImage(face('🧭', 'Coach', VIOLET_HUE, '', undefined, withFrame(k, null, now)));
   } else {
-    k.action.setImage(face('🧭', '…', SILVER_HUE, '', 22));   // first poll pending
+    k.action.setImage(face('🧭', '…', SILVER_HUE, '', 22, withFrame(k, null, now)));   // first poll pending
   }
 }
 
@@ -358,10 +398,10 @@ function render(k) {
     if (def) {
       // Living key faces (#32): ring/dim/dots from the server's today map.
       const st = (todayCache && todayCache[def.name]) || null;
-      k.action.setImage(face(def.emoji || '•', def.label || def.habit, hueFor(def.name), '', undefined, st));
+      k.action.setImage(face(def.emoji || '•', def.label || def.habit, hueFor(def.name), '', undefined, withFrame(k, st)));
     }
-    else if (habitCache) k.action.setImage(face('·', 'empty', SILVER_HUE, '', 22));  // removed in manager
-    else k.action.setImage(face('⏳', '…', SILVER_HUE, '', 22));                     // first poll pending
+    else if (habitCache) k.action.setImage(face('·', 'empty', SILVER_HUE, '', 22, withFrame(k)));  // removed in manager
+    else k.action.setImage(face('⏳', '…', SILVER_HUE, '', 22, withFrame(k)));                     // first poll pending
     return;
   }
   // One integer namespace across pages (#52): 1..4 are the front keys,
@@ -383,17 +423,17 @@ function render(k) {
   if (def && def.qid) {
     // One half of a 👍/👎 pair. Both halves share a hue so they read as one
     // question rather than two unrelated asks.
-    k.action.setImage(face(def.emoji || '❓', def.label || def.habit, QUESTION_HUE, '❓ ' + n, 78));
+    k.action.setImage(face(def.emoji || '❓', def.label || def.habit, QUESTION_HUE, '❓ ' + n, 78, withFrame(k)));
   } else if (def && def.nudge) {
     // Proactive nudge: amber halo + ❗ so the poke reads across the room, and
     // it brightens as its TTL runs down.
     k.urgencyStep = urgencyStep(def);
     k.action.setImage(face(def.emoji || '✨', def.label || def.habit, NUDGE_HUE, '❗ ' + n, 90,
-      { urgency: nudgeUrgency(def) }));
+      withFrame(k, { urgency: nudgeUrgency(def) })));
   } else if (def) {
-    k.action.setImage(face(def.emoji || '✨', def.label || def.habit, VIOLET_HUE, 'AI ' + n));
+    k.action.setImage(face(def.emoji || '✨', def.label || def.habit, VIOLET_HUE, 'AI ' + n, undefined, withFrame(k)));
   } else {
-    k.action.setImage(face('✨', 'Slot ' + n, SILVER_HUE, 'AI', 22));
+    k.action.setImage(face('✨', 'Slot ' + n, SILVER_HUE, 'AI', 22, withFrame(k)));
   }
 }
 

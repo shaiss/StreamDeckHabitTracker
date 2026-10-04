@@ -531,7 +531,14 @@ like anywhere else.
 `NUDGE_HUE 38`, `QUESTION_HUE 300`, `sat 72`, the `#141827 → #0a0c13` base
 gradient, the halo formula, and the urgency math
 (`haloHi = 58 + 12·urg`, `haloOpacity = .62 + .33·urg`, `ringOpacity = .3 + .5·urg`,
-`ringWidth = 1.5 + 1.5·urg`). Replacing any of those with a token would let a
+`ringWidth = 1.5 + 1.5·urg`). The **turn-state frame** (#74 / study §2.2) is a
+*second*, outer ring with its own fixed palette — `STATE_IDLE #3A3F47`,
+`STATE_WORKING #2EA3FF`, `STATE_WAIT #FFB000`, `STATE_SUCCESS #22C55E`,
+`STATE_BLOCKED #FF4D4D` — declared as `STATE_*` in `plugin.mjs`, `STATE_COLORS`
+in `faces.mjs`, and `.frame-*` classes in `deck.html`. It must not become a
+page token either: a theme edit must not recolor "your move". Identity (halo +
+inner hairline) and state (outer stroke) never share pixels. `danger` is not a
+frame state. Replacing any of those with a token would let a
 web-side theme edit silently desync the virtual deck from the hardware, which is
 the one thing the virtual deck exists not to do. The halo in particular is a
 fixed formula, not a look — reproduce it exactly, never re-center it, never
@@ -610,8 +617,10 @@ whole specification:
   stands in for a key.
 * **Escalation is a ramp, not a blink** — an ignored nudge gets harder to keep
   ignoring, continuously, as a function of urgency.
-* **`prefers-reduced-motion` is honored nowhere in this repo yet.** The first
-  ambient loop added to the web must ship with it.
+* **`prefers-reduced-motion` is honored on the turn-state frame** (`deck.html`
+  `.frame-*` keyframes collapse to a single opacity; the plugin reads
+  `HT_REDUCED_MOTION=1` and freezes `frameStep` at 0). Other ambient loops still
+  owe the same fallback.
 
 Two more live constraints: the README screenshots are captured after
 `networkidle + 2500ms` with no interaction, and every e2e suite navigates with
@@ -653,9 +662,9 @@ minimum:
    once in the whole web surface (the `--grad-coach` declaration), and the
    `--font` stack literal appears exactly once (the `--font` declaration).
 5. **Key-face parity holds.** The halo formula, `NUDGE_HUE 38`,
-   `QUESTION_HUE 300`, `VIOLET_HUE 262` and the `#141827 → #0a0c13` base still
-   match `streamdeck-plugin/src/faces.mjs` — the existing drift-guard pattern,
-   extended to the values this document names.
+   `QUESTION_HUE 300`, `VIOLET_HUE 262`, the `#141827 → #0a0c13` base, and the
+   five `STATE_*` frame hexes still match `streamdeck-plugin/src/faces.mjs` —
+   the existing drift-guard pattern, extended to the values this document names.
 
 When the test and this document disagree, fix both in the same commit. When this
 document and a renderer disagree, the renderer is right and this document is

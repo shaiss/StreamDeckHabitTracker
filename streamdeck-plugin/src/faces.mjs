@@ -9,6 +9,67 @@ import { hueFor } from '../../tools/lib-hue.mjs';
 
 export { hueFor };
 
+// Turn-state palette (study §2.2 / #74). State owns the OUTER frame only;
+// object identity stays on the halo + inner ring. Tokens are duplicated in
+// plugin.mjs (STATE_*) and deck.html (.frame-*) — design-tokens.test.mjs
+// pins the three copies so they cannot drift. `danger` is NOT a frame state.
+export const STATE_COLORS = Object.freeze({
+  idle: '#3A3F47',
+  working: '#2EA3FF',
+  wait: '#FFB000',
+  success: '#22C55E',
+  blocked: '#FF4D4D'
+});
+export const FRAME_STATES = Object.freeze(Object.keys(STATE_COLORS));
+
+// Quantized motion on the plugin poll loop (#74, same idea as urgencyStep).
+// CSS on deck.html animates for real; the plugin only repaints when the step
+// changes. Periods are deliberately coarser than the study's Hz — a 3s tick
+// cannot breathe at 0.5 Hz, so wait flips on the tick and blocked twice as fast.
+export const FRAME_WAIT_MS = 3000;
+export const FRAME_BLOCKED_MS = 1500;
+export const FRAME_WORKING_MS = 4000;
+export const FRAME_SUCCESS_FADE_MS = 2400;
+
+export function resolveFrame(state) {
+  if (!state) return null;
+  const f = state.frame ?? state.frameState ?? null;
+  if (f == null || f === '') return null;
+  return Object.prototype.hasOwnProperty.call(STATE_COLORS, f) ? f : null;
+}
+
+// 0..N integer that only moves when the face would look different. Reduced
+// motion collapses every state to step 0 (steady brightness; callers skip
+// the repaint). Success steps 0..4 as it settles, then holds.
+export function frameStep(frame, now = 0, opts = {}) {
+  if (!frame || frame === 'idle' || opts.reducedMotion) return 0;
+  if (frame === 'wait') return Math.floor(now / FRAME_WAIT_MS) % 2;
+  if (frame === 'blocked') return Math.floor(now / FRAME_BLOCKED_MS) % 2;
+  if (frame === 'working') return Math.floor(now / (FRAME_WORKING_MS / 4)) % 4;
+  if (frame === 'success') {
+    const age = Math.max(0, now - (opts.since ?? now));
+    return Math.min(4, Math.floor(age / (FRAME_SUCCESS_FADE_MS / 4)));
+  }
+  return 0;
+}
+
+// Brightness 0..1 the SVG stroke reads. Reduced-motion: wait stays the
+// brightest (your-move louder than idle), blocked stays full, working mid.
+export function frameBright(frame, step = 0, opts = {}) {
+  if (!frame || frame === 'idle') return 0;
+  if (opts.reducedMotion) {
+    if (frame === 'wait' || frame === 'blocked') return 1;
+    if (frame === 'working') return 0.55;
+    if (frame === 'success') return 0.7;
+    return 0;
+  }
+  if (frame === 'wait') return step ? 1 : 0.45;
+  if (frame === 'blocked') return step ? 1 : 0.18;
+  if (frame === 'working') return 0.35 + (step / 3) * 0.65;
+  if (frame === 'success') return Math.max(0.22, 1 - step / 4);
+  return 0;
+}
+
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
 
@@ -25,6 +86,11 @@ function hslToHex(h, s, l) {
 // ({count, goal, doneToday, streak, ringFill}) and gain a streak ring,
 // dim-when-done + ✓, and count dots. Slot/nudge keys pass none and render
 // exactly as before.
+//
+// Turn-state frame (#74): optional `state.frame` / `state.frameState`
+// ('idle'|'working'|'wait'|'success'|'blocked'). Absent/null → byte-identical
+// to the pre-frame SVG. The state stroke is a SEPARATE outer ring so it never
+// shares pixels with the identity hairline or the #64 progress fill.
 export function face(emoji, label, hue, badge, sat = 72, state = null) {
   const done = !!(state && state.doneToday);
   if (done) sat = Math.round(sat * 0.55); // dim-when-done
@@ -51,6 +117,49 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
   // exact same rounded rect, so they read as one frame — keep them off the same
   // constants rather than two copies of the literals that could drift (#64 review).
   const frameR = 17, frameX = 6, frameY = 6, frameW = S - 12, frameH = S - 12;
+
+  // Outer state-frame geometry (#74). Inset 2 / stroke 2 occupies px 1–3;
+  // identity hairline is at 6 ± 0.75 and the #64 progress stroke at 6 ± 2
+  // (px 4–8). A 1px gap so state and identity never share a rasterized pixel.
+  const stateX = 2, stateY = 2, stateW = S - 4, stateH = S - 4, stateR = 21, stateSw = 2;
+
+  const frameName = resolveFrame(state);
+  let stateFrame = '';
+  if (frameName) {
+    const reduced = !!(state && state.reducedMotion);
+    const step = (state && typeof state.frameStep === 'number')
+      ? state.frameStep
+      : frameStep(frameName, (state && state.now) || 0, { reducedMotion: reduced, since: state && state.frameSince });
+    const bright = (state && typeof state.frameBright === 'number')
+      ? Math.max(0, Math.min(1, state.frameBright))
+      : frameBright(frameName, step, { reducedMotion: reduced });
+    const color = STATE_COLORS[frameName];
+    // Base opacity: idle is dim/off; wait is the loudest still floor;
+    // working/blocked/success scale with the quantized brightness step.
+    let opacity;
+    if (frameName === 'idle') opacity = 0.38;
+    else if (frameName === 'wait') opacity = (0.62 + 0.38 * bright).toFixed(2);
+    else if (frameName === 'working') opacity = (0.5 + 0.5 * bright).toFixed(2);
+    else if (frameName === 'blocked') opacity = (0.2 + 0.8 * bright).toFixed(2);
+    else opacity = (0.35 + 0.65 * bright).toFixed(2); // success settle-and-fade
+    const sw = frameName === 'wait' ? 2.6 : stateSw; // wait is brighter *and* a hair firmer
+    stateFrame =
+      `<g data-state-frame="${frameName}">` +
+      `<rect x="${stateX}" y="${stateY}" width="${stateW}" height="${stateH}" rx="${stateR}" ` +
+      `fill="none" stroke="${color}" stroke-opacity="${opacity}" stroke-width="${sw}"` +
+      (frameName === 'working' ? ` stroke-dasharray="10 7"` : '') +
+      `/>`;
+    if (frameName === 'success') {
+      stateFrame +=
+        `<text x="14" y="22" text-anchor="start" font-size="13" font-weight="700" ` +
+        `font-family="'Segoe UI',Arial,sans-serif" fill="${color}" fill-opacity="0.95">✓</text>`;
+    } else if (frameName === 'blocked') {
+      stateFrame +=
+        `<text x="14" y="22" text-anchor="start" font-size="14" font-weight="700" ` +
+        `font-family="'Segoe UI',Arial,sans-serif" fill="${color}" fill-opacity="0.95">!</text>`;
+    }
+    stateFrame += `</g>`;
+  }
 
   // Progress frame (#64): the key's OWN rounded-rect border fills, instead of a
   // separate circle floating over the square (which read as pasted-on because
@@ -119,6 +228,7 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
     `<rect width="${S}" height="${S}" fill="url(#b)"/>` +
     `<rect width="${S}" height="${S}" fill="url(#h)"/>` +
     `<rect x="${frameX}" y="${frameY}" width="${frameW}" height="${frameH}" rx="${frameR}" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` +
+    stateFrame +
     progressFrame +
     `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" ` +
     `font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc(emoji)}</text>` +
