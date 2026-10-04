@@ -256,6 +256,7 @@ test('Attention Beacon: interior stays violet coach across idle/wait/blocked (#7
   const haloStop = (svg) => (svg.match(/<radialGradient[\s\S]*?stop-color="(#[0-9a-f]+)"/i) || [])[1];
   const idleHalo = haloStop(idle);
   assert.ok(idleHalo, 'idle has a votive halo');
+  assert.equal(idleHalo, '#7f47e1', 'Coach interior is hue 262 violet, not some other shared color');
   assert.equal(haloStop(wait), idleHalo);
   assert.equal(haloStop(blocked), idleHalo);
 });

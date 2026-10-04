@@ -1,4 +1,4 @@
-// GET /api/slots -> { configured, aiReady, model, suggestedAt, slots: [def|null x4], coachPage: [def|null x12], rosterPending, today, track?, deck? }
+// GET /api/slots -> { configured, aiReady, model, suggestedAt, slots: [def|null x4], coachPage: [def|null x12], rosterPending, blocked, today, track?, deck? }
 // def = { habit, emoji, label, reason, assignedAt }
 // today = { [habitName]: { count, goal, doneToday, streak, ringFill } } (living key faces, #32)
 // Query: ?tz=<minutes> (viewer getTimezoneOffset; default 0=UTC) sets the day
@@ -14,6 +14,7 @@ import { normalizeConsent } from '../lib/takeover.js';
 import { scoreSuggestions } from '../lib/scorer.js';
 import { computeToday } from '../lib/today.js';
 import { nudgePass } from '../lib/coach.js';
+import { isBlocked } from '../lib/beacon.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -54,8 +55,13 @@ export default async function handler(req, res) {
       ...base, suggestedAt: doc.suggestedAt, slots: doc.slots, coachPage: coachPage.slots,
       coachNav: normalizeConsent(profile?.coachNav), today,
       // Count-only: the Attention Beacon (#75) adds this to the pending tally
-      // without pulling the full roster doc onto every plugin poll.
-      rosterPending: normalizeRoster(roster).proposals.length
+      // without pulling the full roster doc onto every plugin poll. `blocked`
+      // is the same isBlocked() the plugin/deck already run on the payload —
+      // today that is false until a producer marks a live slot (or a later
+      // poll flag); the field still has to exist so j.blocked is not a dead
+      // read.
+      rosterPending: normalizeRoster(roster).proposals.length,
+      blocked: isBlocked({ slots: doc.slots, coachPage: coachPage.slots })
     };
     // ?track=1 (dashboard only — keeps the plugin's poll light): behavioral
     // scorecard of past suggestions vs actual taps, plus the hardware
