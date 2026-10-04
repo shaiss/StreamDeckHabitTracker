@@ -8,6 +8,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { hueFor } from '../../tools/lib-hue.mjs';
 
 // fileURLToPath, not .pathname: on Windows the latter yields "/C:/..." and
 // every existsSync below silently 404s.
@@ -70,8 +71,9 @@ test('virtual deck renders the nudge key with identity interior, wait frame, and
   await page.waitForSelector('.nudgeface .frame-wait');
   assert.match(await page.$eval('.nudgeface .badge', (e) => e.textContent), /❗ 2/);
   assert.match(await page.$eval('.nudgeface .lb', (e) => e.textContent), /Water\?/);
-  assert.ok(await page.$eval('.nudgeface', (e) => e.style.getPropertyValue('--hue')),
-    'nudge interior uses the habit identity hue, not amber');
+  const hue = +(await page.$eval('.nudgeface', (e) => e.style.getPropertyValue('--hue')));
+  assert.equal(hue, hueFor('Drink'), 'nudge interior uses Drink identity hue, not amber');
+  assert.equal(hue, 49);
   // slot 1 is a plain suggestion — still the violet slotface, no wait frame
   assert.match(await page.$eval('.k[data-slot="1"] .facecss', (e) => e.className), /slotface/);
   assert.equal(await page.locator('.k[data-slot="1"] .frame-wait').count(), 0,

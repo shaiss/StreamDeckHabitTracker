@@ -216,8 +216,19 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   assert.ok(faces.includes('0.3 + 0.5 * interiorUrg'), 'faces.mjs changed the ring escalation slope');
   assert.ok(faces.includes('2.6 + 1.6 * clampUrgency(urg)'), 'wait stroke must firm with urgency');
   assert.ok(deck.includes('2.6px + 1.6px * var(--urg, 0)'), 'virtual wait stroke must firm with urgency');
-  assert.ok(deck.includes('3s * (1 - 0.6 * var(--urg, 0))'), 'virtual wait pulse must speed with urgency');
-  assert.ok(plugin.includes('function owedFrame'), 'plugin derives wait from qid/nudge, not hue');
+  assert.ok(deck.includes('calc(var(--wait-ms, 3000) * 1ms)'), 'virtual wait pulse uses --wait-ms');
+  assert.ok(faces.includes('[3000, 1000, 600]'), 'plugin wait periods must divide the 3s tick oddly');
+  assert.ok(deck.includes('return 600') && deck.includes('return 1000'),
+    'virtual deck snaps wait period to the same 3000/1000/600 ladder');
+  // Nudge halo is identity only — --urg lives on .frame-wait, never the interior.
+  const nudgeCss = (deck.match(/\.nudgeface\s*\{[^}]+\}/) || [])[0] || '';
+  assert.ok(nudgeCss, 'virtual deck has .nudgeface');
+  assert.ok(!nudgeCss.includes('--urg'), 'nudge halo must not use urgency-dependent styling');
+  assert.ok(nudgeCss.includes('var(--hue'), 'nudge interior is the habit identity hue');
+  const waitCss = (deck.match(/\.facecss \.frame-wait\s*\{[^}]+\}/) || [])[0] || '';
+  assert.ok(waitCss.includes('var(--urg'), 'urgency stays on .frame-wait');
+  assert.ok(waitCss.includes('--wait-ms'), 'wait pulse period is a frame property');
+  assert.ok(plugin.includes('owedFrame'), 'plugin derives wait from qid/nudge, not hue');
   assert.ok(deck.includes('function owedFrame'), 'virtual deck derives wait from qid/nudge');
   assert.ok(plugin.includes('beginAskAck') && deck.includes('function playAskAck'),
     'Ask answer keys must run wait → confirming → done on both renderers');

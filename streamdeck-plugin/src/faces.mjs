@@ -29,10 +29,15 @@ export const FRAME_STATES = Object.freeze(Object.keys(STATE_COLORS));
 // an odd quotient: otherwise some wall-clock phases advance an even number of
 // buckets and parity sticks (1500→÷2, 2500→phase-dependent ÷1 or ÷2). 1000ms
 // is ÷3 — every default tick flips, and the period stays faster than wait.
+export const FRAME_TICK_MS = 3000; // default HT_TICK_MS; wait periods divide this
 export const FRAME_WAIT_MS = 3000;
 export const FRAME_BLOCKED_MS = 1000;
 export const FRAME_WORKING_MS = 4000;
 export const FRAME_SUCCESS_FADE_MS = 2400;
+// Odd quotients of FRAME_TICK_MS: ÷1, ÷3, ÷5. Faster as urgency rises.
+// A continuous 3000→1200ms curve stalls: 3000/1200 = 2.5, so some phases
+// advance an even bucket count and wait parity sticks for a whole tick.
+export const FRAME_WAIT_PERIODS = Object.freeze([3000, 1000, 600]);
 
 export function resolveFrame(state) {
   if (!state) return null;
@@ -51,9 +56,23 @@ export function clampUrgency(u) {
   return Math.max(0, Math.min(1, n));
 }
 
-// Wait breathe period: 3000ms at urg=0 → 1200ms at urg=1 (#76 / #35).
+// Wait breathe period: 3000ms / 1000ms / 600ms (#76 / #35). Every value
+// divides FRAME_TICK_MS with an odd quotient, so frameStep always flips on
+// a default plugin tick regardless of wall-clock phase.
 export function waitPeriodMs(urg = 0) {
-  return Math.round(FRAME_WAIT_MS * (1 - 0.6 * clampUrgency(urg)));
+  const u = clampUrgency(urg);
+  if (u >= 2 / 3) return 600;
+  if (u >= 1 / 3) return 1000;
+  return FRAME_WAIT_MS;
+}
+
+// A press is genuinely owed: live question pair or live nudge. Violet
+// suggestions (coach merely speaking) return null — no amber frame (#76).
+export function owedFrame(def, now = Date.now()) {
+  if (!def) return null;
+  if (def.expiresAt && def.expiresAt <= now) return null;
+  if (def.qid || def.nudge) return 'wait';
+  return null;
 }
 
 export function frameStep(frame, now = 0, opts = {}) {

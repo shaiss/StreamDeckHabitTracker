@@ -165,7 +165,7 @@ Two violets, two jobs, and they are not interchangeable:
 `STATE_WAIT` — the wait-frame ring, reserved hard for a press that is genuinely
 owed (#76 / study §2.2). A live nudge keeps the poked habit's Ritual hue on the
 halo; as its TTL runs down, the **frame** firms (`2.6 + 1.6·urg`) and its breathe
-speeds (`3s·(1 − 0.6·urg)`), never the interior. On the web, `--amber` is hue 38
+speeds (3000 / 1000 / 600ms — odd quotients of the 3s plugin tick), never the interior. On the web, `--amber` is hue 38
 to match `STATE_WAIT #FFB000`. It also carries "your physical deck has gone
 quiet", which is the same idea: attention, now.
 
@@ -534,7 +534,7 @@ like anywhere else.
 interior hue: a live nudge keeps the poked habit's Ritual `--hue` on the halo
 and lights the **wait frame** (`STATE_WAIT #FFB000`) to say "your move" (#76).
 Urgency (#35) maps onto that frame (`wait stroke = 2.6 + 1.6·urg`, breathe
-period `3s·(1 − 0.6·urg)`), never the halo, whenever a turn-state frame is
+period 3000 / 1000 / 600ms so every default plugin tick flips), never the halo, whenever a turn-state frame is
 present. The no-frame fallback still uses
 (`haloHi = 58 + 12·urg`, `haloOpacity = .62 + .33·urg`, `ringOpacity = .3 + .5·urg`,
 `ringWidth = 1.5 + 1.5·urg`) so golden identity faces stay byte-identical. The

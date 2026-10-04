@@ -17410,6 +17410,7 @@ var FRAME_WAIT_MS = 3e3;
 var FRAME_BLOCKED_MS = 1e3;
 var FRAME_WORKING_MS = 4e3;
 var FRAME_SUCCESS_FADE_MS = 2400;
+var FRAME_WAIT_PERIODS = Object.freeze([3e3, 1e3, 600]);
 function resolveFrame(state) {
   if (!state) return null;
   const f = state.frame ?? state.frameState ?? null;
@@ -17422,7 +17423,16 @@ function clampUrgency(u) {
   return Math.max(0, Math.min(1, n));
 }
 function waitPeriodMs(urg = 0) {
-  return Math.round(FRAME_WAIT_MS * (1 - 0.6 * clampUrgency(urg)));
+  const u = clampUrgency(urg);
+  if (u >= 2 / 3) return 600;
+  if (u >= 1 / 3) return 1e3;
+  return FRAME_WAIT_MS;
+}
+function owedFrame(def, now = Date.now()) {
+  if (!def) return null;
+  if (def.expiresAt && def.expiresAt <= now) return null;
+  if (def.qid || def.nudge) return "wait";
+  return null;
 }
 function frameStep(frame, now = 0, opts = {}) {
   if (!frame || frame === "idle" || opts.reducedMotion) return 0;
@@ -17780,7 +17790,7 @@ var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.5.3";
+var VERSION = "2.5.4";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -17941,12 +17951,6 @@ function withFrame(k, state, now = Date.now()) {
     urgency: urg,
     now
   });
-}
-function owedFrame(def, now = Date.now()) {
-  if (!def) return null;
-  if (def.expiresAt && def.expiresAt <= now) return null;
-  if (def.qid || def.nudge) return "wait";
-  return null;
 }
 function setKeyFrame(k, frame, now = Date.now()) {
   if (k.frame !== frame) k.frameSince = now;

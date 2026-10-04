@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { face, hueFor, STATE_COLORS, FRAME_STATES, resolveFrame, frameStep, frameBright, FRAME_WAIT_MS, FRAME_BLOCKED_MS, waitPeriodMs } from '../../streamdeck-plugin/src/faces.mjs';
+import { face, hueFor, STATE_COLORS, FRAME_STATES, resolveFrame, frameStep, frameBright, FRAME_WAIT_MS, FRAME_BLOCKED_MS, FRAME_TICK_MS, FRAME_WAIT_PERIODS, waitPeriodMs, owedFrame } from '../../streamdeck-plugin/src/faces.mjs';
 
 const decode = (uri) => {
   assert.match(uri, /^data:image\/svg\+xml;base64,/);
@@ -144,7 +144,42 @@ test('a wait frame owns urgency: interior frozen, stroke firms, pulse speeds (#7
   assert.ok(ops[0] < ops[1], 'wait floor brightens: ' + ops.join(','));
   assert.equal(waitPeriodMs(0), FRAME_WAIT_MS);
   assert.ok(waitPeriodMs(1) < waitPeriodMs(0), 'pulse period shortens');
+  // frameStep must actually consume urgency — at 2000ms the default 3000ms
+  // period is still step 0, but urgency-1 (600ms) has already flipped.
+  assert.equal(frameStep('wait', 2000, { urgency: 0 }), 0);
+  assert.equal(frameStep('wait', 2000, { urgency: 1 }), 1, 'urgency shortens the pulse period');
   assert.equal(haloOpacity(at(0)), haloOpacity(at(1)));
+});
+
+test('owedFrame is wait only for a live question or nudge', () => {
+  const now = 1_800_000_000_000;
+  assert.equal(owedFrame({ qid: 'q1' }, now), 'wait');
+  assert.equal(owedFrame({ nudge: true }, now), 'wait');
+  assert.equal(owedFrame({ habit: 'Flow' }, now), null);
+  assert.equal(owedFrame({ qid: 'q1', expiresAt: now }, now), null);
+  assert.equal(owedFrame(null, now), null);
+});
+
+test('wait periods always flip on a 3000ms tick, at any wall-clock phase', () => {
+  // The 1200ms continuous curve failed this: floor((t+3000)/1200) sometimes
+  // equals floor(t/1200) in parity, so an urgent wait froze for a whole tick.
+  for (const p of FRAME_WAIT_PERIODS) {
+    assert.equal(FRAME_TICK_MS % p, 0, `period ${p} must divide the tick`);
+    assert.equal((FRAME_TICK_MS / p) % 2, 1, `tick must cover an odd number of ${p}ms periods`);
+  }
+  for (const u of [0, 0.2, 1 / 3, 0.5, 2 / 3, 0.9, 1]) {
+    const p = waitPeriodMs(u);
+    assert.ok(FRAME_WAIT_PERIODS.includes(p), `urg ${u} snapped to a legal period, got ${p}`);
+    for (let t = 0; t < FRAME_TICK_MS; t += 37) {
+      assert.notEqual(
+        frameStep('wait', t, { urgency: u }),
+        frameStep('wait', t + FRAME_TICK_MS, { urgency: u }),
+        `wait urg=${u} must flip on every default tick (t=${t})`
+      );
+    }
+  }
+  assert.ok(waitPeriodMs(1) < waitPeriodMs(0.5));
+  assert.ok(waitPeriodMs(0.5) < waitPeriodMs(0));
 });
 
 test('urgency is clamped, so bad input cannot emit invalid SVG', () => {

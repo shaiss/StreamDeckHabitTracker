@@ -206,7 +206,7 @@ test('registers and paints both faces from live server state (SVG)', async () =>
     const faces = p.images().map(svgOf);
     assert.ok(faces.some((f) => f.includes('>Flow<')), 'slot face shows the assigned habit');
     assert.ok(faces.some((f) => f.includes('>Pee<')), 'habit face shows the live habit list');
-    const flow = faces.find((f) => f.includes('>Flow<'));
+    const flow = faces.findLast((f) => f.includes('>Flow<'));
     assert.ok(flow && !flow.includes('data-state-frame="wait"'),
       'a violet suggestion must not light the wait frame');
   } finally { p.done(); }

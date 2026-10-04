@@ -28,7 +28,7 @@
 // reason; keys show the manifest's default action images until the first
 // poll paints them.
 import streamDeck, { SingletonAction, action } from '@elgato/streamdeck';
-import { face, hueFor, frameStep, FRAME_SUCCESS_FADE_MS } from './faces.mjs';
+import { face, hueFor, frameStep, FRAME_SUCCESS_FADE_MS, owedFrame } from './faces.mjs';
 import { createScheduler } from './scheduler.mjs';
 import { createGestures } from './gestures.mjs';
 import { deriveVisibility } from './visibility.mjs';
@@ -75,7 +75,7 @@ const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.3';
+let VERSION = '2.5.4';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -282,15 +282,6 @@ function withFrame(k, state, now = Date.now()) {
     urgency: urg,
     now
   });
-}
-
-// A press is genuinely owed: live question pair or live nudge. Violet
-// suggestions (coach merely speaking) return null — no amber frame (#76).
-function owedFrame(def, now = Date.now()) {
-  if (!def) return null;
-  if (def.expiresAt && def.expiresAt <= now) return null;
-  if (def.qid || def.nudge) return 'wait';
-  return null;
 }
 
 function setKeyFrame(k, frame, now = Date.now()) {

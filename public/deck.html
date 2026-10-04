@@ -183,7 +183,7 @@
       border-style: dashed; animation: frame-shimmer 1.8s linear infinite; }
     .facecss .frame-wait    { border-color: #FFB000; color: #FFB000; opacity: 1;
       border-width: calc(2.6px + 1.6px * var(--urg, 0));
-      animation: frame-breathe calc(3s * (1 - 0.6 * var(--urg, 0))) ease-in-out infinite; }
+      animation: frame-breathe calc(var(--wait-ms, 3000) * 1ms) ease-in-out infinite; }
     .facecss .frame-success { border-color: #22C55E; color: #22C55E;
       animation: frame-settle 1.6s ease-out 1 forwards; }
     .facecss .frame-blocked { border-color: #FF4D4D; color: #FF4D4D;
@@ -438,6 +438,13 @@
       return Math.max(0, Math.min(1, (Date.now() - def.assignedAt) / span));
     }
 
+    function waitPeriodMs(urg) {
+      urg = Math.max(0, Math.min(1, +urg || 0));
+      if (urg >= 2 / 3) return 600;
+      if (urg >= 1 / 3) return 1000;
+      return 3000;
+    }
+
     function owedFrame(def, now) {
       now = now || Date.now();
       if (!def) return null;
@@ -453,8 +460,10 @@
         const frame = resolveFrame({ frame: pressFrame }) || owedFrame(def);
         const parts = [];
         if (def.nudge) {
-          parts.push('--urg:' + urgencyOf(def).toFixed(3));
+          const urg = urgencyOf(def);
+          parts.push('--urg:' + urg.toFixed(3));
           parts.push('--hue:' + hueFor(def.habit || def.label || ''));
+          parts.push('--wait-ms:' + waitPeriodMs(urg));
         }
         const style = parts.length ? ' style="' + parts.join(';') + '"' : '';
         return '<span class="facecss ' + cls + '"' + style + '>' + stateFrameHtml(frame) + '<span class="badge">' + badge + '</span>' +
