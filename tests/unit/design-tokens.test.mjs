@@ -232,6 +232,10 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   assert.ok(deck.includes('function owedFrame'), 'virtual deck derives wait from qid/nudge');
   assert.ok(plugin.includes('beginAskAck') && deck.includes('function playAskAck'),
     'Ask answer keys must run wait → confirming → done on both renderers');
+  assert.ok(faces.includes("from '../../public/glyphs.js'"), 'plugin faces import the shared glyph grammar');
+  assert.ok(deck.includes("from '/glyphs.js'"), 'virtual deck imports the same glyph grammar');
+  assert.ok(plugin.includes('questionPaint') && deck.includes('questionPaint'),
+    'both renderers paint questions through questionPaint');
 
   // Turn-state frame (#74 / study §2.2): five palette hexes + the five
   // CSS classes. State owns the outer ring; identity stays interior.

@@ -6,8 +6,9 @@
 // about hsl()/hsla() support; the label "shadow" is a dark offset copy for the
 // same reason (no <filter> dependency).
 import { hueFor } from '../../tools/lib-hue.mjs';
+import { questionPaint, glyphFor, VERB_GLYPHS, GATE_ORDER } from '../../public/glyphs.js';
 
-export { hueFor };
+export { hueFor, questionPaint, glyphFor, VERB_GLYPHS, GATE_ORDER };
 
 // Turn-state palette (study §2.2 / #74). State owns the OUTER frame only;
 // object identity stays on the halo + inner ring. Tokens are duplicated in
@@ -146,6 +147,12 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
   const raw = String(label);
   const lbl = esc(raw.slice(0, 12));
   const lblSize = raw.length > 8 ? 17 : 20;
+  const grammar = !!(state && state.grammar);
+  const tintName = state && state.glyphTint;
+  const glyphFill = (tintName && STATE_COLORS[tintName]) || (grammar ? '#e9edf4' : null);
+  const labelFont = (state && state.mono)
+    ? "ui-monospace,'Cascadia Mono',Consolas,monospace"
+    : "'Segoe UI',Arial,sans-serif";
   const haloHi = hslToHex(hue, sat, 58 + 12 * interiorUrg);
   const haloLo = hslToHex(hue, sat, 45 + 8 * interiorUrg);
   const ring = hslToHex(hue, sat, 65 + 10 * interiorUrg);
@@ -275,12 +282,15 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
     `<rect x="${frameX}" y="${frameY}" width="${frameW}" height="${frameH}" rx="${frameR}" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` +
     stateFrame +
     progressFrame +
-    `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" ` +
-    `font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc(emoji)}</text>` +
+    `<text x="${S / 2}" y="76" text-anchor="middle" font-size="${grammar ? 54 : 62}" ` +
+    (glyphFill
+      ? `fill="${glyphFill}" font-weight="700" font-family="${labelFont}"`
+      : `font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif"`) +
+    `>${esc(emoji)}</text>` +
     `<text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" ` +
-    `font-family="'Segoe UI',Arial,sans-serif" fill="#000000" fill-opacity="0.55">${lbl}</text>` +
+    `font-family="${labelFont}" fill="#000000" fill-opacity="0.55">${lbl}</text>` +
     `<text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" ` +
-    `font-family="'Segoe UI',Arial,sans-serif" fill="#e9edf4">${lbl}</text>` +
+    `font-family="${labelFont}" fill="#e9edf4">${lbl}</text>` +
     tally +
     // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
     // the only corner mark a habit face ever shows.

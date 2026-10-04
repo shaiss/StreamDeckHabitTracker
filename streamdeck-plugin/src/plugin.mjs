@@ -40,6 +40,7 @@ import { nudgeUrgency, urgencyStep } from '../../lib/nudge.js';
 // deck and the backend must not disagree about when the coach may navigate.
 import { takeoverDue, RESTORE_MS, SUPPRESS_MS } from '../../lib/takeover.js';
 import { beaconOf } from '../../lib/beacon.js';
+import { questionPaint, isDetailsKey } from '../../public/glyphs.js';
 
 // A key dragged straight from the action list arrives with Settings: {} —
 // there is no Property Inspector, so without a compiled-in default it would
@@ -56,7 +57,7 @@ const POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 10000);
 const RECHECK_MS = (process.env.HT_RECHECK_MS || '2000,5000,9000,15000,25000').split(',').map(Number);
 
 const VIOLET_HUE = 262;   // reserved: the coach speaking (interior identity)
-const QUESTION_HUE = 300; // reserved: a linked 👍/👎 pair — identity, not pending (#76)
+const QUESTION_HUE = 300; // reserved: question-object identity, not pending (#76/#77)
 const SILVER_HUE = 222;   // neutral / pending
 // Amber is STATE_WAIT on the FRAME, never an interior hue. A live nudge keeps
 // the poked habit's Ritual hue on the halo; the wait frame says "your move".
@@ -75,7 +76,7 @@ const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.4';
+let VERSION = '2.5.5';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -437,6 +438,32 @@ function suppressTakeovers(k) {
     .catch(() => k.action.showAlert());
 }
 
+function slotDefOf(k) {
+  const n = parseInt(k.settings.slot, 10) || 1;
+  return n <= 4
+    ? (slotCache ? slotCache[n - 1] : null)
+    : (coachCache ? coachCache[n - 5] : null);
+}
+
+function settleQuestionSiblings(k) {
+  const def = slotDefOf(k);
+  if (!def || !def.qid) return;
+  for (const other of keys.values()) {
+    if (other === k || other.kind !== 'slot') continue;
+    const od = slotDefOf(other);
+    if (!od || od.qid !== def.qid) continue;
+    other.pressFrame = true;
+    setKeyFrame(other, 'idle');
+    try { render(other); } catch { /* next tick */ }
+  }
+}
+
+function showQuestionContext(k) {
+  const url = baseOf(k.settings) + '/';
+  Promise.resolve(streamDeck.system.openUrl(url)).catch(() => { /* no browser */ });
+  try { k.action.showOk(); } catch { /* key gone */ }
+}
+
 function render(k) {
   const s = k.settings;
   if (k.kind === 'coach') { renderCoach(k); return; }
@@ -456,15 +483,14 @@ function render(k) {
   // 5..16 index the coach page at n-5. Taps stay ?slot=n either way —
   // the server owns the same split.
   const n = parseInt(s.slot, 10) || 1;
-  const def = n <= 4
-    ? (slotCache ? slotCache[n - 1] : null)
-    : (coachCache ? coachCache[n - 5] : null);
+  const def = slotDefOf(k);
   // Nudges and questions both answer a hold with a refusal rather than an undo,
   // and neither registers a double-tap: a poke and an answer are single,
   // immediate acts, so their taps stay instant on release (#35, #34).
   const was = [k.isNudge, k.isQuestion];
   k.isNudge = !!(def && def.nudge);
   k.isQuestion = !!(def && def.qid);
+  k.isDetails = !!(def && def.qid && isDetailsKey(def));
   if (was[0] !== k.isNudge || was[1] !== k.isQuestion) {
     gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
   }
@@ -476,8 +502,12 @@ function render(k) {
   }
   if (def && def.qid) {
     // Identity is magenta (the question-object); the wait frame says your move.
-    // Both halves share the hue so they still read as one question (#34, #76).
-    k.action.setImage(face(def.emoji || '❓', def.label || def.habit, QUESTION_HUE, '❓ ' + n, 78, withFrame(k, null, now)));
+    // Glyph/label/badge come from the shared grammar so hardware and the
+    // virtual deck cannot disagree (#77).
+    const paint = questionPaint(def);
+    k.action.setImage(face(paint.glyph, paint.label, QUESTION_HUE, paint.badge, 78, withFrame(k, {
+      glyphTint: paint.glyphTint, grammar: true, mono: true
+    }, now)));
   } else if (def && def.nudge) {
     // Identity is the poked habit's Ritual hue; urgency lives on the wait frame.
     k.urgencyStep = urgencyStep(def, now);
@@ -582,7 +612,11 @@ function dispatch({ id, gesture }) {
     else undo(k);
   } else if (gesture === 'doubletap') tap(k, { intensity: 'high' });
   else {
-    if (k.isQuestion) beginAskAck(k);
+    if (k.isQuestion && k.isDetails) { showQuestionContext(k); return; }
+    if (k.isQuestion) {
+      beginAskAck(k);
+      settleQuestionSiblings(k);
+    }
     tap(k);
   }
 }

@@ -119,7 +119,9 @@
       color: #fff; text-align: center;
     }
     .facecss .em { font-size: calc(var(--key) * .40); line-height: 1.15; filter: drop-shadow(0 3px 4px rgba(0,0,0,.4)); }
+    .facecss .em-tint-success { color: #22C55E; filter: none; }
     .facecss .lb { font-size: calc(var(--key) * .13); font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6); letter-spacing: .02em; }
+    .facecss .lb.mono { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; text-transform: uppercase; letter-spacing: .06em; }
     .facecss .badge { position: absolute; top: 6px; right: 8px; font-size: calc(var(--key) * .085); font-weight: 700; color: rgba(255,255,255,.85); }
     .slotface, .coachface { background:
       radial-gradient(circle at 50% 36%, hsla(262,72%,58%,.62) 0%, hsla(262,72%,45%,.18) 42%, transparent 68%),
@@ -267,7 +269,8 @@
 
   <div class="hint" id="hint">Loading keys…</div>
 
-  <script>
+  <script type="module">
+    import { questionPaint, isDetailsKey } from '/glyphs.js';
     const KEY = new URLSearchParams(location.search).get('key') || '';
     const withKey = (u) => KEY ? u + '&key=' + encodeURIComponent(KEY) : u;
     const face = document.getElementById('face');
@@ -312,7 +315,14 @@
           title: 'AI slot ' + n,
           onTap: (e2) => {
             const d = slots[n - 1];
-            if (d && d.qid) playAskAck(e2);
+            if (d && d.qid && isDetailsKey(d)) {
+              hint.innerHTML = '<b>' + esc(d.question || 'Details') + '</b>';
+              return;
+            }
+            if (d && d.qid) {
+              playAskAck(e2);
+              settleQuestionSiblings(n, d.qid);
+            }
             tap(e2, '/api/log?slot=' + n);
           },
           onDouble: (e2) => tap(e2, '/api/log?slot=' + n + '&intensity=high'),
@@ -455,8 +465,9 @@
 
     function slotFaceHtml(def, n, pressFrame) {
       if (def) {
+        const paint = def.qid ? questionPaint(def) : null;
         const cls = def.qid ? 'qface' : def.nudge ? 'nudgeface' : 'slotface';
-        const badge = def.qid ? '❓ ' + n : def.nudge ? '❗ ' + n : 'AI ' + n;
+        const badge = paint ? paint.badge : (def.nudge ? '❗ ' + n : 'AI ' + n);
         const frame = resolveFrame({ frame: pressFrame }) || owedFrame(def);
         const parts = [];
         if (def.nudge) {
@@ -466,8 +477,14 @@
           parts.push('--wait-ms:' + waitPeriodMs(urg));
         }
         const style = parts.length ? ' style="' + parts.join(';') + '"' : '';
-        return '<span class="facecss ' + cls + '"' + style + '>' + stateFrameHtml(frame) + '<span class="badge">' + badge + '</span>' +
-          '<span class="em">' + esc(def.emoji) + '</span><span class="lb">' + esc(def.label || def.habit) + '</span></span>' +
+        const emCls = paint && paint.glyphTint ? ' em-tint-' + paint.glyphTint : '';
+        const lbCls = paint ? ' mono' : '';
+        const glyph = paint ? paint.glyph : def.emoji;
+        const label = paint ? paint.label : (def.label || def.habit);
+        return '<span class="facecss ' + cls + '"' + style + '>' + stateFrameHtml(frame) +
+          (badge ? '<span class="badge">' + esc(badge) + '</span>' : '') +
+          '<span class="em' + emCls + '">' + esc(glyph) + '</span>' +
+          '<span class="lb' + lbCls + '">' + esc(label) + '</span></span>' +
           '<span class="glass"></span><span class="flash"></span>';
       }
       return '<span class="facecss emptyface"><span class="badge">AI</span>' +
@@ -575,7 +592,7 @@
         const def = slots[n - 1];
         el.innerHTML = slotFaceHtml(def, n, el.dataset.pressFrame || null);
         el.title = def
-          ? (def.qid ? '❓ ' + def.question + '  → ' + def.label : def.emoji + ' ' + def.label + ' — ' + (def.reason || ''))
+          ? (def.qid ? (def.question || '') + '  → ' + (questionPaint(def).label) : def.emoji + ' ' + def.label + ' — ' + (def.reason || ''))
           : ('AI slot ' + n + ' — empty');
       });
       paintBeacon();
@@ -593,6 +610,16 @@
       el.title = b.blocked
         ? 'Coach blocked — tap for context (does not decide)'
         : (b.pending ? b.pending + ' pending — tap for context (does not decide)' : 'Coach quiet');
+    }
+
+    function settleQuestionSiblings(pressedN, qid) {
+      document.querySelectorAll('.k[data-slot]').forEach((el) => {
+        const i = +el.dataset.slot;
+        if (i === pressedN) return;
+        const d = slots[i - 1];
+        if (d && d.qid === qid) el.dataset.pressFrame = 'idle';
+      });
+      paintSlots();
     }
 
     function playAskAck(el) {

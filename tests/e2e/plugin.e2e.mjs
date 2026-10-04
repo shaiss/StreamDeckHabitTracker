@@ -350,23 +350,53 @@ test('a nudge key registers no double-tap, so its taps stay immediate', async ()
   } finally { p.done(); }
 });
 
-// --- coach question pairs (#34) ---
+// --- coach questions (#34 / #77 Approval Gate + Choice Picker) ---
 
-// Two linked keys sharing a qid, differing only in `answer`.
-const QUESTION = ['yes', 'no'].map((answer) => ({
-  habit: 'LunchSat', emoji: answer === 'yes' ? '👍' : '👎', label: answer === 'yes' ? 'Good' : 'Rough',
-  question: 'Did lunch sit well?', reason: 'Did lunch sit well?', qid: 'qtest',
-  answer, assignedAt: Date.now(), expiresAt: Date.now() + 3600_000
-}));
+const qNow = () => Date.now();
+const GATE = () => {
+  const now = qNow();
+  const base = {
+    habit: 'LunchSat', question: 'Did lunch sit well?', reason: 'Did lunch sit well?',
+    qid: 'qtest', assignedAt: now, expiresAt: now + 3600_000, pattern: 'gate'
+  };
+  return [
+    { ...base, emoji: '✓', label: 'APPROVE', answer: 'yes', verb: 'approve', gateRole: 'approve', glyphTint: 'success' },
+    { ...base, emoji: '…', label: 'DETAILS', answer: 'details', verb: 'details', gateRole: 'details' },
+    { ...base, emoji: '✕', label: 'DENY', answer: 'no', verb: 'reject', gateRole: 'deny' }
+  ];
+};
+const PICKER = () => {
+  const now = qNow();
+  return ['REBASE', 'MERGE', 'SQUASH'].map((label, i) => ({
+    habit: 'FixPick', emoji: '▤', label, question: 'Which fix?', reason: 'Which fix?',
+    qid: 'qpick', answer: String(i + 1), verb: 'options', pattern: 'picker',
+    choiceIndex: i + 1, assignedAt: now, expiresAt: now + 3600_000
+  }));
+};
+
+const appearSlot = (p, n) => p.emit({
+  event: 'willAppear', action: 'com.shaiss.habit-tracker.slot', context: 'ctx-slot-' + n,
+  device: 'dev-1',
+  payload: {
+    settings: { base: `http://127.0.0.1:${httpPort}`, slot: n },
+    coordinates: { column: n, row: 1 }, controller: 'Keypad', isInMultiAction: false
+  }
+});
+const svgCtx = (p, ctx) => {
+  const hits = p.images().filter((m) => m.context === ctx);
+  return hits.length ? svgOf(hits.at(-1)) : '';
+};
 
 test('a question key paints as its own kind of key, not a suggestion', async () => {
   const p = await boot();
   try {
-    slots = [QUESTION[0], QUESTION[1], null, null];
-    await until(() => p.images().some((m) => svgOf(m).includes('>Good<')), { label: 'the question face' });
-    const svg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Good<')));
-    assert.match(svg, />❓ 1</, 'badged as a question, not "AI 1"');
+    slots = GATE();
+    await until(() => p.images().some((m) => svgOf(m).includes('>APPROVE<')), { label: 'the question face' });
+    const svg = svgOf(p.images().findLast((m) => svgOf(m).includes('>APPROVE<')));
+    assert.ok(svg.includes('✓'), 'approve glyph from the shared grammar');
+    assert.match(svg, /fill="#22C55E"/, 'affirmative is tinted success');
     assert.doesNotMatch(svg, />AI 1</);
+    assert.doesNotMatch(svg, />❓/);
     assert.match(svg, /data-state-frame="wait"/, 'pending question lights the wait frame');
     assert.doesNotMatch(svg.replace(/<g data-state-frame="[^"]*">[\s\S]*?<\/g>/g, ''), /#FFB000/,
       'magenta identity stays interior; amber is only the frame');
@@ -375,25 +405,25 @@ test('a question key paints as its own kind of key, not a suggestion', async () 
 
 test('answering an Ask key runs wait → confirming → done frames (#76)', async () => {
   const p = await boot();
-  const lastGood = () => {
+  const lastApprove = () => {
     const hits = p.images().filter((m) => {
-      try { return svgOf(m).includes('>Good<'); } catch { return false; }
+      try { return svgOf(m).includes('>APPROVE<'); } catch { return false; }
     });
     return hits.length ? svgOf(hits.at(-1)) : '';
   };
   try {
-    slots = [QUESTION[0], QUESTION[1], null, null];
-    await until(() => lastGood().includes('data-state-frame="wait"'), { label: 'wait frame on the open question' });
+    slots = GATE();
+    await until(() => lastApprove().includes('data-state-frame="wait"'), { label: 'wait frame on the open question' });
     await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
-    await until(() => lastGood().includes('data-state-frame="working"'), { label: 'confirming (working) frame' });
-    await until(() => lastGood().includes('data-state-frame="success"'), { label: 'done (success) frame' });
+    await until(() => lastApprove().includes('data-state-frame="working"'), { label: 'confirming (working) frame' });
+    await until(() => lastApprove().includes('data-state-frame="success"'), { label: 'done (success) frame' });
   } finally { p.done(); }
 });
 test('answering goes through /api/log so it stays a real logged row', async () => {
   const p = await boot();
   try {
-    slots = [QUESTION[0], QUESTION[1], null, null];
-    await until(() => p.images().some((m) => svgOf(m).includes('>Good<')), { label: 'the question face' });
+    slots = GATE();
+    await until(() => p.images().some((m) => svgOf(m).includes('>APPROVE<')), { label: 'the question face' });
     logUrls.length = 0;
     await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
     await until(() => logUrls.length >= 1, { label: 'the answer' });
@@ -401,11 +431,46 @@ test('answering goes through /api/log so it stays a real logged row', async () =
   } finally { p.done(); }
 });
 
+test('DETAILS routes to context rather than committing', async () => {
+  const p = await boot();
+  try {
+    slots = GATE();
+    appearSlot(p, 2);
+    await until(() => svgCtx(p, 'ctx-slot-2').includes('>DETAILS<'), { label: 'details face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-2', 'com.shaiss.habit-tracker.slot');
+    await until(() => p.sent.some((m) => m.event === 'openUrl'), { label: 'openUrl to the dashboard' });
+    await sleep(200);
+    assert.equal(logUrls.length, 0, 'DETAILS must not hit /api/log');
+    const url = p.sent.filter((m) => m.event === 'openUrl').at(-1);
+    assert.match(url.payload.url, /\/$/);
+  } finally { p.done(); }
+});
+
+test('a Choice Picker badges options and settling siblings on press', async () => {
+  const p = await boot();
+  try {
+    slots = [...PICKER(), null];
+    appearSlot(p, 2);
+    appearSlot(p, 3);
+    await until(() => svgCtx(p, 'ctx-slot-1').includes('>REBASE<'), { label: 'option 1' });
+    await until(() => svgCtx(p, 'ctx-slot-2').includes('>MERGE<'), { label: 'option 2' });
+    assert.match(svgCtx(p, 'ctx-slot-1'), />①</, 'badge is the index, not a slot number');
+    assert.match(svgCtx(p, 'ctx-slot-2'), />②</);
+    assert.match(svgCtx(p, 'ctx-slot-1'), /data-state-frame="wait"/);
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => svgCtx(p, 'ctx-slot-1').includes('data-state-frame="working"')
+      || svgCtx(p, 'ctx-slot-1').includes('data-state-frame="success"'), { label: 'pressed option flashes' });
+    await until(() => svgCtx(p, 'ctx-slot-2').includes('data-state-frame="idle"'), { label: 'siblings settle to idle' });
+  } finally { p.done(); }
+});
+
 test('a hold on a question refuses it — POST /api/question, not /api/nudge', async () => {
   const p = await boot();
   try {
-    slots = [QUESTION[0], QUESTION[1], null, null];
-    await until(() => p.images().some((m) => svgOf(m).includes('>Good<')), { label: 'the question face' });
+    slots = GATE();
+    await until(() => p.images().some((m) => svgOf(m).includes('>APPROVE<')), { label: 'the question face' });
     logUrls.length = 0;
     await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot', 700);
     await until(() => logUrls.length >= 1, { label: 'the refusal' });
@@ -417,8 +482,8 @@ test('a hold on a question refuses it — POST /api/question, not /api/nudge', a
 test('a question key registers no double-tap — an answer is one act', async () => {
   const p = await boot();
   try {
-    slots = [QUESTION[0], QUESTION[1], null, null];
-    await until(() => p.images().some((m) => svgOf(m).includes('>Good<')), { label: 'the question face' });
+    slots = GATE();
+    await until(() => p.images().some((m) => svgOf(m).includes('>APPROVE<')), { label: 'the question face' });
     logUrls.length = 0;
     await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
     await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
@@ -468,7 +533,7 @@ test('a question pair counts as one; rosterPending adds; tap navigates and never
   try {
     appearCoach(p);
     await until(() => coachSvg(p).includes('🧭'), { label: 'coach appeared' });
-    slots = [QUESTION[0], QUESTION[1], null, null];
+    slots = GATE();
     pollExtra = { rosterPending: 2 };
     await until(() => coachSvg(p).includes('>3<'), { label: '1 question + 2 roster' });
     assert.match(coachSvg(p), /data-state-frame="wait"/);
