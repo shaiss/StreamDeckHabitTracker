@@ -1,7 +1,6 @@
 // E2E regression tests for proactive-nudge rendering: the dashboard slot card
-// and the virtual deck key face must both mark a nudge distinctly (amber, ❗)
-// while plain suggestions stay violet. Against a self-contained mock, same
-// setup as habits.e2e.mjs.
+// still tags a nudge, and the virtual deck key face keeps identity on the
+// interior with a wait frame (❗ badge), while plain suggestions stay violet.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -66,11 +65,15 @@ test('dashboard marks the nudge slot amber with an ❗ NUDGE tag, suggestions st
   assert.doesNotMatch(plain, /NUDGE/);
 });
 
-test('virtual deck renders the nudge key with the amber face and ❗ badge', async () => {
+test('virtual deck renders the nudge key with identity interior, wait frame, and ❗ badge', async () => {
   await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
-  await page.waitForSelector('.nudgeface');
+  await page.waitForSelector('.nudgeface .frame-wait');
   assert.match(await page.$eval('.nudgeface .badge', (e) => e.textContent), /❗ 2/);
   assert.match(await page.$eval('.nudgeface .lb', (e) => e.textContent), /Water\?/);
-  // slot 1 is a plain suggestion — still the violet slotface
+  assert.ok(await page.$eval('.nudgeface', (e) => e.style.getPropertyValue('--hue')),
+    'nudge interior uses the habit identity hue, not amber');
+  // slot 1 is a plain suggestion — still the violet slotface, no wait frame
   assert.match(await page.$eval('.k[data-slot="1"] .facecss', (e) => e.className), /slotface/);
+  assert.equal(await page.locator('.k[data-slot="1"] .frame-wait').count(), 0,
+    'a violet suggestion owes no press, so no wait frame');
 });

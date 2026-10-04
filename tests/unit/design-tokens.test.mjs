@@ -93,7 +93,6 @@ const FUNC_ALLOW = {
   'public/deck.html': [
     // §7.2 key faces: the halo/base formulas that mirror faces.mjs
     'hsla(262,72%,58%,.62)', 'hsla(262,72%,45%,.18)',
-    'hsla(38,90%,45%,.20)', 'hsla(38,90%,65%,',
     'hsla(300,78%,58%,.66)', 'hsla(300,78%,45%,.20)',
     'hsla(222,20%,55%,.35)',
     // §7.1 device render: plastic sheen, cast shadows, LCD glass, flash scrim
@@ -195,29 +194,33 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   const faces = read('streamdeck-plugin/src/faces.mjs');
   const plugin = read('streamdeck-plugin/src/plugin.mjs');
 
-  // Hue carries meaning across both renderers: violet = a suggestion, amber =
-  // a nudge, magenta = a question. faces.mjs takes hue as a PARAMETER, so the
-  // constants live in its caller — assert them where they actually are.
+  // Hue carries meaning across both renderers: violet = the coach speaking
+  // (interior only). Magenta = a question-object's identity (interior). Amber
+  // is STATE_WAIT on the frame — never a halo (#76). faces.mjs takes hue as a
+  // PARAMETER, so identity constants live in its caller.
   for (const [what, decl, mark] of [
     ['violet slot', 'VIOLET_HUE = 262', 'hsla(262'],
-    ['amber nudge', 'NUDGE_HUE = 38', 'hsla(38'],
     ['magenta question', 'QUESTION_HUE = 300', 'hsla(300']
   ]) {
     assert.ok(plugin.includes(decl), `plugin.mjs lost the ${what} hue`);
     assert.ok(deck.includes(mark), `deck.html lost the ${what} hue`);
   }
+  assert.ok(!plugin.includes('NUDGE_HUE'), 'amber is a wait-frame color, not an interior hue');
+  assert.ok(!deck.includes('hsla(38'), 'virtual deck must not paint amber interiors');
 
-  // The halo is a fixed formula, not a look: same off-center origin and the
-  // same escalation slopes on both sides.
+  // The halo is a fixed formula, not a look: same off-center origin. Interior
+  // urgency is the no-frame fallback; live nudges escalate the wait frame.
   assert.ok(faces.includes('cy="0.36"'), 'faces.mjs moved the halo origin');
   assert.ok(deck.includes('circle at 50% 36%'), 'deck.html moved the halo origin');
-  for (const [file, src, lightness, ring] of [
-    ['faces.mjs', faces, '58 + 12 * urg', '0.3 + 0.5 * urg'],
-    ['deck.html', deck, '58% + var(--urg,0) * 12%', '.3 + var(--urg,0) * .5']
-  ]) {
-    assert.ok(src.includes(lightness), `${file} changed the halo escalation slope`);
-    assert.ok(src.includes(ring), `${file} changed the ring escalation slope`);
-  }
+  assert.ok(faces.includes('58 + 12 * interiorUrg'), 'faces.mjs changed the halo escalation slope');
+  assert.ok(faces.includes('0.3 + 0.5 * interiorUrg'), 'faces.mjs changed the ring escalation slope');
+  assert.ok(faces.includes('2.6 + 1.6 * clampUrgency(urg)'), 'wait stroke must firm with urgency');
+  assert.ok(deck.includes('2.6px + 1.6px * var(--urg, 0)'), 'virtual wait stroke must firm with urgency');
+  assert.ok(deck.includes('3s * (1 - 0.6 * var(--urg, 0))'), 'virtual wait pulse must speed with urgency');
+  assert.ok(plugin.includes('function owedFrame'), 'plugin derives wait from qid/nudge, not hue');
+  assert.ok(deck.includes('function owedFrame'), 'virtual deck derives wait from qid/nudge');
+  assert.ok(plugin.includes('beginAskAck') && deck.includes('function playAskAck'),
+    'Ask answer keys must run wait → confirming → done on both renderers');
 
   // Turn-state frame (#74 / study §2.2): five palette hexes + the five
   // CSS classes. State owns the outer ring; identity stays interior.

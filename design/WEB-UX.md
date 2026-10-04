@@ -161,12 +161,13 @@ Two violets, two jobs, and they are not interchangeable:
 * `--violet-ink` is **type**. Any coach status rendered as words — `ON A SLOT
   KEY NOW`, a confidence label, a `SLOT 3` tag — wears it.
 
-**Amber is the coach's second voice: the nudge.** An unsolicited, expiring poke.
-It is the only color in the system whose *intensity is a function of time*: as a
-nudge's TTL runs down, halo lightness climbs `+12%`, halo opacity `+.33`, and the
-border firms up `+2px` (`faces.mjs:42-47`, mirrored at `deck.html:100-105` via
-`--urg`). On the web, `--amber` is hue 38 to match `NUDGE_HUE`. It also carries
-"your physical deck has gone quiet", which is the same idea: attention, now.
+**Amber is the coach's second voice: "your move".** On the deck it is
+`STATE_WAIT` — the wait-frame ring, reserved hard for a press that is genuinely
+owed (#76 / study §2.2). A live nudge keeps the poked habit's Ritual hue on the
+halo; as its TTL runs down, the **frame** firms (`2.6 + 1.6·urg`) and its breathe
+speeds (`3s·(1 − 0.6·urg)`), never the interior. On the web, `--amber` is hue 38
+to match `STATE_WAIT #FFB000`. It also carries "your physical deck has gone
+quiet", which is the same idea: attention, now.
 
 For an amber or violet *fill* derive it, do not add a token:
 
@@ -527,11 +528,17 @@ like anywhere else.
 
 **2. The virtual deck's coach faces** (`.slotface`, `.nudgeface`, `.qface`,
 `.habitface`, `.emptyface`). These are **byte-parity mirrors** of
-`streamdeck-plugin/src/faces.mjs` and must stay that way: `VIOLET_HUE 262`,
-`NUDGE_HUE 38`, `QUESTION_HUE 300`, `sat 72`, the `#141827 → #0a0c13` base
-gradient, the halo formula, and the urgency math
+`streamdeck-plugin/src/faces.mjs` and must stay that way: `VIOLET_HUE 262`
+(coach speaking), `QUESTION_HUE 300` (question-object identity), `sat 72`, the
+`#141827 → #0a0c13` base gradient, and the halo formula. Amber is **not** an
+interior hue: a live nudge keeps the poked habit's Ritual `--hue` on the halo
+and lights the **wait frame** (`STATE_WAIT #FFB000`) to say "your move" (#76).
+Urgency (#35) maps onto that frame (`wait stroke = 2.6 + 1.6·urg`, breathe
+period `3s·(1 − 0.6·urg)`), never the halo, whenever a turn-state frame is
+present. The no-frame fallback still uses
 (`haloHi = 58 + 12·urg`, `haloOpacity = .62 + .33·urg`, `ringOpacity = .3 + .5·urg`,
-`ringWidth = 1.5 + 1.5·urg`). The **turn-state frame** (#74 / study §2.2) is a
+`ringWidth = 1.5 + 1.5·urg`) so golden identity faces stay byte-identical. The
+**turn-state frame** (#74 / study §2.2) is a
 *second*, outer ring with its own fixed palette — `STATE_IDLE #3A3F47`,
 `STATE_WORKING #2EA3FF`, `STATE_WAIT #FFB000`, `STATE_SUCCESS #22C55E`,
 `STATE_BLOCKED #FF4D4D` — declared as `STATE_*` in `plugin.mjs`, `STATE_COLORS`
@@ -661,8 +668,9 @@ minimum:
 4. **No duplicate recipes.** The string `linear-gradient(135deg` appears exactly
    once in the whole web surface (the `--grad-coach` declaration), and the
    `--font` stack literal appears exactly once (the `--font` declaration).
-5. **Key-face parity holds.** The halo formula, `NUDGE_HUE 38`,
-   `QUESTION_HUE 300`, `VIOLET_HUE 262`, the `#141827 → #0a0c13` base, and the
+5. **Key-face parity holds.** The halo formula, `QUESTION_HUE 300`,
+   `VIOLET_HUE 262`, wait-frame urgency (`2.6 + 1.6·urg`), the
+   `#141827 → #0a0c13` base, and the
    five `STATE_*` frame hexes still match `streamdeck-plugin/src/faces.mjs` —
    the existing drift-guard pattern, extended to the values this document names.
 

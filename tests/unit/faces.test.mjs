@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { face, hueFor, STATE_COLORS, FRAME_STATES, resolveFrame, frameStep, frameBright, FRAME_WAIT_MS, FRAME_BLOCKED_MS } from '../../streamdeck-plugin/src/faces.mjs';
+import { face, hueFor, STATE_COLORS, FRAME_STATES, resolveFrame, frameStep, frameBright, FRAME_WAIT_MS, FRAME_BLOCKED_MS, waitPeriodMs } from '../../streamdeck-plugin/src/faces.mjs';
 
 const decode = (uri) => {
   assert.match(uri, /^data:image\/svg\+xml;base64,/);
@@ -133,6 +133,18 @@ test('urgency brightens the halo and firms the border, monotonically', () => {
   assert.ok(halos[0] < halos[1] && halos[1] < halos[2], 'halo opacity rises: ' + halos.join(','));
   assert.ok(borders[0] < borders[1] && borders[1] < borders[2], 'border thickens: ' + borders.join(','));
   assert.ok(halos[2] <= 1, 'and never becomes an invalid opacity');
+});
+
+test('a wait frame owns urgency: interior frozen, stroke firms, pulse speeds (#76)', () => {
+  const at = (u) => svgOf(face('💧', 'Water?', 38, '❗ 1', 72, { frame: 'wait', urgency: u, now: 0 }));
+  assert.equal(stripFrame(at(0)), stripFrame(at(1)), 'interior (halo/ring/glyph) ignores urgency');
+  const widths = [0, 0.5, 1].map((u) => cues(at(u)).width);
+  assert.ok(widths[0] < widths[1] && widths[1] < widths[2], 'wait stroke firms: ' + widths.join(','));
+  const ops = [0, 1].map((u) => cues(at(u)).opacity);
+  assert.ok(ops[0] < ops[1], 'wait floor brightens: ' + ops.join(','));
+  assert.equal(waitPeriodMs(0), FRAME_WAIT_MS);
+  assert.ok(waitPeriodMs(1) < waitPeriodMs(0), 'pulse period shortens');
+  assert.equal(haloOpacity(at(0)), haloOpacity(at(1)));
 });
 
 test('urgency is clamped, so bad input cannot emit invalid SVG', () => {

@@ -159,4 +159,6 @@ test('the virtual deck renders question keys as their own thing', () => {
   const src = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
   assert.match(src, /qface/, 'a question face exists');
   assert.match(src, /def\.qid \? '❓/, 'and is chosen by qid, ahead of nudge/suggestion');
+  assert.match(src, /function owedFrame/, 'pending questions light the wait frame, not a hue swap');
+  assert.match(src, /playAskAck/, 'answering runs wait → confirming → done');
 });

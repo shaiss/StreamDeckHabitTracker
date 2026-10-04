@@ -110,9 +110,9 @@
 
     /* CSS-rendered faces (AI slots + fallbacks) — byte-parity mirrors of
        streamdeck-plugin/src/faces.mjs. Sanctioned exception (design/WEB-UX.md
-       §7): the hues, halo formula, base gradient and urgency math must NOT
-       become tokens, or a web-side theme edit silently desyncs the virtual deck
-       from the hardware. The #fff ink mirrors the SVG faces' label fill. */
+       §7): the hues, halo formula, base gradient and wait-frame urgency math
+       must NOT become tokens, or a web-side theme edit silently desyncs the
+       virtual deck from the hardware. The #fff ink mirrors the SVG faces' label fill. */
     .facecss {
       position: absolute; inset: 0; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 2px; padding-bottom: 10px;
@@ -124,17 +124,13 @@
     .slotface, .coachface { background:
       radial-gradient(circle at 50% 36%, hsla(262,72%,58%,.62) 0%, hsla(262,72%,45%,.18) 42%, transparent 68%),
       linear-gradient(180deg,#141827,#0a0c13); }
-    /* the coach speaking louder: a proactive nudge burns amber, not violet.
-       --urg (0..1) escalates it as the TTL runs down — mirrors the plugin's
-       face(), which brightens the halo and firms the border the same way. */
+    /* a live nudge: Ritual identity hue on the interior (hueFor(habit)), wait
+       frame for "your move". --urg (0..1) escalates the FRAME, not the halo. */
     .nudgeface { background:
-      radial-gradient(circle at 50% 36%,
-        hsla(38,90%,calc(58% + var(--urg,0) * 12%),calc(.66 + var(--urg,0) * .33)) 0%,
-        hsla(38,90%,45%,.20) 42%, transparent 68%),
-      linear-gradient(180deg,#141827,#0a0c13);
-      box-shadow: inset 0 0 0 calc(1px + var(--urg,0) * 2px) hsla(38,90%,65%,calc(.3 + var(--urg,0) * .5)); }
-    /* the coach ASKING: a linked yes/no pair, magenta so it is neither a
-       plain suggestion (violet) nor a nudge (amber) — #34 */
+      radial-gradient(circle at 50% 36%, hsla(var(--hue,222),72%,58%,.62) 0%, hsla(var(--hue,222),72%,45%,.18) 42%, transparent 68%),
+      linear-gradient(180deg,#141827,#0a0c13); }
+    /* the coach ASKING: magenta is the question-object identity (#34/#76);
+       pending-ness lives on the wait frame, not this halo. */
     .qface { background:
       radial-gradient(circle at 50% 36%, hsla(300,78%,58%,.66) 0%, hsla(300,78%,45%,.20) 42%, transparent 68%),
       linear-gradient(180deg,#141827,#0a0c13); }
@@ -186,7 +182,8 @@
     .facecss .frame-working { border-color: #2EA3FF; color: #2EA3FF; opacity: .85;
       border-style: dashed; animation: frame-shimmer 1.8s linear infinite; }
     .facecss .frame-wait    { border-color: #FFB000; color: #FFB000; opacity: 1;
-      border-width: 2.6px; animation: frame-breathe 2s ease-in-out infinite; }
+      border-width: calc(2.6px + 1.6px * var(--urg, 0));
+      animation: frame-breathe calc(3s * (1 - 0.6 * var(--urg, 0))) ease-in-out infinite; }
     .facecss .frame-success { border-color: #22C55E; color: #22C55E;
       animation: frame-settle 1.6s ease-out 1 forwards; }
     .facecss .frame-blocked { border-color: #FF4D4D; color: #FF4D4D;
@@ -198,7 +195,7 @@
     .facecss .frame-success::after { content: '✓'; }
     .facecss .frame-blocked::after { content: '!'; }
     @keyframes frame-breathe {
-      0%, 100% { opacity: .55; box-shadow: 0 0 4px currentColor; }
+      0%, 100% { opacity: calc(0.45 + 0.40 * var(--urg, 0)); box-shadow: 0 0 4px currentColor; }
       50%      { opacity: 1;   box-shadow: 0 0 12px currentColor; }
     }
     @keyframes frame-shimmer {
@@ -313,7 +310,11 @@
       for (let n = 1; n <= 4; n++) {
         const el = keyEl({
           title: 'AI slot ' + n,
-          onTap: (e2) => tap(e2, '/api/log?slot=' + n),
+          onTap: (e2) => {
+            const d = slots[n - 1];
+            if (d && d.qid) playAskAck(e2);
+            tap(e2, '/api/log?slot=' + n);
+          },
           onDouble: (e2) => tap(e2, '/api/log?slot=' + n + '&intensity=high'),
           // Nudge-ness is decided by the server and can flip between polls, so
           // resolve it at press time, not when the key was built: a hold on a
@@ -437,12 +438,26 @@
       return Math.max(0, Math.min(1, (Date.now() - def.assignedAt) / span));
     }
 
-    function slotFaceHtml(def, n) {
+    function owedFrame(def, now) {
+      now = now || Date.now();
+      if (!def) return null;
+      if (def.expiresAt && def.expiresAt <= now) return null;
+      if (def.qid || def.nudge) return 'wait';
+      return null;
+    }
+
+    function slotFaceHtml(def, n, pressFrame) {
       if (def) {
         const cls = def.qid ? 'qface' : def.nudge ? 'nudgeface' : 'slotface';
         const badge = def.qid ? '❓ ' + n : def.nudge ? '❗ ' + n : 'AI ' + n;
-        const style = def.nudge ? ' style="--urg:' + urgencyOf(def).toFixed(3) + '"' : '';
-        return '<span class="facecss ' + cls + '"' + style + '>' + stateFrameHtml(resolveFrame(def)) + '<span class="badge">' + badge + '</span>' +
+        const frame = resolveFrame({ frame: pressFrame }) || owedFrame(def);
+        const parts = [];
+        if (def.nudge) {
+          parts.push('--urg:' + urgencyOf(def).toFixed(3));
+          parts.push('--hue:' + hueFor(def.habit || def.label || ''));
+        }
+        const style = parts.length ? ' style="' + parts.join(';') + '"' : '';
+        return '<span class="facecss ' + cls + '"' + style + '>' + stateFrameHtml(frame) + '<span class="badge">' + badge + '</span>' +
           '<span class="em">' + esc(def.emoji) + '</span><span class="lb">' + esc(def.label || def.habit) + '</span></span>' +
           '<span class="glass"></span><span class="flash"></span>';
       }
@@ -549,7 +564,7 @@
       document.querySelectorAll('.k[data-slot]').forEach((el) => {
         const n = +el.dataset.slot;
         const def = slots[n - 1];
-        el.innerHTML = slotFaceHtml(def, n);
+        el.innerHTML = slotFaceHtml(def, n, el.dataset.pressFrame || null);
         el.title = def
           ? (def.qid ? '❓ ' + def.question + '  → ' + def.label : def.emoji + ' ' + def.label + ' — ' + (def.reason || ''))
           : ('AI slot ' + n + ' — empty');
@@ -569,6 +584,18 @@
       el.title = b.blocked
         ? 'Coach blocked — tap for context (does not decide)'
         : (b.pending ? b.pending + ' pending — tap for context (does not decide)' : 'Coach quiet');
+    }
+
+    function playAskAck(el) {
+      const go = (frame, ms, done) => {
+        el.dataset.pressFrame = frame;
+        paintSlots();
+        setTimeout(() => {
+          if (done) { delete el.dataset.pressFrame; paintSlots(); }
+          else go('success', 1600, true);
+        }, ms);
+      };
+      go('working', 280, false);
     }
 
     function flash(el, ok) {

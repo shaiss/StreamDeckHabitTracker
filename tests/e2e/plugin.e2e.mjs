@@ -206,6 +206,9 @@ test('registers and paints both faces from live server state (SVG)', async () =>
     const faces = p.images().map(svgOf);
     assert.ok(faces.some((f) => f.includes('>Flow<')), 'slot face shows the assigned habit');
     assert.ok(faces.some((f) => f.includes('>Pee<')), 'habit face shows the live habit list');
+    const flow = faces.find((f) => f.includes('>Flow<'));
+    assert.ok(flow && !flow.includes('data-state-frame="wait"'),
+      'a violet suggestion must not light the wait frame');
   } finally { p.done(); }
 });
 
@@ -292,20 +295,31 @@ test('nothing to undo flashes an alert rather than an OK', async () => {
 
 const haloOpacity = (svg) => +svg.match(/id="h"[\s\S]*?stop-opacity="([\d.]+)"/)[1];
 
-test('a nudge key escalates as its TTL runs down', async () => {
+const waitWidth = (svg) => {
+  const m = svg.match(/data-state-frame="wait"[\s\S]*?stroke-width="([\d.]+)"/);
+  return m ? +m[1] : 0;
+};
+
+test('a nudge key escalates via the wait frame; interior hue stays put (#76)', async () => {
   const p = await boot();
   try {
     slots = [nudgeAt(0.05), null, null, null];
     await until(() => p.images().some((m) => svgOf(m).includes('>Water?<')), { label: 'the fresh nudge face' });
-    const fresh = haloOpacity(svgOf(p.images().findLast((m) => svgOf(m).includes('>Water?<'))));
+    const freshSvg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Water?<')));
+    assert.match(freshSvg, /data-state-frame="wait"/, 'live nudge lights the wait frame');
+    const freshHalo = haloOpacity(freshSvg);
+    const freshW = waitWidth(freshSvg);
 
     slots = [nudgeAt(0.95), null, null, null];   // same poke, nearly expired
     await until(() => {
       const last = p.images().findLast((m) => svgOf(m).includes('>Water?<'));
-      return last && haloOpacity(svgOf(last)) > fresh;
-    }, { label: 'the escalated face' });
-    const late = haloOpacity(svgOf(p.images().findLast((m) => svgOf(m).includes('>Water?<'))));
-    assert.ok(late > fresh, `an ignored nudge should get louder: ${fresh} -> ${late}`);
+      return last && waitWidth(svgOf(last)) > freshW;
+    }, { label: 'the escalated wait frame' });
+    const lateSvg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Water?<')));
+    assert.equal(haloOpacity(lateSvg), freshHalo, 'interior halo must not carry urgency');
+    assert.ok(waitWidth(lateSvg) > freshW, `wait stroke should firm: ${freshW} -> ${waitWidth(lateSvg)}`);
+    assert.doesNotMatch(lateSvg.replace(/<g data-state-frame="[^"]*">[\s\S]*?<\/g>/g, ''), /#FFB000/,
+      'amber is the frame, not the halo');
   } finally { p.done(); }
 });
 
@@ -353,9 +367,31 @@ test('a question key paints as its own kind of key, not a suggestion', async () 
     const svg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Good<')));
     assert.match(svg, />❓ 1</, 'badged as a question, not "AI 1"');
     assert.doesNotMatch(svg, />AI 1</);
+    assert.match(svg, /data-state-frame="wait"/, 'pending question lights the wait frame');
+    assert.doesNotMatch(svg.replace(/<g data-state-frame="[^"]*">[\s\S]*?<\/g>/g, ''), /#FFB000/,
+      'magenta identity stays interior; amber is only the frame');
   } finally { p.done(); }
 });
 
+test('answering an Ask key runs wait → confirming → done frames (#76)', async () => {
+  const p = await boot();
+  try {
+    slots = [QUESTION[0], QUESTION[1], null, null];
+    await until(() => {
+      const svg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Good<')));
+      return svg && svg.includes('data-state-frame="wait"');
+    }, { label: 'wait frame on the open question' });
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => {
+      const svg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Good<')));
+      return svg && svg.includes('data-state-frame="working"');
+    }, { label: 'confirming (working) frame' });
+    await until(() => {
+      const svg = svgOf(p.images().findLast((m) => svgOf(m).includes('>Good<')));
+      return svg && svg.includes('data-state-frame="success"');
+    }, { label: 'done (success) frame' });
+  } finally { p.done(); }
+});
 test('answering goes through /api/log so it stays a real logged row', async () => {
   const p = await boot();
   try {
