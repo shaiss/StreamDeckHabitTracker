@@ -19,6 +19,8 @@ let server, browser, context, page, port;
 let calls = [];        // every /api/log + /api/nudge request, as "METHOD url"
 let logStatus = 200;
 let nudgeFraction = null;   // null = slot 1 holds a plain suggestion
+let mockRosterPending = 0;
+let mockBlocked = false;
 
 before(async () => {
   server = createServer((req, res) => {
@@ -51,6 +53,8 @@ before(async () => {
               },
           null, null, null
         ],
+        rosterPending: mockRosterPending,
+        blocked: mockBlocked,
         today: {}
       }));
       return;
@@ -74,10 +78,12 @@ before(async () => {
 after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open({ nudge = null } = {}) {
+async function open({ nudge = null, roster = 0, blocked = false } = {}) {
   calls = [];
   logStatus = 200;
   nudgeFraction = nudge;
+  mockRosterPending = roster;
+  mockBlocked = blocked;
   await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.k[data-habit="0"]');
   return page.locator('.k[data-habit="0"]');
@@ -169,6 +175,44 @@ test('the Stats key still opens the dashboard on a plain tap', async () => {
   const p = await popup;
   assert.match(p.url(), /\/$/);
   await p.close();
+});
+
+test('Attention Beacon: idle / wait+count / blocked faces; tap never logs (#75)', async () => {
+  await open();
+  await page.waitForSelector('.k[data-beacon]');
+  const faceOf = () => page.$eval('.k[data-beacon]', (el) => ({
+    cls: el.querySelector('.facecss')?.className || '',
+    frame: el.querySelector('.stateframe')?.className || '',
+    badge: el.querySelector('.badge')?.textContent || '',
+    glyph: el.querySelector('.em')?.textContent || ''
+  }));
+  let f = await faceOf();
+  assert.match(f.cls, /coachface/, 'violet coach interior');
+  assert.match(f.frame, /frame-idle/, 'dark/idle when nothing pending');
+  assert.equal(f.badge, '');
+  assert.equal(f.glyph, '🧭');
+
+  await open({ nudge: 0.4, roster: 2 });
+  await page.waitForFunction(() => document.querySelector('.k[data-beacon] .frame-wait'));
+  f = await faceOf();
+  assert.match(f.cls, /coachface/, 'interior stays coachface, not nudgeface');
+  assert.doesNotMatch(f.cls, /nudgeface|qface/);
+  assert.match(f.frame, /frame-wait/);
+  assert.equal(f.badge, '3', '1 live nudge + 2 roster proposals');
+  assert.equal(f.glyph, '🧭');
+
+  await open({ blocked: true });
+  await page.waitForFunction(() => document.querySelector('.k[data-beacon] .frame-blocked'));
+  f = await faceOf();
+  assert.match(f.cls, /coachface/);
+  assert.match(f.frame, /frame-blocked/);
+  assert.equal(f.glyph, '🧭');
+
+  calls = [];
+  await page.locator('.k[data-beacon]').click();
+  await settle();
+  assert.equal(calls.length, 0, 'beacon is a signpost — no log, dismiss, or answer');
+  assert.match(await page.$eval('#hint', (e) => e.textContent), /blocked|signpost|quiet|pending/i);
 });
 
 test('keys claim touch-action:none and keep a tap after pointer capture', async () => {

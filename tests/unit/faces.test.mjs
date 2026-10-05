@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { face, hueFor } from '../../streamdeck-plugin/src/faces.mjs';
+import { face, hueFor, STATE_COLORS, FRAME_STATES, resolveFrame, frameStep, frameBright, FRAME_WAIT_MS, FRAME_BLOCKED_MS } from '../../streamdeck-plugin/src/faces.mjs';
 
 const decode = (uri) => {
   assert.match(uri, /^data:image\/svg\+xml;base64,/);
@@ -141,4 +141,122 @@ test('urgency is clamped, so bad input cannot emit invalid SVG', () => {
     const o = haloOpacity(svg);
     assert.ok(o >= 0 && o <= 1, `opacity ${o} out of range for urgency ${u}`);
   }
+});
+
+// --- turn-state frame (#74) ---
+
+const GOLDEN_WATER = '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="#f4ae34" stop-opacity="0.62"/><stop offset="0.42" stop-color="#da8e0b" stop-opacity="0.18"/><stop offset="1" stop-color="#da8e0b" stop-opacity="0"/></radialGradient></defs><rect width="144" height="144" fill="url(#b)"/><rect width="144" height="144" fill="url(#h)"/><rect x="6" y="6" width="132" height="132" rx="17" fill="none" stroke="#f6bb55" stroke-opacity="0.30" stroke-width="1.5"/><text x="72" y="76" text-anchor="middle" font-size="62" font-family="\'Segoe UI Emoji\',\'Apple Color Emoji\',\'Noto Color Emoji\',sans-serif">💧</text><text x="73" y="117" text-anchor="middle" font-size="20" font-weight="600" font-family="\'Segoe UI\',Arial,sans-serif" fill="#000000" fill-opacity="0.55">Water</text><text x="72" y="116" text-anchor="middle" font-size="20" font-weight="600" font-family="\'Segoe UI\',Arial,sans-serif" fill="#e9edf4">Water</text><text x="134" y="18" text-anchor="end" font-size="11" font-weight="700" font-family="\'Segoe UI\',Arial,sans-serif" fill="#f5d7a3" fill-opacity="0.9">AI 1</text></svg>';
+
+const stripFrame = (svg) => svg.replace(/<g data-state-frame="[^"]*">[\s\S]*?<\/g>/g, '');
+const frameGroup = (svg) => {
+  const m = svg.match(/<g data-state-frame="([^"]*)">([\s\S]*?)<\/g>/);
+  return m ? { name: m[1], body: m[2] } : null;
+};
+const cues = (svg) => {
+  const g = frameGroup(svg);
+  if (!g) return { name: null, check: false, bang: false, dash: false, opacity: null, width: null };
+  return {
+    name: g.name,
+    check: />✓</.test(g.body),
+    bang: />!</.test(g.body),
+    dash: /stroke-dasharray/.test(g.body),
+    opacity: +(g.body.match(/stroke-opacity="([\d.]+)"/) || [])[1],
+    width: +(g.body.match(/stroke-width="([\d.]+)"/) || [])[1]
+  };
+};
+
+test('a face with no frameState is byte-identical to the pre-frame golden', () => {
+  assert.equal(svgOf(face('💧', 'Water', 38, 'AI 1', 90)), GOLDEN_WATER);
+  assert.equal(svgOf(face('💧', 'Water', 38, 'AI 1', 90, null)), GOLDEN_WATER);
+  assert.equal(svgOf(face('💧', 'Water', 38, 'AI 1', 90, { doneToday: false })), GOLDEN_WATER);
+  assert.equal(svgOf(face('💧', 'Water', 38, 'AI 1', 90, { frame: null })), GOLDEN_WATER);
+  assert.equal(svgOf(face('💧', 'Water', 38, 'AI 1', 90, { frameState: 'danger' })), GOLDEN_WATER,
+    'danger is not a frame state — unknown values must no-op');
+});
+
+test('each of the five frame states is a distinct outer stroke', () => {
+  const at = (frame, extra = {}) => svgOf(face('💧', 'Water', 38, 'AI 1', 90, { frame, now: 0, ...extra }));
+  const drawn = Object.fromEntries(FRAME_STATES.map((f) => [f, at(f)]));
+  const names = new Set(Object.values(drawn).map((s) => frameGroup(s)?.name));
+  assert.deepEqual([...names].sort(), [...FRAME_STATES].sort(), 'all five states emit a tagged frame');
+  for (const [a, b] of [['idle', 'working'], ['working', 'wait'], ['wait', 'success'], ['success', 'blocked'], ['idle', 'wait']]) {
+    assert.notEqual(drawn[a], drawn[b], `${a} and ${b} must not share a frame`);
+  }
+  for (const f of FRAME_STATES) {
+    const svg = drawn[f];
+    assert.ok(svg.includes(`stroke="${STATE_COLORS[f]}"`), `${f} uses ${STATE_COLORS[f]}`);
+    assert.match(svg, /<rect x="2" y="2" width="140" height="140" rx="21"/,
+      `${f} draws the OUTER rect, not the identity ring`);
+    assert.ok(!/<filter[\s>]/.test(svg), 'rasterizer-safe: no SVG filter');
+    assert.equal(stripFrame(svg), GOLDEN_WATER, `${f}: interior (halo/ring/glyph) is unchanged`);
+  }
+  assert.equal(cues(drawn.success).check, true, 'success carries a ✓ on the frame');
+  assert.equal(cues(drawn.blocked).bang, true, 'blocked carries a ! on the frame');
+  assert.equal(cues(drawn.working).dash, true, 'working has a shimmer dash (non-hue mark)');
+  assert.ok(cues(drawn.wait).opacity > cues(drawn.idle).opacity, 'wait is brighter than idle');
+  assert.ok(cues(drawn.wait).width > cues(drawn.idle).width, 'wait stroke is firmer than idle');
+  // frameState alias
+  assert.ok(frameGroup(at('wait')) && resolveFrame({ frameState: 'wait' }) === 'wait');
+  assert.equal(at('wait'), svgOf(face('💧', 'Water', 38, 'AI 1', 90, { frameState: 'wait', now: 0 })));
+});
+
+test('desaturate: the five states stay distinguishable without hue', () => {
+  const at = (frame, extra = {}) => cues(svgOf(face('💧', 'Water', 38, 'AI 1', 90, { frame, now: 0, ...extra })));
+  const idle = at('idle');
+  const working = at('working');
+  const wait = at('wait');
+  const success = at('success');
+  const blocked = at('blocked');
+  // Signature is motion/glyph/brightness — never the hex. Idle is still + dim;
+  // working has a dash; wait is brighter/firmer; success has ✓; blocked has !.
+  const sig = (c) => [c.check, c.bang, c.dash, c.opacity > 0.5, (c.width || 0) > 2.2].join(',');
+  const sigs = [idle, working, wait, success, blocked].map(sig);
+  assert.equal(new Set(sigs).size, 5, 'desaturated signatures collide: ' + sigs.join(' | '));
+  // Brightness steps survive reduced-motion (still distinct vs idle).
+  const waitStill = at('wait', { reducedMotion: true });
+  const idleStill = at('idle', { reducedMotion: true });
+  assert.ok(waitStill.opacity > idleStill.opacity, 'reduced-motion wait stays louder than idle');
+  assert.equal(frameStep('wait', 99999, { reducedMotion: true }), 0);
+  assert.equal(frameStep('blocked', 99999, { reducedMotion: true }), 0);
+  assert.ok(frameStep('wait', FRAME_WAIT_MS, { reducedMotion: false }) !==
+    frameStep('wait', 0, { reducedMotion: false }), 'wait flips on its period');
+  const tick = 3000; // plugin default HT_TICK_MS
+  assert.equal(tick % FRAME_BLOCKED_MS, 0, 'blocked period must divide the tick (no remainder → no phase alias)');
+  assert.equal((tick / FRAME_BLOCKED_MS) % 2, 1, 'tick must cover an odd number of blocked periods');
+  for (let t = 0; t < tick; t += 37) {
+    assert.notEqual(frameStep('blocked', t), frameStep('blocked', t + tick),
+      `blocked must flip on every default tick regardless of phase (t=${t})`);
+  }
+  assert.ok(frameBright('blocked', 1) > frameBright('blocked', 0), 'blocked blink is a brightness step');
+});
+
+test('state frame does not disturb living-face interior (#32/#64)', () => {
+  const st = state({ count: 1, goal: 3, ringFill: 1 / 3 });
+  const plain = svgOf(face('🚽', 'Pee', 20, '', 72, st));
+  const framed = svgOf(face('🚽', 'Pee', 20, '', 72, { ...st, frame: 'wait', now: 0 }));
+  assert.equal(stripFrame(framed), plain, 'progress fill / dots / halo survive a wait frame');
+  assert.ok(framed.includes('stroke-dasharray'), 'the #64 fill is still there');
+  assert.ok(framed.includes('data-state-frame="wait"'), 'and the outer wait frame is too');
+});
+
+test('Attention Beacon: interior stays violet coach across idle/wait/blocked (#75)', () => {
+  const at = (frame, badge) => svgOf(face('🧭', 'Coach', 262, badge, 72, { frame, now: 0 }));
+  const idle = at('idle', '');
+  const wait = at('wait', '2');
+  const blocked = at('blocked', '2');
+  assert.equal(stripFrame(wait), stripFrame(at('idle', '2')), 'wait vs idle: only the frame differs');
+  assert.equal(stripFrame(wait), stripFrame(blocked), 'blocked vs wait: only the frame differs');
+  assert.ok(idle.includes('🧭') && wait.includes('🧭') && blocked.includes('🧭'));
+  assert.equal(frameGroup(idle).name, 'idle');
+  assert.equal(frameGroup(wait).name, 'wait');
+  assert.equal(frameGroup(blocked).name, 'blocked');
+  assert.ok(cues(blocked).bang, 'blocked ! lives on the frame, not the glyph');
+  assert.match(wait, />2</, 'pending count is the top-right badge');
+  assert.doesNotMatch(idle, />2</);
+  const haloStop = (svg) => (svg.match(/<radialGradient[\s\S]*?stop-color="(#[0-9a-f]+)"/i) || [])[1];
+  const idleHalo = haloStop(idle);
+  assert.ok(idleHalo, 'idle has a votive halo');
+  assert.equal(idleHalo, '#7f47e1', 'Coach interior is hue 262 violet, not some other shared color');
+  assert.equal(haloStop(wait), idleHalo);
+  assert.equal(haloStop(blocked), idleHalo);
 });
