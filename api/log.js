@@ -54,7 +54,7 @@ export default async function handler(req, res) {
     let habit = (q.habit || '').toString().trim();
     let emoji = '';
     let slotField;
-    let questionDef = null;   // set when this slot is one half of a 👍/👎 pair
+    let questionDef = null;   // set when this slot is a question-pattern key
 
     // ?hkey=N: positional habit key — resolve which habit currently lives at
     // that position (habit manager can change it any time), like AI slots.
@@ -114,8 +114,17 @@ export default async function handler(req, res) {
     if (slotField) entry.slot = slotField;
     const intensity = (q.intensity || '').toString();
     if (INTENSITIES.has(intensity)) entry.i = intensity;
-    // Answering the coach's question (#34): the tap is still a real log row,
-    // but it also carries which question it answers and which way.
+    // DETAILS is the escape hatch: it routes to context and must not log or
+    // spend the question (#77). The deck normally never POSTs this; belt and
+    // braces if a client does.
+    if (questionDef && (questionDef.gateRole === 'details' || questionDef.verb === 'details'
+      || questionDef.answer === 'details')) {
+      res.status(200).send(questionDef.question || 'Details');
+      return;
+    }
+
+    // Answering the coach's question (#34/#77): the tap is still a real log
+    // row, but it also carries which question it answers and which way.
     if (questionDef) {
       entry.q = questionDef.qid;
       entry.a = questionDef.answer;
@@ -123,8 +132,8 @@ export default async function handler(req, res) {
     await append(entry);
     res.status(200).send('Logged: ' + habit + (entry.i ? ' (' + entry.i + ')' : ''));
 
-    // A question is spent once answered: record the verdict and retire BOTH
-    // halves of the pair, so the other key cannot be tapped to "answer" again.
+    // A question is spent once answered: record the verdict and retire every
+    // key that shares the qid, so a sibling cannot "answer" again.
     if (questionDef) {
       await answerQuestion(questionDef);
     }

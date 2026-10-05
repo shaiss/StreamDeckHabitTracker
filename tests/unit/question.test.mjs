@@ -17,21 +17,49 @@ const RAW = {
 
 // --- shaping ---
 
-test('a question becomes two linked keys that differ only in the answer', () => {
+test('a yes/no question becomes a 3-key Approval Gate in fixed order', () => {
   const q = sanitizeQuestion(RAW, { now: NOW });
-  const [yes, no] = q.pair;
-  assert.equal(yes.qid, no.qid, 'the shared qid is what makes them a pair');
-  assert.equal(yes.habit, no.habit, 'both log the same thing');
-  assert.deepEqual([yes.answer, no.answer], ['yes', 'no']);
-  assert.deepEqual([yes.label, no.label], ['Good', 'Rough']);
-  assert.equal(yes.question, RAW.text, 'the text rides on both keys');
-  assert.equal(yes.expiresAt, NOW + QUESTION_TTL_MS);
+  assert.equal(q.pattern, 'gate');
+  assert.equal(q.keys.length, 3);
+  const [approve, details, deny] = q.keys;
+  assert.equal(approve.qid, deny.qid, 'the shared qid is what makes them one question');
+  assert.equal(details.qid, approve.qid);
+  assert.deepEqual(q.keys.map((k) => k.gateRole), ['approve', 'details', 'deny']);
+  assert.deepEqual(q.keys.map((k) => k.label), ['APPROVE', 'DETAILS', 'DENY']);
+  assert.deepEqual(q.keys.map((k) => k.emoji), ['✓', '…', '✕']);
+  assert.deepEqual(q.keys.map((k) => k.answer), ['yes', 'details', 'no']);
+  assert.equal(approve.glyphTint, 'success');
+  assert.equal(deny.glyphTint, undefined, 'deny stays neutral');
+  assert.ok(q.keys.every((k) => k.habit === RAW.habit), 'every gate key logs the same habit');
+  assert.ok(q.keys.every((k) => k.question === RAW.text), 'the text rides on every key');
+  assert.equal(approve.expiresAt, NOW + QUESTION_TTL_MS);
 });
 
-test('👍/👎 are the defaults when the model names no faces', () => {
-  const [yes, no] = sanitizeQuestion({ text: 'Tired?', habit: 'Tired' }, { now: NOW }).pair;
-  assert.deepEqual([yes.emoji, no.emoji], ['👍', '👎']);
-  assert.deepEqual([yes.label, no.label], ['Yes', 'No']);
+test('model yes/no faces are ignored — the gate labels are the grammar', () => {
+  const keys = sanitizeQuestion({ text: 'Tired?', habit: 'Tired' }, { now: NOW }).keys;
+  assert.deepEqual(keys.map((k) => k.emoji), ['✓', '…', '✕']);
+  assert.deepEqual(keys.map((k) => k.label), ['APPROVE', 'DETAILS', 'DENY']);
+});
+
+test('options[] become a Choice Picker with index badges, not numbers in the label', () => {
+  const q = sanitizeQuestion({
+    text: 'Which sat better?',
+    habit: 'MealPick',
+    options: [{ label: 'Salad' }, { label: 'option 2 pasta' }, { label: 'Soup' }]
+  }, { now: NOW });
+  assert.equal(q.pattern, 'picker');
+  assert.equal(q.keys.length, 3);
+  assert.deepEqual(q.keys.map((k) => k.choiceIndex), [1, 2, 3]);
+  assert.deepEqual(q.keys.map((k) => k.badge), ['①', '②', '③']);
+  assert.deepEqual(q.keys.map((k) => k.label), ['SALAD', 'OPTION PASTA', 'SOUP']);
+  assert.ok(q.keys.every((k) => k.emoji === '▤'));
+  assert.ok(q.keys.every((k) => !/\d/.test(k.label)), 'digits live on the badge');
+});
+
+test('a one-option list is not a picker — it falls through to the gate', () => {
+  const q = sanitizeQuestion({ text: 'Only?', habit: 'Only', options: [{ label: 'Yes' }] }, { now: NOW });
+  assert.equal(q.pattern, 'gate');
+  assert.equal(q.keys.length, 3);
 });
 
 test('unusable questions are dropped, never thrown on', () => {
@@ -56,7 +84,7 @@ test('hostile field values are clamped, not trusted', () => {
   }, { now: NOW });
   assert.equal(q.text.length, MAX_TEXT);
   assert.equal(q.habit, 'BadHabitscript', 'stripped to the safe charset');
-  assert.equal(q.pair[0].label.length, 12);
+  assert.equal(q.keys[0].label, 'APPROVE', 'gate labels are not taken from hostile yes.label');
 });
 
 test('ttlMinutes is honored inside the same 15..720 window as slots', () => {
@@ -93,24 +121,31 @@ test('answered and dismissed questions are no longer open', () => {
 
 // --- slot placement ---
 
-test('a pair prefers empty slots', () => {
-  assert.deepEqual(pickQuestionSlots([null, { habit: 'A', assignedAt: 9 }, null, null], NOW), [1, 3]);
+test('a gate prefers a consecutive empty window, in left-to-right order', () => {
+  // [null, A, null, null]: both 3-windows have one busy key; leftmost wins
+  // so APPROVE/DETAILS/DENY stay spatially ordered.
+  assert.deepEqual(pickQuestionSlots([null, { habit: 'A', assignedAt: 9 }, null, null], NOW, 3), [1, 2, 3]);
 });
 
-test('a pair takes the stalest assignments when nothing is free', () => {
+test('when every window is equally busy, the stalest consecutive run wins', () => {
   const s = (h, at) => ({ habit: h, assignedAt: at });
-  assert.deepEqual(pickQuestionSlots([s('A', 50), s('B', 10), s('C', 90), s('D', 30)], NOW), [2, 4]);
+  // window 1-3 stale=50+10+90=150; window 2-4 stale=10+90+30=130 → pick 2,3,4
+  assert.deepEqual(pickQuestionSlots([s('A', 50), s('B', 10), s('C', 90), s('D', 30)], NOW, 3), [2, 3, 4]);
 });
 
 test('a live nudge is never displaced by a question', () => {
   // Both are the coach interrupting; talking over itself is worse than waiting.
   const nudge = { habit: 'Water', nudge: true, assignedAt: NOW, expiresAt: NOW + 3600_000 };
-  assert.deepEqual(pickQuestionSlots([nudge, null, null, { habit: 'A', assignedAt: 5 }], NOW), [2, 3]);
+  assert.deepEqual(pickQuestionSlots([nudge, null, null, { habit: 'A', assignedAt: 5 }], NOW, 3), [2, 3, 4]);
 });
 
-test('no room means no question, rather than a half-placed pair', () => {
+test('no consecutive window means no question, rather than a half-placed gate', () => {
   const nudge = { habit: 'W', nudge: true, assignedAt: NOW, expiresAt: NOW + 3600_000 };
-  assert.equal(pickQuestionSlots([nudge, nudge, nudge, { habit: 'A', assignedAt: 1 }], NOW), null);
+  assert.equal(pickQuestionSlots([nudge, nudge, null, { habit: 'A', assignedAt: 1 }], NOW, 3), null);
+});
+
+test('a 2-option picker still wants a consecutive pair', () => {
+  assert.deepEqual(pickQuestionSlots([null, { habit: 'A', assignedAt: 9 }, null, null], NOW, 2), [3, 4]);
 });
 
 // --- scoring ---
@@ -166,17 +201,31 @@ test('owedFrame lights wait only for a live question or nudge', () => {
   assert.equal(owedFrame(null), null);
 });
 
-test('the virtual deck renders question keys as their own thing', () => {
+test('the virtual deck renders question keys through the shared grammar', () => {
   const src = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
   const plugin = readFileSync(new URL('../../streamdeck-plugin/src/plugin.mjs', import.meta.url), 'utf8');
   assert.match(src, /qface/, 'a question face exists');
-  assert.match(src, /def\.qid \? '❓/, 'and is chosen by qid, ahead of nudge/suggestion');
+  assert.match(src, /questionPaint\(def\)/, 'and is painted from the shared grammar');
+  assert.match(src, /from '\/glyphs\.js'/);
   assert.match(src, /owedFrame\(def\)/, 'pending questions light the wait frame, not a hue swap');
   assert.match(src, /function playAskAck/, 'Ask ack helper exists on the virtual deck');
   assert.match(src, /if \(d && d\.qid\) playAskAck\(e2\)/, 'question-key tap is wired to playAskAck');
+  assert.match(src, /function commitSlot/, 'all slot gestures share one commit path');
+  assert.match(src, /onTap: \(e2\) => commitSlot\(e2, n\)/);
+  assert.match(src, /onDouble: \(e2\) => commitSlot\(e2, n, '&intensity=high'\)/,
+    'double-tap uses the same DETAILS guard as tap');
   assert.match(src, /go\('working',\s*280/, 'Ask ack starts on confirming (working)');
   assert.match(src, /go\('success',\s*1600/, 'Ask ack settles on done (success)');
+  assert.match(src, /settleQuestionSiblings/, 'picker siblings settle to idle');
+  assert.match(src, /isDetailsKey\(d\)/, 'DETAILS routes to context, not /api/log');
   assert.match(plugin, /ASK_CONFIRMING_MS = 280/, 'plugin Ask ack uses the same confirming beat');
   assert.match(plugin, /setKeyFrame\(k, 'working'\)/);
   assert.match(plugin, /setKeyFrame\(k, 'success'\)/);
+  assert.match(plugin, /showQuestionContext/, 'DETAILS opens context rather than committing');
+  assert.match(plugin, /function commitSlotKey/, 'plugin double-tap shares the DETAILS guard');
+  assert.match(plugin, /settleQuestionSiblings/);
+  assert.match(plugin, /k\.settledQid && k\.settledQid !== qid/,
+    'sibling press latch clears when a later question lands on that key');
+  assert.match(plugin, /try \{ render\(other\); \} catch \{ \/\* next tick \*\/ \}/,
+    'a sibling face failure must not abort the answer log');
 });

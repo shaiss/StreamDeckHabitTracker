@@ -1,7 +1,7 @@
 // GET  /api/question              -> the open question (if any) + the
 //                                    asked/answered/dismissed/ignored record
 // POST /api/question?dismiss=1[&slot=N] -> "I'm not answering that": retires
-//                                    both halves of the pair and records a
+//                                    every key of the pattern and records a
 //                                    `dismissed` verdict, which must stay
 //                                    distinguishable from letting it lapse.
 //

@@ -17397,6 +17397,103 @@ function hueFor(name) {
   return hue;
 }
 
+// public/glyphs.js
+var VERB_GLYPHS = Object.freeze({
+  approve: "\u2713",
+  reject: "\u2715",
+  defer: "\u2192",
+  details: "\u2026",
+  back: "\u2039",
+  // Reserved for later patterns; present so the grammar is one table.
+  run: "\u25B6",
+  stop: "\u25A0",
+  options: "\u25A4",
+  drill: "\u2295"
+});
+var CHOICE_BADGES = Object.freeze(["\u2460", "\u2461", "\u2462", "\u2463"]);
+var GATE_ORDER = Object.freeze(["approve", "details", "deny"]);
+var GATE_FACE = Object.freeze({
+  approve: Object.freeze({
+    verb: "approve",
+    label: "APPROVE",
+    answer: "yes",
+    glyphTint: "success"
+  }),
+  details: Object.freeze({
+    verb: "details",
+    label: "DETAILS",
+    answer: "details"
+  }),
+  deny: Object.freeze({
+    verb: "reject",
+    label: "DENY",
+    answer: "no"
+  })
+});
+var MAX_LABEL_WORDS = 2;
+function glyphFor(verb) {
+  return VERB_GLYPHS[verb] || "";
+}
+function choiceBadge(index) {
+  const i = Number(index);
+  if (i >= 1 && i <= CHOICE_BADGES.length) return CHOICE_BADGES[i - 1];
+  return Number.isFinite(i) && i > 0 ? String(i) : "";
+}
+function faceLabel(raw, fallback = "") {
+  const cleaned = String(raw || "").replace(/[0-9]+/g, " ").replace(/[^A-Za-z\s'-]/g, " ");
+  const words = cleaned.trim().split(/\s+/).filter(Boolean).slice(0, MAX_LABEL_WORDS);
+  const s = (words.join(" ") || String(fallback || "")).toUpperCase();
+  return s.slice(0, 12);
+}
+function gatePaint(role) {
+  const spec = GATE_FACE[role];
+  if (!spec) return null;
+  return {
+    glyph: glyphFor(spec.verb),
+    label: spec.label,
+    badge: "",
+    glyphTint: spec.glyphTint || null,
+    grammar: true,
+    mono: true,
+    verb: spec.verb,
+    role
+  };
+}
+function questionPaint(def) {
+  if (!def) return null;
+  if (def.pattern === "gate" && def.gateRole) return gatePaint(def.gateRole);
+  if (def.pattern === "picker" || def.choiceIndex) {
+    const i = def.choiceIndex || 1;
+    return {
+      glyph: glyphFor("options"),
+      label: faceLabel(def.label, def.habit || "OPT"),
+      badge: choiceBadge(i),
+      glyphTint: null,
+      grammar: true,
+      mono: true,
+      verb: "options",
+      role: "choice"
+    };
+  }
+  if (def.answer === "yes" || def.verb === "approve") return gatePaint("approve");
+  if (def.answer === "no" || def.verb === "reject") return gatePaint("deny");
+  if (def.answer === "details" || def.verb === "details") return gatePaint("details");
+  return {
+    glyph: glyphFor("details") || def.emoji || "\u2753",
+    label: faceLabel(def.label, def.habit || ""),
+    badge: "",
+    glyphTint: null,
+    grammar: true,
+    mono: true,
+    verb: "details",
+    role: null
+  };
+}
+function isDetailsKey(def) {
+  if (!def) return false;
+  return def.gateRole === "details" || def.verb === "details" || def.answer === "details";
+}
+
 // streamdeck-plugin/src/faces.mjs
 var STATE_COLORS = Object.freeze({
   idle: "#3A3F47",
@@ -17482,6 +17579,10 @@ function face(emoji3, label, hue, badge, sat = 72, state = null) {
   const raw = String(label);
   const lbl = esc2(raw.slice(0, 12));
   const lblSize = raw.length > 8 ? 17 : 20;
+  const grammar = !!(state && state.grammar);
+  const tintName = state && state.glyphTint;
+  const glyphFill = tintName && STATE_COLORS[tintName] || (grammar ? "#e9edf4" : null);
+  const labelFont = state && state.mono ? "ui-monospace,'Cascadia Mono',Consolas,monospace" : "'Segoe UI',Arial,sans-serif";
   const haloHi = hslToHex(hue, sat, 58 + 12 * interiorUrg);
   const haloLo = hslToHex(hue, sat, 45 + 8 * interiorUrg);
   const ring = hslToHex(hue, sat, 65 + 10 * interiorUrg);
@@ -17542,7 +17643,7 @@ function face(emoji3, label, hue, badge, sat = 72, state = null) {
       }
     }
   }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="${haloHi}" stop-opacity="${haloOpacity}"/><stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/><stop offset="1" stop-color="${haloLo}" stop-opacity="0"/></radialGradient></defs><rect width="${S}" height="${S}" fill="url(#b)"/><rect width="${S}" height="${S}" fill="url(#h)"/><rect x="${frameX}" y="${frameY}" width="${frameW}" height="${frameH}" rx="${frameR}" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` + stateFrame + progressFrame + `<text x="${S / 2}" y="76" text-anchor="middle" font-size="62" font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif">${esc2(emoji3)}</text><text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#000000" fill-opacity="0.55">${lbl}</text><text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="'Segoe UI',Arial,sans-serif" fill="#e9edf4">${lbl}</text>` + tally + // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="${haloHi}" stop-opacity="${haloOpacity}"/><stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/><stop offset="1" stop-color="${haloLo}" stop-opacity="0"/></radialGradient></defs><rect width="${S}" height="${S}" fill="url(#b)"/><rect width="${S}" height="${S}" fill="url(#h)"/><rect x="${frameX}" y="${frameY}" width="${frameW}" height="${frameH}" rx="${frameR}" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` + stateFrame + progressFrame + `<text x="${S / 2}" y="76" text-anchor="middle" font-size="${grammar ? 54 : 62}" ` + (glyphFill ? `fill="${glyphFill}" font-weight="700" font-family="${labelFont}"` : `font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif"`) + `>${esc2(emoji3)}</text><text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="${labelFont}" fill="#000000" fill-opacity="0.55">${lbl}</text><text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="${labelFont}" fill="#e9edf4">${lbl}</text>` + tally + // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
   // the only corner mark a habit face ever shows.
   (done ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="12" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.95">\u2713</text>` : badge ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="11" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.9">${esc2(badge)}</text>` : "") + `</svg>`;
   return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
@@ -17790,7 +17891,7 @@ var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.5.4";
+var VERSION = "2.5.7";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -18103,6 +18204,37 @@ function suppressTakeovers(k) {
     }
   }).catch(() => k.action.showAlert());
 }
+function slotDefOf(k) {
+  const n = parseInt(k.settings.slot, 10) || 1;
+  return n <= 4 ? slotCache ? slotCache[n - 1] : null : coachCache ? coachCache[n - 5] : null;
+}
+function settleQuestionSiblings(k) {
+  const def = slotDefOf(k);
+  if (!def || !def.qid) return;
+  for (const other of keys.values()) {
+    if (other === k || other.kind !== "slot") continue;
+    const od = slotDefOf(other);
+    if (!od || od.qid !== def.qid) continue;
+    other.settledQid = def.qid;
+    other.pressFrame = true;
+    setKeyFrame(other, "idle");
+    try {
+      render(other);
+    } catch {
+    } finally {
+      other.pressFrame = other.settledQid === def.qid;
+    }
+  }
+}
+function showQuestionContext(k) {
+  const url2 = baseOf(k.settings) + "/";
+  Promise.resolve(plugin_default.system.openUrl(url2)).catch(() => {
+  });
+  try {
+    k.action.showOk();
+  } catch {
+  }
+}
 function render(k) {
   const s = k.settings;
   if (k.kind === "coach") {
@@ -18120,21 +18252,32 @@ function render(k) {
     return;
   }
   const n = parseInt(s.slot, 10) || 1;
-  const def = n <= 4 ? slotCache ? slotCache[n - 1] : null : coachCache ? coachCache[n - 5] : null;
+  const def = slotDefOf(k);
   const was = [k.isNudge, k.isQuestion];
   k.isNudge = !!(def && def.nudge);
   k.isQuestion = !!(def && def.qid);
+  k.isDetails = !!(def && def.qid && isDetailsKey(def));
   if (was[0] !== k.isNudge || was[1] !== k.isQuestion) {
     gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
   }
   const now = Date.now();
+  const qid = def && def.qid;
+  if (k.settledQid && k.settledQid !== qid) {
+    k.pressFrame = false;
+    k.settledQid = null;
+  }
   if (!k.pressFrame) {
     const next = owedFrame(def, now);
     setKeyFrame(k, next, now);
     k.frameUrgency = def && def.nudge ? nudgeUrgency(def, now) : 0;
   }
   if (def && def.qid) {
-    k.action.setImage(face(def.emoji || "\u2753", def.label || def.habit, QUESTION_HUE, "\u2753 " + n, 78, withFrame(k, null, now)));
+    const paint = questionPaint(def);
+    k.action.setImage(face(paint.glyph, paint.label, QUESTION_HUE, paint.badge, 78, withFrame(k, {
+      glyphTint: paint.glyphTint,
+      grammar: true,
+      mono: true
+    }, now)));
   } else if (def && def.nudge) {
     k.urgencyStep = urgencyStep(def, now);
     k.action.setImage(face(
@@ -18216,11 +18359,19 @@ function dispatch({ id, gesture }) {
     if (k.isQuestion) dismissQuestion(k);
     else if (k.isNudge) dismissNudge(k);
     else undo(k);
-  } else if (gesture === "doubletap") tap(k, { intensity: "high" });
-  else {
-    if (k.isQuestion) beginAskAck(k);
-    tap(k);
+  } else if (gesture === "doubletap") commitSlotKey(k, { intensity: "high" });
+  else commitSlotKey(k);
+}
+function commitSlotKey(k, extra) {
+  if (k.isQuestion && k.isDetails) {
+    showQuestionContext(k);
+    return;
   }
+  if (k.isQuestion) {
+    beginAskAck(k);
+    settleQuestionSiblings(k);
+  }
+  tap(k, extra);
 }
 function armGestures() {
   if (gestTimer) {

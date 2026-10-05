@@ -22,6 +22,7 @@ let nudgeFraction = null;   // null = slot 1 holds a plain suggestion
 let mockRosterPending = 0;
 let mockBlocked = false;
 let mockQuestion = false;
+let mockPicker = false;
 
 before(async () => {
   server = createServer((req, res) => {
@@ -44,13 +45,31 @@ before(async () => {
       res.end(JSON.stringify({
         configured: true, aiReady: true, suggestedAt: now,
         habits: [{ name: 'Drink', emoji: '💧', label: 'Drink' }],
-        slots: mockQuestion
+        slots: mockPicker
           ? [
-              { habit: 'LunchSat', emoji: '👍', label: 'Good', qid: 'qtest',
-                question: 'Did lunch sit well?', assignedAt: now, expiresAt: now + 3600_000 },
-              { habit: 'LunchSat', emoji: '👎', label: 'Rough', qid: 'qtest',
-                question: 'Did lunch sit well?', assignedAt: now, expiresAt: now + 3600_000 },
-              null, null
+              { habit: 'FixPick', emoji: '▤', label: 'REBASE', qid: 'qpick',
+                question: 'Which fix?', pattern: 'picker', choiceIndex: 1,
+                verb: 'options', assignedAt: now, expiresAt: now + 3600_000 },
+              { habit: 'FixPick', emoji: '▤', label: 'MERGE', qid: 'qpick',
+                question: 'Which fix?', pattern: 'picker', choiceIndex: 2,
+                verb: 'options', assignedAt: now, expiresAt: now + 3600_000 },
+              { habit: 'FixPick', emoji: '▤', label: 'SQUASH', qid: 'qpick',
+                question: 'Which fix?', pattern: 'picker', choiceIndex: 3,
+                verb: 'options', assignedAt: now, expiresAt: now + 3600_000 },
+              null
+            ]
+          : mockQuestion
+          ? [
+              { habit: 'LunchSat', emoji: '✓', label: 'APPROVE', qid: 'qtest',
+                question: 'Did lunch sit well?', pattern: 'gate', gateRole: 'approve',
+                verb: 'approve', glyphTint: 'success', assignedAt: now, expiresAt: now + 3600_000 },
+              { habit: 'LunchSat', emoji: '…', label: 'DETAILS', qid: 'qtest',
+                question: 'Did lunch sit well?', pattern: 'gate', gateRole: 'details',
+                verb: 'details', assignedAt: now, expiresAt: now + 3600_000 },
+              { habit: 'LunchSat', emoji: '✕', label: 'DENY', qid: 'qtest',
+                question: 'Did lunch sit well?', pattern: 'gate', gateRole: 'deny',
+                verb: 'reject', assignedAt: now, expiresAt: now + 3600_000 },
+              null
             ]
           : [
           nudgeFraction === null
@@ -87,13 +106,14 @@ before(async () => {
 after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open({ nudge = null, roster = 0, blocked = false, question = false } = {}) {
+async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false } = {}) {
   calls = [];
   logStatus = 200;
   nudgeFraction = nudge;
   mockRosterPending = roster;
   mockBlocked = blocked;
   mockQuestion = question;
+  mockPicker = picker;
   await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.k[data-habit="0"]');
   return page.locator('.k[data-habit="0"]');
@@ -305,4 +325,49 @@ test('pressing an Ask answer key runs wait → confirming → done (#76)', async
   await page.locator('.k[data-slot="1"]').click();
   await page.waitForFunction(() => document.querySelector('.k[data-slot="1"] .frame-working'));
   await page.waitForFunction(() => document.querySelector('.k[data-slot="1"] .frame-success'));
+});
+
+test('a yes/no ask paints the Approval Gate in fixed order (#77)', async () => {
+  await open({ question: true });
+  await page.waitForSelector('.k[data-slot="1"] .qface .frame-wait');
+  const labels = await page.$$eval('.k[data-slot] .lb', (els) => els.map((e) => e.textContent));
+  assert.deepEqual(labels.slice(0, 3), ['APPROVE', 'DETAILS', 'DENY']);
+  const glyphs = await page.$$eval('.k[data-slot] .em', (els) => els.map((e) => e.textContent));
+  assert.deepEqual(glyphs.slice(0, 3), ['✓', '…', '✕']);
+  assert.ok(await page.locator('.k[data-slot="1"] .em-tint-success').count());
+  assert.equal(await page.locator('.k[data-slot="3"] .em-tint-success').count(), 0,
+    'deny is not success-tinted');
+});
+
+test('DETAILS shows the question and does not log (#77)', async () => {
+  await open({ question: true });
+  await page.waitForSelector('.k[data-slot="2"] .qface');
+  await page.locator('.k[data-slot="2"]').click();
+  await page.waitForFunction(() => /lunch/i.test(document.getElementById('hint').textContent));
+  await settle();
+  assert.equal(calls.length, 0, 'DETAILS must not commit');
+});
+
+test('DETAILS double-tap also refuses to log (#77)', async () => {
+  await open({ question: true });
+  const details = page.locator('.k[data-slot="2"]');
+  await page.waitForSelector('.k[data-slot="2"] .qface');
+  await details.click();
+  await page.waitForTimeout(60);
+  await details.click();
+  await settle();
+  assert.equal(calls.length, 0, 'DETAILS must not log on any gesture');
+  assert.match(await page.$eval('#hint', (e) => e.textContent), /lunch/i);
+});
+
+test('a Choice Picker badges indices and settles siblings on press (#77)', async () => {
+  await open({ picker: true });
+  await page.waitForSelector('.k[data-slot="1"] .qface .frame-wait');
+  const badges = await page.$$eval('.k[data-slot] .badge', (els) => els.map((e) => e.textContent));
+  assert.deepEqual(badges.slice(0, 3), ['①', '②', '③']);
+  const labels = await page.$$eval('.k[data-slot] .lb', (els) => els.map((e) => e.textContent));
+  assert.deepEqual(labels.slice(0, 3), ['REBASE', 'MERGE', 'SQUASH']);
+  await page.locator('.k[data-slot="1"]').click();
+  await page.waitForFunction(() => document.querySelector('.k[data-slot="1"] .frame-working, .k[data-slot="1"] .frame-success'));
+  await page.waitForFunction(() => document.querySelector('.k[data-slot="2"] .frame-idle'));
 });
