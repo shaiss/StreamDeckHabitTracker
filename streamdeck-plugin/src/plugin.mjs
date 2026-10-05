@@ -28,7 +28,7 @@
 // reason; keys show the manifest's default action images until the first
 // poll paints them.
 import streamDeck, { SingletonAction, action } from '@elgato/streamdeck';
-import { face, hueFor, frameStep } from './faces.mjs';
+import { face, hueFor, frameStep, FRAME_SUCCESS_FADE_MS, owedFrame } from './faces.mjs';
 import { createScheduler } from './scheduler.mjs';
 import { createGestures } from './gestures.mjs';
 import { deriveVisibility } from './visibility.mjs';
@@ -55,10 +55,11 @@ const POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 10000);
 // after the swap exists.
 const RECHECK_MS = (process.env.HT_RECHECK_MS || '2000,5000,9000,15000,25000').split(',').map(Number);
 
-const VIOLET_HUE = 262;   // reserved: the coach speaking
-const NUDGE_HUE = 38;     // the coach speaking LOUDER — proactive nudge keys
-const QUESTION_HUE = 300; // the coach ASKING — a linked 👍/👎 pair (#34)
+const VIOLET_HUE = 262;   // reserved: the coach speaking (interior identity)
+const QUESTION_HUE = 300; // reserved: a linked 👍/👎 pair — identity, not pending (#76)
 const SILVER_HUE = 222;   // neutral / pending
+// Amber is STATE_WAIT on the FRAME, never an interior hue. A live nudge keeps
+// the poked habit's Ritual hue on the halo; the wait frame says "your move".
 
 // Turn-state frame palette (#74 / study §2.2). Meaning lives here with the
 // other hue constants; faces.mjs and deck.html keep matching copies. `danger`
@@ -74,7 +75,7 @@ const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.2';
+let VERSION = '2.5.4';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -178,7 +179,9 @@ function escalate(now) {
   if (reducedMotion()) return;
   for (const k of keys.values()) {
     if (!k.frame) continue;
-    const step = frameStep(k.frame, now, { reducedMotion: false, since: k.frameSince });
+    const step = frameStep(k.frame, now, {
+      reducedMotion: false, since: k.frameSince, urgency: k.frameUrgency || 0
+    });
     if (step === k.frameStep) continue;
     try { render(k); } catch { /* next tick retries */ }
   }
@@ -259,22 +262,56 @@ function refreshSlots(now) {
 
 // Attention Beacon (#75) on the existing coach action (#53). Interior is
 // always the coach glyph + violet (identity); the frame channel from #74
-// carries idle / wait / blocked. Hue swaps (amber nudge, magenta question)
-// are deliberately not used here — that's C (#76) on the decision keys.
+// carries idle / wait / blocked. Decision keys themselves (#76) keep identity
+// on the halo and light wait only when a press is owed.
 // Opt-in turn-state (#74). Callers in B–D set k.frame; until they do, paint
 // is byte-identical to the pre-frame faces. HT_REDUCED_MOTION=1 freezes the
 // brightness step the same way prefers-reduced-motion does on deck.html.
 function withFrame(k, state, now = Date.now()) {
   if (!k.frame) return state;
   const reduced = reducedMotion();
-  k.frameStep = frameStep(k.frame, now, { reducedMotion: reduced, since: k.frameSince });
+  const urg = (state && typeof state.urgency === 'number')
+    ? state.urgency
+    : (k.frameUrgency || 0);
+  k.frameStep = frameStep(k.frame, now, { reducedMotion: reduced, since: k.frameSince, urgency: urg });
   return Object.assign({}, state || {}, {
     frame: k.frame,
     frameSince: k.frameSince,
     frameStep: k.frameStep,
     reducedMotion: reduced,
+    urgency: urg,
     now
   });
+}
+
+function setKeyFrame(k, frame, now = Date.now()) {
+  if (k.frame !== frame) k.frameSince = now;
+  k.frame = frame;
+}
+
+// Ask-answer press ack (#76): wait → confirming (working) → done (success).
+// Local, so the human sees the turn flip even while /api/log is in flight.
+const ASK_CONFIRMING_MS = 280;
+
+function beginAskAck(k) {
+  k.pressFrame = true;
+  setKeyFrame(k, 'working');
+  try { render(k); } catch { /* next tick */ }
+  if (k.ackTimer) clearTimeout(k.ackTimer);
+  k.ackTimer = setTimeout(() => {
+    k.ackTimer = null;
+    if (!keys.has(k.action.id) || !k.pressFrame) return;
+    setKeyFrame(k, 'success');
+    try { render(k); } catch { /* next tick */ }
+    k.ackTimer = setTimeout(() => {
+      k.ackTimer = null;
+      k.pressFrame = false;
+      if (!keys.has(k.action.id)) return;
+      try { render(k); } catch { /* poll will converge */ }
+    }, FRAME_SUCCESS_FADE_MS);
+    if (k.ackTimer.unref) k.ackTimer.unref();
+  }, ASK_CONFIRMING_MS);
+  if (k.ackTimer.unref) k.ackTimer.unref();
 }
 
 function renderCoach(k) {
@@ -431,20 +468,26 @@ function render(k) {
   if (was[0] !== k.isNudge || was[1] !== k.isQuestion) {
     gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
   }
+  const now = Date.now();
+  if (!k.pressFrame) {
+    const next = owedFrame(def, now);
+    setKeyFrame(k, next, now);
+    k.frameUrgency = (def && def.nudge) ? nudgeUrgency(def, now) : 0;
+  }
   if (def && def.qid) {
-    // One half of a 👍/👎 pair. Both halves share a hue so they read as one
-    // question rather than two unrelated asks.
-    k.action.setImage(face(def.emoji || '❓', def.label || def.habit, QUESTION_HUE, '❓ ' + n, 78, withFrame(k)));
+    // Identity is magenta (the question-object); the wait frame says your move.
+    // Both halves share the hue so they still read as one question (#34, #76).
+    k.action.setImage(face(def.emoji || '❓', def.label || def.habit, QUESTION_HUE, '❓ ' + n, 78, withFrame(k, null, now)));
   } else if (def && def.nudge) {
-    // Proactive nudge: amber halo + ❗ so the poke reads across the room, and
-    // it brightens as its TTL runs down.
-    k.urgencyStep = urgencyStep(def);
-    k.action.setImage(face(def.emoji || '✨', def.label || def.habit, NUDGE_HUE, '❗ ' + n, 90,
-      withFrame(k, { urgency: nudgeUrgency(def) })));
+    // Identity is the poked habit's Ritual hue; urgency lives on the wait frame.
+    k.urgencyStep = urgencyStep(def, now);
+    k.action.setImage(face(def.emoji || '✨', def.label || def.habit, hueFor(def.habit || def.label || ''), '❗ ' + n, 72,
+      withFrame(k, { urgency: k.frameUrgency }, now)));
   } else if (def) {
-    k.action.setImage(face(def.emoji || '✨', def.label || def.habit, VIOLET_HUE, 'AI ' + n, undefined, withFrame(k)));
+    // Coach merely speaking: violet interior, no amber frame.
+    k.action.setImage(face(def.emoji || '✨', def.label || def.habit, VIOLET_HUE, 'AI ' + n, undefined, withFrame(k, null, now)));
   } else {
-    k.action.setImage(face('✨', 'Slot ' + n, SILVER_HUE, 'AI', 22, withFrame(k)));
+    k.action.setImage(face('✨', 'Slot ' + n, SILVER_HUE, 'AI', 22, withFrame(k, null, now)));
   }
 }
 
@@ -538,7 +581,10 @@ function dispatch({ id, gesture }) {
     else if (k.isNudge) dismissNudge(k);
     else undo(k);
   } else if (gesture === 'doubletap') tap(k, { intensity: 'high' });
-  else tap(k);
+  else {
+    if (k.isQuestion) beginAskAck(k);
+    tap(k);
+  }
 }
 
 // One timer, armed for the single soonest gesture deadline — a 3s pump could

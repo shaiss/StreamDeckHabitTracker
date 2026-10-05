@@ -21,6 +21,7 @@ let logStatus = 200;
 let nudgeFraction = null;   // null = slot 1 holds a plain suggestion
 let mockRosterPending = 0;
 let mockBlocked = false;
+let mockQuestion = false;
 
 before(async () => {
   server = createServer((req, res) => {
@@ -43,7 +44,15 @@ before(async () => {
       res.end(JSON.stringify({
         configured: true, aiReady: true, suggestedAt: now,
         habits: [{ name: 'Drink', emoji: '💧', label: 'Drink' }],
-        slots: [
+        slots: mockQuestion
+          ? [
+              { habit: 'LunchSat', emoji: '👍', label: 'Good', qid: 'qtest',
+                question: 'Did lunch sit well?', assignedAt: now, expiresAt: now + 3600_000 },
+              { habit: 'LunchSat', emoji: '👎', label: 'Rough', qid: 'qtest',
+                question: 'Did lunch sit well?', assignedAt: now, expiresAt: now + 3600_000 },
+              null, null
+            ]
+          : [
           nudgeFraction === null
             ? { habit: 'Flow', emoji: '🌊', label: 'Flow', assignedAt: 1 }
             : {
@@ -78,12 +87,13 @@ before(async () => {
 after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open({ nudge = null, roster = 0, blocked = false } = {}) {
+async function open({ nudge = null, roster = 0, blocked = false, question = false } = {}) {
   calls = [];
   logStatus = 200;
   nudgeFraction = nudge;
   mockRosterPending = roster;
   mockBlocked = blocked;
+  mockQuestion = question;
   await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.k[data-habit="0"]');
   return page.locator('.k[data-habit="0"]');
@@ -151,12 +161,15 @@ test('a hold on a nudge dismisses it instead of undoing a log', async () => {
 test('a nudge face escalates as its TTL runs down', async () => {
   const urg = () => page.$eval('.nudgeface', (e) => parseFloat(e.style.getPropertyValue('--urg')));
   await open({ nudge: 0.05 });
-  await page.waitForFunction(() => !!document.querySelector('.nudgeface'));
+  await page.waitForFunction(() => !!document.querySelector('.nudgeface .frame-wait'));
   const fresh = await urg();
+  const freshHue = await page.$eval('.nudgeface', (e) => e.style.getPropertyValue('--hue'));
   await open({ nudge: 0.95 });
-  await page.waitForFunction(() => !!document.querySelector('.nudgeface'));
+  await page.waitForFunction(() => !!document.querySelector('.nudgeface .frame-wait'));
   const late = await urg();
+  const lateHue = await page.$eval('.nudgeface', (e) => e.style.getPropertyValue('--hue'));
   assert.ok(fresh < 0.2 && late > 0.8, `urgency should track the TTL: ${fresh} -> ${late}`);
+  assert.equal(freshHue, lateHue, 'identity hue on the interior must not change with urgency');
 });
 
 test('a plain suggestion slot still undoes on hold, not dismisses', async () => {
@@ -274,4 +287,22 @@ test('phone viewport: device fits without horizontal scroll and a tap still logs
 
   // Restore desktop-ish viewport for any later tests in this worker.
   await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test('a violet suggestion has no wait frame; a pending question does (#76)', async () => {
+  await open();
+  await page.waitForSelector('.k[data-slot="1"] .slotface');
+  assert.equal(await page.locator('.k[data-slot="1"] .frame-wait').count(), 0,
+    'coach merely speaking owes no press');
+  await open({ question: true });
+  await page.waitForSelector('.qface .frame-wait');
+  assert.match(await page.$eval('.k[data-slot="1"] .facecss', (e) => e.className), /qface/);
+});
+
+test('pressing an Ask answer key runs wait → confirming → done (#76)', async () => {
+  await open({ question: true });
+  await page.waitForSelector('.k[data-slot="1"] .frame-wait');
+  await page.locator('.k[data-slot="1"]').click();
+  await page.waitForFunction(() => document.querySelector('.k[data-slot="1"] .frame-working'));
+  await page.waitForFunction(() => document.querySelector('.k[data-slot="1"] .frame-success'));
 });

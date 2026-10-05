@@ -5,6 +5,7 @@ import {
   sanitizeQuestion, openQuestion, questionDue, pickQuestionSlots, scoreQuestions,
   QUESTION_TTL_MS, QUESTION_GAP_MS, MAX_TEXT, QUESTION_CLAUSE
 } from '../../lib/question.js';
+import { owedFrame } from '../../streamdeck-plugin/src/faces.mjs';
 
 const NOW = 1_800_000_000_000;
 const RAW = {
@@ -155,8 +156,27 @@ test('the question clause reaches every pass that may ask', () => {
   }
 });
 
+test('owedFrame lights wait only for a live question or nudge', () => {
+  assert.equal(owedFrame({ qid: 'q1' }), 'wait');
+  assert.equal(owedFrame({ nudge: true }), 'wait');
+  assert.equal(owedFrame({ habit: 'Flow', reason: 'deep work' }), null,
+    'a violet suggestion owes no press');
+  assert.equal(owedFrame({ qid: 'q1', expiresAt: NOW - 1 }, NOW), null,
+    'an expired question is not owed');
+  assert.equal(owedFrame(null), null);
+});
+
 test('the virtual deck renders question keys as their own thing', () => {
   const src = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
+  const plugin = readFileSync(new URL('../../streamdeck-plugin/src/plugin.mjs', import.meta.url), 'utf8');
   assert.match(src, /qface/, 'a question face exists');
   assert.match(src, /def\.qid \? '❓/, 'and is chosen by qid, ahead of nudge/suggestion');
+  assert.match(src, /owedFrame\(def\)/, 'pending questions light the wait frame, not a hue swap');
+  assert.match(src, /function playAskAck/, 'Ask ack helper exists on the virtual deck');
+  assert.match(src, /if \(d && d\.qid\) playAskAck\(e2\)/, 'question-key tap is wired to playAskAck');
+  assert.match(src, /go\('working',\s*280/, 'Ask ack starts on confirming (working)');
+  assert.match(src, /go\('success',\s*1600/, 'Ask ack settles on done (success)');
+  assert.match(plugin, /ASK_CONFIRMING_MS = 280/, 'plugin Ask ack uses the same confirming beat');
+  assert.match(plugin, /setKeyFrame\(k, 'working'\)/);
+  assert.match(plugin, /setKeyFrame\(k, 'success'\)/);
 });

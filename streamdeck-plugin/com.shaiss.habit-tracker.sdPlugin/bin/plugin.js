@@ -17410,15 +17410,33 @@ var FRAME_WAIT_MS = 3e3;
 var FRAME_BLOCKED_MS = 1e3;
 var FRAME_WORKING_MS = 4e3;
 var FRAME_SUCCESS_FADE_MS = 2400;
+var FRAME_WAIT_PERIODS = Object.freeze([3e3, 1e3, 600]);
 function resolveFrame(state) {
   if (!state) return null;
   const f = state.frame ?? state.frameState ?? null;
   if (f == null || f === "") return null;
   return Object.prototype.hasOwnProperty.call(STATE_COLORS, f) ? f : null;
 }
+function clampUrgency(u) {
+  const n = Number(u);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+function waitPeriodMs(urg = 0) {
+  const u = clampUrgency(urg);
+  if (u >= 2 / 3) return 600;
+  if (u >= 1 / 3) return 1e3;
+  return FRAME_WAIT_MS;
+}
+function owedFrame(def, now = Date.now()) {
+  if (!def) return null;
+  if (def.expiresAt && def.expiresAt <= now) return null;
+  if (def.qid || def.nudge) return "wait";
+  return null;
+}
 function frameStep(frame, now = 0, opts = {}) {
   if (!frame || frame === "idle" || opts.reducedMotion) return 0;
-  if (frame === "wait") return Math.floor(now / FRAME_WAIT_MS) % 2;
+  if (frame === "wait") return Math.floor(now / waitPeriodMs(opts.urgency)) % 2;
   if (frame === "blocked") return Math.floor(now / FRAME_BLOCKED_MS) % 2;
   if (frame === "working") return Math.floor(now / (FRAME_WORKING_MS / 4)) % 4;
   if (frame === "success") {
@@ -17435,7 +17453,10 @@ function frameBright(frame, step = 0, opts = {}) {
     if (frame === "success") return 0.7;
     return 0;
   }
-  if (frame === "wait") return step ? 1 : 0.45;
+  if (frame === "wait") {
+    const lo = 0.45 + 0.4 * clampUrgency(opts.urgency);
+    return step ? 1 : lo;
+  }
   if (frame === "blocked") return step ? 1 : 0.18;
   if (frame === "working") return 0.35 + step / 3 * 0.65;
   if (frame === "success") return Math.max(0.22, 1 - step / 4);
@@ -17454,26 +17475,32 @@ function hslToHex(h, s, l) {
 function face(emoji3, label, hue, badge, sat = 72, state = null) {
   const done = !!(state && state.doneToday);
   if (done) sat = Math.round(sat * 0.55);
-  const urg = state && typeof state.urgency === "number" ? Math.max(0, Math.min(1, state.urgency)) : 0;
+  const urg = clampUrgency(state && state.urgency);
+  const frameNameEarly = resolveFrame(state);
+  const interiorUrg = frameNameEarly ? 0 : urg;
   const S = 144;
   const raw = String(label);
   const lbl = esc2(raw.slice(0, 12));
   const lblSize = raw.length > 8 ? 17 : 20;
-  const haloHi = hslToHex(hue, sat, 58 + 12 * urg);
-  const haloLo = hslToHex(hue, sat, 45 + 8 * urg);
-  const ring = hslToHex(hue, sat, 65 + 10 * urg);
-  const haloOpacity = (0.62 + 0.33 * urg).toFixed(2);
-  const ringOpacity = (0.3 + 0.5 * urg).toFixed(2);
-  const ringWidth = (1.5 + 1.5 * urg).toFixed(1);
+  const haloHi = hslToHex(hue, sat, 58 + 12 * interiorUrg);
+  const haloLo = hslToHex(hue, sat, 45 + 8 * interiorUrg);
+  const ring = hslToHex(hue, sat, 65 + 10 * interiorUrg);
+  const haloOpacity = (0.62 + 0.33 * interiorUrg).toFixed(2);
+  const ringOpacity = (0.3 + 0.5 * interiorUrg).toFixed(2);
+  const ringWidth = (1.5 + 1.5 * interiorUrg).toFixed(1);
   const badgeFill = hslToHex(hue, 80, 80);
   const frameR = 17, frameX = 6, frameY = 6, frameW = S - 12, frameH = S - 12;
   const stateX = 2, stateY = 2, stateW = S - 4, stateH = S - 4, stateR = 21, stateSw = 2;
-  const frameName = resolveFrame(state);
+  const frameName = frameNameEarly;
   let stateFrame = "";
   if (frameName) {
     const reduced = !!(state && state.reducedMotion);
-    const step = state && typeof state.frameStep === "number" ? state.frameStep : frameStep(frameName, state && state.now || 0, { reducedMotion: reduced, since: state && state.frameSince });
-    const bright = state && typeof state.frameBright === "number" ? Math.max(0, Math.min(1, state.frameBright)) : frameBright(frameName, step, { reducedMotion: reduced });
+    const step = state && typeof state.frameStep === "number" ? state.frameStep : frameStep(frameName, state && state.now || 0, {
+      reducedMotion: reduced,
+      since: state && state.frameSince,
+      urgency: urg
+    });
+    const bright = state && typeof state.frameBright === "number" ? Math.max(0, Math.min(1, state.frameBright)) : frameBright(frameName, step, { reducedMotion: reduced, urgency: urg });
     const color = STATE_COLORS[frameName];
     let opacity;
     if (frameName === "idle") opacity = 0.38;
@@ -17481,7 +17508,7 @@ function face(emoji3, label, hue, badge, sat = 72, state = null) {
     else if (frameName === "working") opacity = (0.5 + 0.5 * bright).toFixed(2);
     else if (frameName === "blocked") opacity = (0.2 + 0.8 * bright).toFixed(2);
     else opacity = (0.35 + 0.65 * bright).toFixed(2);
-    const sw = frameName === "wait" ? 2.6 : stateSw;
+    const sw = frameName === "wait" ? 2.6 + 1.6 * clampUrgency(urg) : stateSw;
     stateFrame = `<g data-state-frame="${frameName}"><rect x="${stateX}" y="${stateY}" width="${stateW}" height="${stateH}" rx="${stateR}" fill="none" stroke="${color}" stroke-opacity="${opacity}" stroke-width="${sw}"` + (frameName === "working" ? ` stroke-dasharray="10 7"` : "") + `/>`;
     if (frameName === "success") {
       stateFrame += `<text x="14" y="22" text-anchor="start" font-size="13" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${color}" fill-opacity="0.95">\u2713</text>`;
@@ -17760,11 +17787,10 @@ var TICK_MS = +(process.env.HT_TICK_MS || 3e3);
 var POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 1e4);
 var RECHECK_MS = (process.env.HT_RECHECK_MS || "2000,5000,9000,15000,25000").split(",").map(Number);
 var VIOLET_HUE = 262;
-var NUDGE_HUE = 38;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.5.2";
+var VERSION = "2.5.4";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -17847,7 +17873,11 @@ function escalate(now) {
   if (reducedMotion()) return;
   for (const k of keys.values()) {
     if (!k.frame) continue;
-    const step = frameStep(k.frame, now, { reducedMotion: false, since: k.frameSince });
+    const step = frameStep(k.frame, now, {
+      reducedMotion: false,
+      since: k.frameSince,
+      urgency: k.frameUrgency || 0
+    });
     if (step === k.frameStep) continue;
     try {
       render(k);
@@ -17911,14 +17941,50 @@ function refreshSlots(now) {
 function withFrame(k, state, now = Date.now()) {
   if (!k.frame) return state;
   const reduced = reducedMotion();
-  k.frameStep = frameStep(k.frame, now, { reducedMotion: reduced, since: k.frameSince });
+  const urg = state && typeof state.urgency === "number" ? state.urgency : k.frameUrgency || 0;
+  k.frameStep = frameStep(k.frame, now, { reducedMotion: reduced, since: k.frameSince, urgency: urg });
   return Object.assign({}, state || {}, {
     frame: k.frame,
     frameSince: k.frameSince,
     frameStep: k.frameStep,
     reducedMotion: reduced,
+    urgency: urg,
     now
   });
+}
+function setKeyFrame(k, frame, now = Date.now()) {
+  if (k.frame !== frame) k.frameSince = now;
+  k.frame = frame;
+}
+var ASK_CONFIRMING_MS = 280;
+function beginAskAck(k) {
+  k.pressFrame = true;
+  setKeyFrame(k, "working");
+  try {
+    render(k);
+  } catch {
+  }
+  if (k.ackTimer) clearTimeout(k.ackTimer);
+  k.ackTimer = setTimeout(() => {
+    k.ackTimer = null;
+    if (!keys.has(k.action.id) || !k.pressFrame) return;
+    setKeyFrame(k, "success");
+    try {
+      render(k);
+    } catch {
+    }
+    k.ackTimer = setTimeout(() => {
+      k.ackTimer = null;
+      k.pressFrame = false;
+      if (!keys.has(k.action.id)) return;
+      try {
+        render(k);
+      } catch {
+      }
+    }, FRAME_SUCCESS_FADE_MS);
+    if (k.ackTimer.unref) k.ackTimer.unref();
+  }, ASK_CONFIRMING_MS);
+  if (k.ackTimer.unref) k.ackTimer.unref();
 }
 function renderCoach(k) {
   const now = Date.now();
@@ -18061,22 +18127,28 @@ function render(k) {
   if (was[0] !== k.isNudge || was[1] !== k.isQuestion) {
     gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
   }
+  const now = Date.now();
+  if (!k.pressFrame) {
+    const next = owedFrame(def, now);
+    setKeyFrame(k, next, now);
+    k.frameUrgency = def && def.nudge ? nudgeUrgency(def, now) : 0;
+  }
   if (def && def.qid) {
-    k.action.setImage(face(def.emoji || "\u2753", def.label || def.habit, QUESTION_HUE, "\u2753 " + n, 78, withFrame(k)));
+    k.action.setImage(face(def.emoji || "\u2753", def.label || def.habit, QUESTION_HUE, "\u2753 " + n, 78, withFrame(k, null, now)));
   } else if (def && def.nudge) {
-    k.urgencyStep = urgencyStep(def);
+    k.urgencyStep = urgencyStep(def, now);
     k.action.setImage(face(
       def.emoji || "\u2728",
       def.label || def.habit,
-      NUDGE_HUE,
+      hueFor(def.habit || def.label || ""),
       "\u2757 " + n,
-      90,
-      withFrame(k, { urgency: nudgeUrgency(def) })
+      72,
+      withFrame(k, { urgency: k.frameUrgency }, now)
     ));
   } else if (def) {
-    k.action.setImage(face(def.emoji || "\u2728", def.label || def.habit, VIOLET_HUE, "AI " + n, void 0, withFrame(k)));
+    k.action.setImage(face(def.emoji || "\u2728", def.label || def.habit, VIOLET_HUE, "AI " + n, void 0, withFrame(k, null, now)));
   } else {
-    k.action.setImage(face("\u2728", "Slot " + n, SILVER_HUE, "AI", 22, withFrame(k)));
+    k.action.setImage(face("\u2728", "Slot " + n, SILVER_HUE, "AI", 22, withFrame(k, null, now)));
   }
 }
 function logUrl(k, extra = "") {
@@ -18145,7 +18217,10 @@ function dispatch({ id, gesture }) {
     else if (k.isNudge) dismissNudge(k);
     else undo(k);
   } else if (gesture === "doubletap") tap(k, { intensity: "high" });
-  else tap(k);
+  else {
+    if (k.isQuestion) beginAskAck(k);
+    tap(k);
+  }
 }
 function armGestures() {
   if (gestTimer) {
