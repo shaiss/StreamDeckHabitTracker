@@ -278,7 +278,7 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   assert.ok(plugin.includes("ACTION_DANGER = '#FF4D4D'"),
     'plugin names the danger glyph token beside the blocked frame token');
   assert.match(faces,
-    /function glyphTintColor\(name\) \{[\s\S]*?if \(name === 'danger'\) return ACTION_DANGER;/,
+    /function glyphTintColor\(name\) \{[^}]*?if \(name === 'danger'\) return ACTION_DANGER;/,
     'glyphTintColor maps danger → ACTION_DANGER (not an unrelated substring)');
   assert.ok(plugin.includes("gesture === 'arm'") && plugin.includes("gesture === 'commit'"),
     'plugin dispatches the two-stage confirm from the gesture layer');

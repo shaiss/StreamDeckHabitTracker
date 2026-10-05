@@ -701,6 +701,15 @@ test('danger flip while armed clears CONFIRM and does not log (#78)', async () =
       return s.includes('>DELETE<') && !s.includes('data-armed="1"') && !s.includes('>CONFIRM?<');
     }, { label: 'disarmed after danger flip' });
     assert.equal(logUrls.length, 0, 'danger flip must not emit a token');
+    // Stale danger registration would treat two taps as arm+commit (no
+    // intensity). A normal slot double-taps to one log with intensity=high.
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await sleep(60);
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => logUrls.length >= 1, { label: 'post-flip double tap logs' });
+    await sleep(500);
+    assert.equal(logUrls.length, 1, 'post-flip double tap is one log, not arm+commit');
+    assert.match(logUrls[0], /[?&]intensity=high\b/, 'post-flip key is a normal slot');
   } finally { p.done(); }
 });
 
