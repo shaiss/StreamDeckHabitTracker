@@ -1,13 +1,15 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { runAsUser, redisKey, isOwner, ownerUserId } from '../../lib/scope.js';
-import { resolveAuth, requireAuth, clerkConfigured, publishableKey } from '../../lib/auth.js';
+import {
+  resolveAuth, requireAuth, clerkConfigured, publishableKey,
+  resolveOwnerAuth, requireOwnerAuth, isCronBearer
+} from '../../lib/auth.js';
 
+const ENV_KEYS = ['HABIT_OWNER_USER_ID', 'CLERK_PUBLISHABLE_KEY', 'CLERK_SECRET_KEY', 'CRON_SECRET'];
 const saved = {};
 beforeEach(() => {
-  for (const k of ['HABIT_OWNER_USER_ID', 'CLERK_PUBLISHABLE_KEY', 'CLERK_SECRET_KEY']) {
-    saved[k] = process.env[k];
-  }
+  for (const k of ENV_KEYS) saved[k] = process.env[k];
 });
 afterEach(() => {
   for (const [k, v] of Object.entries(saved)) {
@@ -173,4 +175,126 @@ test('legacy HABIT_KEY-shaped secrets are rejected (not ht_ tokens)', async () =
 test('ownerUserId reads HABIT_OWNER_USER_ID', () => {
   process.env.HABIT_OWNER_USER_ID = ' user_owner ';
   assert.equal(ownerUserId(), 'user_owner');
+});
+
+// --- Owner-only gate (cron + owner coaching admin) ---
+
+const ownerOpts = (userId) => ({
+  verifySession: async () => userId || null,
+  verifyApiToken: async (t) => {
+    if (t === 'ht_ownerownerownerownerownerownerow') return 'user_owner';
+    if (t === 'ht_otherotherotherotherotherotherot') return 'user_other';
+    return null;
+  }
+});
+
+test('owner session may call owner-only routes', async () => {
+  process.env.HABIT_OWNER_USER_ID = 'user_owner';
+  process.env.CRON_SECRET = 'cron-secret';
+  const gate = await resolveOwnerAuth(
+    { query: {}, headers: { authorization: 'Bearer sess' } },
+    ownerOpts('user_owner')
+  );
+  assert.deepEqual(gate, { ok: true, via: 'clerk', userId: 'user_owner' });
+});
+
+test('owner ht_ token may call owner-only routes', async () => {
+  process.env.HABIT_OWNER_USER_ID = 'user_owner';
+  delete process.env.CRON_SECRET;
+  const gate = await resolveOwnerAuth(
+    { query: { key: 'ht_ownerownerownerownerownerownerow' }, headers: {} },
+    ownerOpts(null)
+  );
+  assert.equal(gate.ok, true);
+  assert.equal(gate.via, 'token');
+  assert.equal(gate.userId, 'user_owner');
+});
+
+test('valid CRON_SECRET bearer may call owner-only routes', async () => {
+  process.env.HABIT_OWNER_USER_ID = 'user_owner';
+  process.env.CRON_SECRET = 'cron-secret';
+  const req = { query: {}, headers: { authorization: 'Bearer cron-secret' } };
+  assert.equal(isCronBearer(req), true);
+  const gate = await resolveOwnerAuth(req, ownerOpts('user_other'));
+  assert.deepEqual(gate, { ok: true, via: 'cron' });
+});
+
+test('non-owner session gets 403 on owner-only routes', async () => {
+  process.env.HABIT_OWNER_USER_ID = 'user_owner';
+  process.env.CRON_SECRET = 'cron-secret';
+  const gate = await resolveOwnerAuth(
+    { query: {}, headers: { authorization: 'Bearer sess' } },
+    ownerOpts('user_other')
+  );
+  assert.deepEqual(gate, { ok: false, status: 403 });
+  const res = mockRes();
+  await requireOwnerAuth(
+    { query: {}, headers: { authorization: 'Bearer sess' } },
+    res,
+    ownerOpts('user_other')
+  );
+  assert.equal(res.out.statusCode, 403);
+  assert.deepEqual(res.out.body, { error: 'Forbidden' });
+});
+
+test('non-owner ht_ token gets 403 on owner-only routes', async () => {
+  process.env.HABIT_OWNER_USER_ID = 'user_owner';
+  const gate = await resolveOwnerAuth(
+    { query: { key: 'ht_otherotherotherotherotherotherot' }, headers: {} },
+    ownerOpts(null)
+  );
+  assert.deepEqual(gate, { ok: false, status: 403 });
+});
+
+test('anonymous gets 401 on owner-only routes', async () => {
+  process.env.HABIT_OWNER_USER_ID = 'user_owner';
+  process.env.CRON_SECRET = 'cron-secret';
+  const gate = await resolveOwnerAuth(
+    { query: {}, headers: {} },
+    ownerOpts(null)
+  );
+  assert.deepEqual(gate, { ok: false, status: 401 });
+  const res = mockRes();
+  await requireOwnerAuth({ query: {}, headers: {} }, res, ownerOpts(null));
+  assert.equal(res.out.statusCode, 401);
+  assert.deepEqual(res.out.body, { error: 'Unauthorized' });
+});
+
+test('HABIT_OWNER_USER_ID unset: no Clerk user or token passes owner gate', async () => {
+  delete process.env.HABIT_OWNER_USER_ID;
+  process.env.CRON_SECRET = 'cron-secret';
+  const sess = await resolveOwnerAuth(
+    { query: {}, headers: { authorization: 'Bearer sess' } },
+    ownerOpts('user_owner')
+  );
+  assert.deepEqual(sess, { ok: false, status: 403 });
+  const tok = await resolveOwnerAuth(
+    { query: { key: 'ht_ownerownerownerownerownerownerow' }, headers: {} },
+    ownerOpts(null)
+  );
+  assert.deepEqual(tok, { ok: false, status: 403 });
+});
+
+test('CRON_SECRET unset: bearer path refused (even with Authorization header)', async () => {
+  process.env.HABIT_OWNER_USER_ID = 'user_owner';
+  delete process.env.CRON_SECRET;
+  const req = { query: {}, headers: { authorization: 'Bearer anything' } };
+  assert.equal(isCronBearer(req), false);
+  // Header is not an ht_ token and session verify returns null → 401
+  const gate = await resolveOwnerAuth(req, ownerOpts(null));
+  assert.deepEqual(gate, { ok: false, status: 401 });
+});
+
+test('wrong CRON_SECRET does not grant access and does not leak owner data', async () => {
+  process.env.HABIT_OWNER_USER_ID = 'user_owner';
+  process.env.CRON_SECRET = 'cron-secret';
+  const res = mockRes();
+  await requireOwnerAuth(
+    { query: {}, headers: { authorization: 'Bearer wrong' } },
+    res,
+    ownerOpts(null)
+  );
+  assert.equal(res.out.statusCode, 401);
+  assert.equal(JSON.stringify(res.out.body).includes('user_owner'), false);
+  assert.deepEqual(res.out.body, { error: 'Unauthorized' });
 });

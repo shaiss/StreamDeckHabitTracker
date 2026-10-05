@@ -1,36 +1,21 @@
-// Cron: morning pass. Auth: Bearer CRON_SECRET (preferred) or ?run=1 with
-// a valid owner plugin token / session. Runs as HABIT_OWNER_USER_ID.
+// Cron: morning pass — owner-tenant only.
+// Callers: Authorization: Bearer $CRON_SECRET, or the HABIT_OWNER_USER_ID
+// Clerk session / ht_ token. Anyone else → 401/403. Never runs as a non-owner.
 import { isConfigured } from '../../lib/store.js';
 import { zaiKey } from '../../lib/ai.js';
 import { morningPass, rosterPass, coachPagePass } from '../../lib/coach.js';
 import { ownerUserId, runAsUser } from '../../lib/scope.js';
-import { resolveAuth } from '../../lib/auth.js';
-
-export async function authorized(req) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && req.headers?.authorization === `Bearer ${cronSecret}`) return true;
-  const q = req.query || {};
-  if (q.run === '1') {
-    // Manual trigger: require a real user credential (Clerk or ht_ token).
-    const auth = await resolveAuth(req);
-    return Boolean(auth);
-  }
-  // Vercel cron without CRON_SECRET configured: accept the platform call.
-  return !cronSecret;
-}
+import { requireOwnerAuth } from '../../lib/auth.js';
 
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   try {
-    if (!(await authorized(req))) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+    if (!(await requireOwnerAuth(req, res))) return;
+
     const owner = ownerUserId();
     if (!owner) {
-      res.status(503).json({
-        error: 'HABIT_OWNER_USER_ID is not set — cron cannot scope to a tenant.'
-      });
+      // Cron bearer can pass resolveOwnerAuth without an owner id — still refuse.
+      res.status(403).json({ error: 'Forbidden' });
       return;
     }
     if (!zaiKey() || !isConfigured()) {
