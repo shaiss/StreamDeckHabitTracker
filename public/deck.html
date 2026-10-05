@@ -257,6 +257,7 @@
   </style>
 </head>
 <body>
+  <script src="/auth.js"></script>
   <script src="/nav.js" defer></script>
   <div class="top">
     <h1>Virtual Stream Deck</h1>
@@ -273,7 +274,20 @@
   <script type="module">
     import { questionPaint, isDetailsKey } from '/glyphs.js';
     const KEY = new URLSearchParams(location.search).get('key') || '';
-    const withKey = (u) => KEY ? u + '&key=' + encodeURIComponent(KEY) : u;
+    const withKey = (u) => KEY ? u + (u.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY) : u;
+
+    async function apiFetch(url, opts) {
+      const u = withKey(url);
+      if (window.HabitAuth && window.HabitAuth.authFetch) {
+        return window.HabitAuth.authFetch(u, opts);
+      }
+      return fetch(u, opts);
+    }
+
+    async function gateAuth() {
+      if (!window.HabitAuth) return true; // tests without auth.js
+      return window.HabitAuth.ensureSignedIn();
+    }
     const face = document.getElementById('face');
     const hint = document.getElementById('hint');
     let slots = [null, null, null, null];
@@ -698,15 +712,17 @@
       setTimeout(() => f.classList.remove('show'), 900);
     }
 
-    function tap(el, url) {
+    async function tap(el, url) {
+      if (!(await gateAuth())) return;
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
-      fetch(withKey(url))
+      apiFetch(url)
         .then((r) => {
           flash(el, r.ok);
           if (r.ok) {
             // Growth funnel Tap: successful virtual-deck habit log (no PII).
             // Visit = Web Analytics pageview on /deck.html. See PR notes.
+            // Fires only on authenticated successful logs.
             if (typeof window.va === 'function') {
               window.va('event', { name: 'virtual_deck_tap' });
             }
@@ -722,10 +738,11 @@
     // Long-press "oops": take back today's last log for this key. The 404 the
     // server sends when there is nothing to remove flashes ⚠️ like any other
     // failure — which is the honest answer.
-    function undo(el, url) {
+    async function undo(el, url) {
+      if (!(await gateAuth())) return;
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
-      fetch(withKey(url), { method: 'DELETE' })
+      apiFetch(url, { method: 'DELETE' })
         .then((r) => {
           flash(el, r.ok);
           if (r.ok) refresh();
@@ -737,10 +754,11 @@
 
     // Long-press on a nudge: "not today". Distinct from ignoring it — the
     // scorer records the two differently (#35).
-    function dismiss(el, url, msg) {
+    async function dismiss(el, url, msg) {
+      if (!(await gateAuth())) return;
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
-      fetch(withKey(url), { method: 'POST' })
+      apiFetch(url, { method: 'POST' })
         .then((r) => {
           flash(el, r.ok);
           if (r.ok) refresh();
@@ -753,7 +771,11 @@
       // ?tz= lets the server bucket "today" in the viewer's timezone (matches
       // the dashboard), so living key faces read the right day (#32).
       const tz = new Date().getTimezoneOffset(); // minutes; UTC-5 → 300
-      fetch('/api/slots?tz=' + tz).then((r) => r.json()).then((j) => {
+      const url = '/api/slots?tz=' + tz;
+      const go = window.HabitAuth?.authFetch
+        ? window.HabitAuth.authFetch(withKey(url))
+        : fetch(withKey(url));
+      go.then((r) => r.json()).then((j) => {
         habits = j.habits || habits;
         slots = j.slots || slots;
         coachPage = j.coachPage || [];
