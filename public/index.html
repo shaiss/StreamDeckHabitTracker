@@ -81,6 +81,7 @@
   </style>
 </head>
 <body>
+  <script src="/auth.js"></script>
   <script src="/nav.js" defer></script>
   <div class="wrap">
     <header>
@@ -109,11 +110,28 @@
         <button class="btn" id="saveProfile">Save</button>
         <span class="status" id="profileStatus"></span>
       </div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:var(--s4) 0" />
+      <h3>Stream Deck API token</h3>
+      <p class="muted" style="font-size:13px;margin:0 0 var(--s3)">
+        Generate a per-user token and paste it into the plugin&rsquo;s <code>settings.key</code>
+        (or regenerate the profile with <code>--key=…</code>). Shown once — stored hashed server-side.
+      </p>
+      <div class="row2">
+        <button class="btn ghost" id="mintToken" type="button">Generate token</button>
+        <span class="status" id="tokenStatus"></span>
+      </div>
+      <pre id="tokenOnce" class="muted" style="display:none;margin-top:var(--s3);padding:var(--s3);background:var(--card2);border-radius:var(--r-sm);font-size:12px;word-break:break-all;white-space:pre-wrap"></pre>
+      <ul id="tokenList" class="muted" style="font-size:13px;margin:var(--s3) 0 0;padding-left:var(--s4)"></ul>
     </div>
     <div id="app"><div class="empty">Loading&hellip;</div></div>
   </div>
 
   <script>
+    const apiFetch = (url, opts) =>
+      (window.HabitAuth && window.HabitAuth.authFetch)
+        ? window.HabitAuth.authFetch(url, opts)
+        : fetch(url, opts);
+
     const EMOJI = { Pee:"🚽", Poop:"💩", Eat:"🍽", Drink:"💧", Exercise:"🏃" };
     const emojiFor = (h, e) => e || EMOJI[h] || "•";
     // Habit names, notes, and emoji come from the log — /api/log accepts
@@ -277,7 +295,7 @@
       const btn = document.getElementById('suggestBtn'), err = document.getElementById('aiErr');
       btn.disabled = true; btn.textContent = '🤔 Thinking…'; err.textContent = '';
       try {
-        const r = await fetch('/api/suggest', { method:'POST' });
+        const r = await apiFetch('/api/suggest', { method:'POST' });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || ('HTTP '+r.status));
         slotState = { ...slotState, slots: j.slots, model: j.model };
@@ -318,15 +336,17 @@
           document.getElementById('profileStatus').textContent =
             p.effectiveTz ? `Coach currently reads your day as ${p.effectiveTz}` : '';
         }).catch(()=>{});
+        refreshTokens();
         panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     }
     window.addEventListener('toggle-settings', () => toggleSettings());
     if (new URLSearchParams(location.search).get('settings') === '1') toggleSettings(true);
-    document.getElementById('saveProfile').addEventListener('click', () => {
+    document.getElementById('saveProfile').addEventListener('click', async () => {
+      if (window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
       const st = document.getElementById('profileStatus');
       st.textContent = 'Saving…';
-      fetch('/api/profile', {
+      apiFetch('/api/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -340,11 +360,60 @@
       }).catch(e => { st.textContent = 'Save failed: ' + e.message; });
     });
 
+    async function refreshTokens() {
+      const list = document.getElementById('tokenList');
+      if (!list) return;
+      if (!window.HabitAuth || !window.HabitAuth.isSignedIn()) {
+        list.innerHTML = '<li>Sign in to manage tokens.</li>';
+        return;
+      }
+      try {
+        const j = await apiFetch('/api/token').then((r) => r.json());
+        const tokens = j.tokens || [];
+        list.innerHTML = tokens.length
+          ? tokens.map((t) =>
+              `<li><code>${esc(t.prefix)}…</code> ${esc(t.label || '')} · ` +
+              `${t.createdAt ? new Date(t.createdAt).toLocaleDateString() : ''} ` +
+              `<button type="button" class="linklike" data-revoke="${esc(t.hash)}">revoke</button></li>`
+            ).join('')
+          : '<li>No tokens yet.</li>';
+        list.querySelectorAll('[data-revoke]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            await apiFetch('/api/token?hash=' + encodeURIComponent(btn.dataset.revoke), { method: 'DELETE' });
+            refreshTokens();
+          });
+        });
+      } catch {
+        list.innerHTML = '<li>Could not load tokens.</li>';
+      }
+    }
+    document.getElementById('mintToken')?.addEventListener('click', async () => {
+      if (window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
+      const st = document.getElementById('tokenStatus');
+      const once = document.getElementById('tokenOnce');
+      st.textContent = 'Creating…';
+      try {
+        const r = await apiFetch('/api/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: 'Stream Deck' })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        st.textContent = 'Copy now — shown once.';
+        once.style.display = 'block';
+        once.textContent = j.token;
+        refreshTokens();
+      } catch (e) {
+        st.textContent = e.message || 'Failed';
+      }
+    });
+
     let firstLoad = true;
     function refresh() {
       Promise.all([
-        fetch('/api/data').then(r=>r.json()),
-        fetch('/api/slots?track=1').then(r=>r.json()).catch(()=>null)
+        apiFetch('/api/data').then(r=>r.json()),
+        apiFetch('/api/slots?track=1').then(r=>r.json()).catch(()=>null)
       ]).then(([d, s]) => {
         slotState = s;
         lastInsight = d.insight || null;
