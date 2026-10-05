@@ -545,7 +545,10 @@ present. The no-frame fallback still uses
 in `faces.mjs`, and `.frame-*` classes in `deck.html`. It must not become a
 page token either: a theme edit must not recolor "your move". Identity (halo +
 inner hairline) and state (outer stroke) never share pixels. `danger` is not a
-frame state. Replacing any of those with a token would let a
+frame state: it is an action property (#78) that tints the glyph and label
+`ACTION_DANGER #FF4D4D` (same hex as `STATE_BLOCKED`, different channel) and
+arms a deck-local two-stage confirm. Do not add `danger` or `armed` to
+`FRAME_STATES`. Replacing any of those with a token would let a
 web-side theme edit silently desync the virtual deck from the hardware, which is
 the one thing the virtual deck exists not to do. The halo in particular is a
 fixed formula, not a look — reproduce it exactly, never re-center it, never

@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createGestures, LONG_PRESS_MS, DOUBLE_TAP_MS } from '../../streamdeck-plugin/src/gestures.mjs';
+import { createGestures, LONG_PRESS_MS, DOUBLE_TAP_MS, ARM_MS } from '../../streamdeck-plugin/src/gestures.mjs';
 
 const mk = () => createGestures();
 
-test('the pinned constants are the ones issues #33 and #35 agreed on', () => {
+test('the pinned constants are the ones issues #33, #35, and #78 agreed on', () => {
   assert.equal(LONG_PRESS_MS, 500);
   assert.equal(DOUBLE_TAP_MS, 300);
+  assert.equal(ARM_MS, 3000);
 });
 
 test('the virtual deck embeds the identical timings (drift guard)', () => {
@@ -18,6 +19,10 @@ test('the virtual deck embeds the identical timings (drift guard)', () => {
   const src = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
   assert.match(src, new RegExp('LONG_PRESS_MS\\s*=\\s*' + LONG_PRESS_MS + '\\b'));
   assert.match(src, new RegExp('DOUBLE_TAP_MS\\s*=\\s*' + DOUBLE_TAP_MS + '\\b'));
+  assert.match(src, new RegExp('ARM_MS\\s*=\\s*' + ARM_MS + '\\b'));
+  const habits = readFileSync(new URL('../../public/habits.html', import.meta.url), 'utf8');
+  assert.match(habits, new RegExp('ARM_MS\\s*=\\s*' + ARM_MS + '\\b'),
+    'habit-manager two-stage confirm must share the deck arm window');
 });
 
 test('a key with no double-tap handler taps immediately on release', () => {
@@ -98,4 +103,104 @@ test('forget() drops a key that disappeared mid-press', () => {
   g.forget('a');
   assert.deepEqual(g.tick(2000), [], 'a vanished key cannot fire a gesture');
   assert.equal(g.nextDeadline(), 0);
+});
+
+test('press 1 on a danger key arms and emits nothing the bridge would send', () => {
+  const g = mk();
+  g.register('del', { danger: true });
+  g.down('del', 1000);
+  assert.deepEqual(g.up('del', 1100), [{ id: 'del', gesture: 'arm' }]);
+  assert.equal(g.nextDeadline(), 1100 + ARM_MS, 'arm window is a tick deadline');
+  assert.deepEqual(g.tick(1100 + ARM_MS - 1), [], 'not expired yet');
+});
+
+test('press 2 inside the arm window is the commit', () => {
+  const g = mk();
+  g.register('del', { danger: true });
+  g.down('del', 1000);
+  g.up('del', 1100);
+  g.down('del', 2000);
+  assert.deepEqual(g.up('del', 2100), [{ id: 'del', gesture: 'commit' }]);
+  assert.equal(g.nextDeadline(), 0, 'commit consumes the arm window');
+  assert.deepEqual(g.tick(9999), [], 'no leftover expire after commit');
+});
+
+test('the arm window lapsing is a silent disarm — no commit token', () => {
+  const g = mk();
+  g.register('del', { danger: true });
+  g.down('del', 1000);
+  g.up('del', 1100);
+  assert.deepEqual(g.tick(1100 + ARM_MS), [{ id: 'del', gesture: 'disarm' }]);
+  assert.equal(g.nextDeadline(), 0);
+  g.down('del', 5000);
+  assert.deepEqual(g.up('del', 5100), [{ id: 'del', gesture: 'arm' }],
+    'a tap after lapse is a fresh arm, not a late commit');
+});
+
+test('a second press that straddles the deadline still commits', () => {
+  const g = mk();
+  g.register('del', { danger: true });
+  g.down('del', 1000);
+  g.up('del', 1100);                    // expires 4100
+  g.down('del', 4000);                  // finger down across the deadline
+  assert.deepEqual(g.tick(4100), [], 'expiry waits out the held second press');
+  assert.deepEqual(g.up('del', 4200), [{ id: 'del', gesture: 'commit' }]);
+});
+
+test('a press that starts after the arm deadline does not commit', () => {
+  // A delayed timer can leave armedAt set past ARM_MS. The second press must
+  // still honor the advertised window: start-after-deadline → re-arm, not commit.
+  const g = mk();
+  g.register('del', { danger: true });
+  g.down('del', 1000);
+  g.up('del', 1100);                    // expires 4100; tick never ran
+  g.down('del', 5000);                  // press begins after the window closed
+  assert.deepEqual(g.up('del', 5100), [{ id: 'del', gesture: 'arm' }],
+    'late press re-arms instead of committing outside the window');
+  assert.equal(g.nextDeadline(), 5100 + ARM_MS);
+  g.down('del', 5200);
+  assert.deepEqual(g.up('del', 5300), [{ id: 'del', gesture: 'commit' }],
+    'a press inside the fresh arm window still commits');
+});
+
+test('a hold while armed disarms instead of committing or undoing', () => {
+  const g = mk();
+  g.register('del', { danger: true });
+  g.down('del', 1000);
+  g.up('del', 1100);
+  g.down('del', 1500);
+  assert.deepEqual(g.tick(2000), [{ id: 'del', gesture: 'disarm' }]);
+  assert.deepEqual(g.up('del', 2100), [], 'the release of that hold emits nothing');
+});
+
+test('danger registration ignores double-tap so two taps are the confirm', () => {
+  const g = mk();
+  g.register('del', { danger: true, doubleTap: true });
+  g.down('del', 1000);
+  assert.deepEqual(g.up('del', 1100), [{ id: 'del', gesture: 'arm' }], 'no deferral');
+  g.down('del', 1200);
+  assert.deepEqual(g.up('del', 1250), [{ id: 'del', gesture: 'commit' }]);
+});
+
+test('clearing danger while armed drops the window without a commit', () => {
+  const g = mk();
+  g.register('del', { danger: true });
+  g.down('del', 1000);
+  g.up('del', 1100);
+  g.register('del', { danger: false });
+  assert.equal(g.nextDeadline(), 0);
+  g.down('del', 1200);
+  assert.deepEqual(g.up('del', 1300), [{ id: 'del', gesture: 'tap' }]);
+});
+
+test('arm deadlines compose with other keys in nextDeadline', () => {
+  const g = mk();
+  g.register('a', { doubleTap: true });
+  g.register('del', { danger: true });
+  g.down('a', 1000);                    // long-press 1500
+  g.down('del', 1000);
+  g.up('del', 1100);                    // disarm 4100
+  assert.equal(g.nextDeadline(), 1500);
+  g.tick(1500);
+  assert.equal(g.nextDeadline(), 4100);
 });

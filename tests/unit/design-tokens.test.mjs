@@ -275,6 +275,15 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   assert.ok(faces.includes('stroke-dasharray="10 7"'), 'working frame needs a non-hue mark (dash)');
   assert.ok(!plugin.includes("STATE_DANGER") && !faces.includes("frame === 'danger'"),
     'danger is not a frame state');
+  assert.ok(plugin.includes("ACTION_DANGER = '#FF4D4D'"),
+    'plugin names the danger glyph token beside the blocked frame token');
+  assert.match(faces,
+    /function glyphTintColor\(name\) \{[^}]*?if \(name === 'danger'\) return ACTION_DANGER;/,
+    'glyphTintColor maps danger → ACTION_DANGER (not an unrelated substring)');
+  assert.ok(plugin.includes("gesture === 'arm'") && plugin.includes("gesture === 'commit'"),
+    'plugin dispatches the two-stage confirm from the gesture layer');
+  assert.ok(deck.includes('armThenCommit') && deck.includes('CONFIRM?'),
+    'virtual deck mirrors the arm → CONFIRM? sequence');
 
   // Attention Beacon (#75): both renderers pin the same coach interior + frames.
   assert.ok(deck.includes('.coachface'), 'virtual deck must have a coach/beacon face class');

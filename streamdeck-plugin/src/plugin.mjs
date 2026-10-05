@@ -28,7 +28,7 @@
 // reason; keys show the manifest's default action images until the first
 // poll paints them.
 import streamDeck, { SingletonAction, action } from '@elgato/streamdeck';
-import { face, hueFor, frameStep, FRAME_SUCCESS_FADE_MS, owedFrame } from './faces.mjs';
+import { face, hueFor, frameStep, FRAME_SUCCESS_FADE_MS, owedFrame, ARM_GLYPH, ARM_LABEL } from './faces.mjs';
 import { createScheduler } from './scheduler.mjs';
 import { createGestures } from './gestures.mjs';
 import { deriveVisibility } from './visibility.mjs';
@@ -64,19 +64,21 @@ const SILVER_HUE = 222;   // neutral / pending
 
 // Turn-state frame palette (#74 / study §2.2). Meaning lives here with the
 // other hue constants; faces.mjs and deck.html keep matching copies. `danger`
-// is an action property (child E), not a frame state.
+// is an action property (glyph + label, #78), not a frame state.
 const STATE_IDLE = '#3A3F47';
 const STATE_WORKING = '#2EA3FF';
 const STATE_WAIT = '#FFB000';
 const STATE_SUCCESS = '#22C55E';
 const STATE_BLOCKED = '#FF4D4D';
+const ACTION_DANGER = '#FF4D4D'; // same hex as blocked; different channel (§2.2)
 void STATE_IDLE; void STATE_WORKING; void STATE_WAIT; void STATE_SUCCESS; void STATE_BLOCKED;
+void ACTION_DANGER;
 
 const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.7';
+let VERSION = '2.5.9';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -493,12 +495,28 @@ function render(k) {
   // Nudges and questions both answer a hold with a refusal rather than an undo,
   // and neither registers a double-tap: a poke and an answer are single,
   // immediate acts, so their taps stay instant on release (#35, #34).
-  const was = [k.isNudge, k.isQuestion];
+  // Danger keys (#78) also skip double-tap: two taps ARE the confirm.
+  const was = [k.isNudge, k.isQuestion, k.isDanger];
   k.isNudge = !!(def && def.nudge);
   k.isQuestion = !!(def && def.qid);
   k.isDetails = !!(def && def.qid && isDetailsKey(def));
-  if (was[0] !== k.isNudge || was[1] !== k.isQuestion) {
-    gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
+  k.isDanger = !!(def && def.danger);
+  // Include danger: sanitize() can flip that boolean alone, and an armed
+  // CONFIRM face must clear when the slot stops being destructive (#78).
+  const slotSig = def
+    ? `${def.habit}|${def.qid || ''}|${def.label || ''}|d${def.danger ? 1 : 0}`
+    : '';
+  if (k.slotSig !== slotSig) {
+    k.armed = false;
+    k.slotSig = slotSig;
+  }
+  if (was[0] !== k.isNudge || was[1] !== k.isQuestion || was[2] !== k.isDanger) {
+    // register() also clears armedAt when danger drops; keep the face in step.
+    if (was[2] && !k.isDanger) k.armed = false;
+    gest.register(k.action.id, {
+      doubleTap: !k.isNudge && !k.isQuestion && !k.isDanger,
+      danger: k.isDanger
+    });
   }
   const now = Date.now();
   const qid = def && def.qid;
@@ -510,6 +528,17 @@ function render(k) {
     const next = owedFrame(def, now);
     setKeyFrame(k, next, now);
     k.frameUrgency = (def && def.nudge) ? nudgeUrgency(def, now) : 0;
+  }
+  if (k.armed) {
+    // Deck-local armed face (#78): ⚠ CONFIRM? in danger-red. Not a frame
+    // state, not a confirming flash — press 1 must not acknowledge.
+    const hue = def && def.qid ? QUESTION_HUE
+      : def && def.nudge ? hueFor(def.habit || def.label || '')
+      : VIOLET_HUE;
+    k.action.setImage(face(ARM_GLYPH, ARM_LABEL, hue, '', 78, withFrame(k, {
+      grammar: true, mono: true, glyphTint: 'danger', armed: true
+    }, now)));
+    return;
   }
   if (def && def.qid) {
     // Identity is magenta (the question-object); the wait frame says your move.
@@ -526,7 +555,9 @@ function render(k) {
       withFrame(k, { urgency: k.frameUrgency }, now)));
   } else if (def) {
     // Coach merely speaking: violet interior, no amber frame.
-    k.action.setImage(face(def.emoji || '✨', def.label || def.habit, VIOLET_HUE, 'AI ' + n, undefined, withFrame(k, null, now)));
+    // `danger` tints the glyph+label (#78) without becoming a frame state.
+    k.action.setImage(face(def.emoji || '✨', def.label || def.habit, VIOLET_HUE, 'AI ' + n, undefined, withFrame(k,
+      def.danger ? { glyphTint: 'danger', grammar: true, mono: true } : null, now)));
   } else {
     k.action.setImage(face('✨', 'Slot ' + n, SILVER_HUE, 'AI', 22, withFrame(k, null, now)));
   }
@@ -617,6 +648,19 @@ function dispatch({ id, gesture }) {
     else coachNavigate(k);
     return;
   }
+  // Two-stage Confirm (#78): arm/disarm never cross the bridge. commit is
+  // the same emitting press a non-danger tap would have been.
+  if (gesture === 'arm') {
+    k.armed = true;
+    try { render(k); } catch { /* next tick */ }
+    return;
+  }
+  if (gesture === 'disarm') {
+    k.armed = false;
+    try { render(k); } catch { /* next tick */ }
+    return;
+  }
+  if (gesture === 'commit') k.armed = false;
   if (gesture === 'longpress') {
     if (k.isQuestion) dismissQuestion(k);
     else if (k.isNudge) dismissNudge(k);

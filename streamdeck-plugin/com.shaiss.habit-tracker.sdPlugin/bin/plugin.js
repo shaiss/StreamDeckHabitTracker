@@ -316,7 +316,7 @@ var require_permessage_deflate = __commonJS({
       acceptAsServer(offers) {
         const opts = this._options;
         const accepted = offers.find((params) => {
-          if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && !params.client_max_window_bits) {
+          if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && (typeof params.client_max_window_bits === "number" ? opts.clientMaxWindowBits > params.client_max_window_bits : !params.client_max_window_bits)) {
             return false;
           }
           return true;
@@ -2334,11 +2334,23 @@ var require_websocket = __commonJS({
           this._isServer = false;
           this._redirects = 0;
           if (protocols === void 0) {
-            protocols = [];
+            if (!options || options.protocols === void 0) {
+              protocols = [];
+            } else if (Array.isArray(options.protocols)) {
+              protocols = options.protocols;
+            } else {
+              protocols = [options.protocols];
+            }
           } else if (!Array.isArray(protocols)) {
             if (typeof protocols === "object" && protocols !== null) {
               options = protocols;
-              protocols = [];
+              if (options.protocols === void 0) {
+                protocols = [];
+              } else if (Array.isArray(options.protocols)) {
+                protocols = options.protocols;
+              } else {
+                protocols = [options.protocols];
+              }
             } else {
               protocols = [protocols];
             }
@@ -2535,7 +2547,6 @@ var require_websocket = __commonJS({
           }
           return;
         }
-        this._readyState = _WebSocket.CLOSING;
         this._sender.close(code, data, !this._isServer, (err) => {
           if (err) return;
           this._closeFrameSent = true;
@@ -2543,6 +2554,7 @@ var require_websocket = __commonJS({
             this._socket.end();
           }
         });
+        this._readyState = _WebSocket.CLOSING;
         setCloseTimer(this);
       }
       /**
@@ -2767,6 +2779,7 @@ var require_websocket = __commonJS({
         socketPath: void 0,
         hostname: void 0,
         protocol: void 0,
+        protocols: void 0,
         timeout: void 0,
         method: "GET",
         host: void 0,
@@ -17503,6 +17516,9 @@ var STATE_COLORS = Object.freeze({
   blocked: "#FF4D4D"
 });
 var FRAME_STATES = Object.freeze(Object.keys(STATE_COLORS));
+var ACTION_DANGER = STATE_COLORS.blocked;
+var ARM_GLYPH = "\u26A0";
+var ARM_LABEL = "CONFIRM?";
 var FRAME_WAIT_MS = 3e3;
 var FRAME_BLOCKED_MS = 1e3;
 var FRAME_WORKING_MS = 4e3;
@@ -17513,6 +17529,10 @@ function resolveFrame(state) {
   const f = state.frame ?? state.frameState ?? null;
   if (f == null || f === "") return null;
   return Object.prototype.hasOwnProperty.call(STATE_COLORS, f) ? f : null;
+}
+function glyphTintColor(name) {
+  if (name === "danger") return ACTION_DANGER;
+  return name && STATE_COLORS[name] || null;
 }
 function clampUrgency(u) {
   const n = Number(u);
@@ -17581,7 +17601,9 @@ function face(emoji3, label, hue, badge, sat = 72, state = null) {
   const lblSize = raw.length > 8 ? 17 : 20;
   const grammar = !!(state && state.grammar);
   const tintName = state && state.glyphTint;
-  const glyphFill = tintName && STATE_COLORS[tintName] || (grammar ? "#e9edf4" : null);
+  const glyphFill = glyphTintColor(tintName) || (grammar ? "#e9edf4" : null);
+  const labelFill = tintName === "danger" ? ACTION_DANGER : "#e9edf4";
+  const armed = !!(state && state.armed);
   const labelFont = state && state.mono ? "ui-monospace,'Cascadia Mono',Consolas,monospace" : "'Segoe UI',Arial,sans-serif";
   const haloHi = hslToHex(hue, sat, 58 + 12 * interiorUrg);
   const haloLo = hslToHex(hue, sat, 45 + 8 * interiorUrg);
@@ -17643,7 +17665,7 @@ function face(emoji3, label, hue, badge, sat = 72, state = null) {
       }
     }
   }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="${haloHi}" stop-opacity="${haloOpacity}"/><stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/><stop offset="1" stop-color="${haloLo}" stop-opacity="0"/></radialGradient></defs><rect width="${S}" height="${S}" fill="url(#b)"/><rect width="${S}" height="${S}" fill="url(#h)"/><rect x="${frameX}" y="${frameY}" width="${frameW}" height="${frameH}" rx="${frameR}" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` + stateFrame + progressFrame + `<text x="${S / 2}" y="76" text-anchor="middle" font-size="${grammar ? 54 : 62}" ` + (glyphFill ? `fill="${glyphFill}" font-weight="700" font-family="${labelFont}"` : `font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif"`) + `>${esc2(emoji3)}</text><text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="${labelFont}" fill="#000000" fill-opacity="0.55">${lbl}</text><text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="${labelFont}" fill="#e9edf4">${lbl}</text>` + tally + // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"` + (armed ? ` data-armed="1"` : "") + `><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/></linearGradient><radialGradient id="h" cx="0.5" cy="0.36" r="0.62"><stop offset="0" stop-color="${haloHi}" stop-opacity="${haloOpacity}"/><stop offset="0.42" stop-color="${haloLo}" stop-opacity="0.18"/><stop offset="1" stop-color="${haloLo}" stop-opacity="0"/></radialGradient></defs><rect width="${S}" height="${S}" fill="url(#b)"/><rect width="${S}" height="${S}" fill="url(#h)"/><rect x="${frameX}" y="${frameY}" width="${frameW}" height="${frameH}" rx="${frameR}" fill="none" stroke="${ring}" stroke-opacity="${ringOpacity}" stroke-width="${ringWidth}"/>` + stateFrame + progressFrame + `<text x="${S / 2}" y="76" text-anchor="middle" font-size="${grammar ? 54 : 62}" ` + (glyphFill ? `fill="${glyphFill}" font-weight="700" font-family="${labelFont}"` : `font-family="'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif"`) + `>${esc2(emoji3)}</text><text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="${labelFont}" fill="#000000" fill-opacity="0.55">${lbl}</text><text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" font-family="${labelFont}" fill="${labelFill}">${lbl}</text>` + tally + // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
   // the only corner mark a habit face ever shows.
   (done ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="12" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.95">\u2713</text>` : badge ? `<text x="${S - 10}" y="18" text-anchor="end" font-size="11" font-weight="700" font-family="'Segoe UI',Arial,sans-serif" fill="${badgeFill}" fill-opacity="0.9">${esc2(badge)}</text>` : "") + `</svg>`;
   return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
@@ -17697,12 +17719,17 @@ function createScheduler({ pollMs, timeoutMs, recheckMs }) {
 // streamdeck-plugin/src/gestures.mjs
 var LONG_PRESS_MS = 500;
 var DOUBLE_TAP_MS = 300;
-function createGestures({ longPressMs = LONG_PRESS_MS, doubleTapMs = DOUBLE_TAP_MS } = {}) {
+var ARM_MS = 3e3;
+function createGestures({
+  longPressMs = LONG_PRESS_MS,
+  doubleTapMs = DOUBLE_TAP_MS,
+  armMs = ARM_MS
+} = {}) {
   const state = /* @__PURE__ */ new Map();
   const st = (id) => {
     let s = state.get(id);
     if (!s) {
-      s = { doubleTap: false, downAt: 0, longFired: false, pendingAt: 0 };
+      s = { doubleTap: false, danger: false, downAt: 0, longFired: false, pendingAt: 0, armedAt: 0 };
       state.set(id, s);
     }
     return s;
@@ -17711,8 +17738,12 @@ function createGestures({ longPressMs = LONG_PRESS_MS, doubleTapMs = DOUBLE_TAP_
     // Keys declare which gestures they answer to. A key with NO double-tap
     // handler gets its tap on release with no deferral — that snappiness is
     // the whole reason this registration exists (nudge keys rely on it).
-    register(id, { doubleTap = false } = {}) {
-      st(id).doubleTap = doubleTap;
+    // `danger` keys never defer for a double-tap: two taps ARE the confirm.
+    register(id, { doubleTap = false, danger = false } = {}) {
+      const s = st(id);
+      s.doubleTap = danger ? false : doubleTap;
+      s.danger = !!danger;
+      if (!s.danger) s.armedAt = 0;
     },
     forget(id) {
       state.delete(id);
@@ -17726,10 +17757,23 @@ function createGestures({ longPressMs = LONG_PRESS_MS, doubleTapMs = DOUBLE_TAP_
     // hold already consumed the press or a double-tap window just opened.
     up(id, now) {
       const s = st(id);
+      const downAt = s.downAt;
       s.downAt = 0;
       if (s.longFired) {
         s.longFired = false;
         return [];
+      }
+      if (s.danger) {
+        if (s.armedAt) {
+          if (downAt && downAt < s.armedAt + armMs) {
+            s.armedAt = 0;
+            return [{ id, gesture: "commit" }];
+          }
+          s.armedAt = now;
+          return [{ id, gesture: "arm" }];
+        }
+        s.armedAt = now;
+        return [{ id, gesture: "arm" }];
       }
       if (!s.doubleTap) return [{ id, gesture: "tap" }];
       if (s.pendingAt) {
@@ -17741,17 +17785,28 @@ function createGestures({ longPressMs = LONG_PRESS_MS, doubleTapMs = DOUBLE_TAP_
     },
     // Resolve every gesture deadline that has come due. A long-press fires
     // WHILE the key is still held — the confirmation is the undo happening,
-    // not the finger lifting.
+    // not the finger lifting. An armed window expiring is a silent disarm;
+    // it does not fire while the finger is down, so a second press that
+    // straddles the deadline still commits.
     tick(now) {
       const out = [];
       for (const [id, s] of state) {
         if (s.downAt && !s.longFired && now - s.downAt >= longPressMs) {
           s.longFired = true;
-          out.push({ id, gesture: "longpress" });
+          if (s.armedAt) {
+            s.armedAt = 0;
+            out.push({ id, gesture: "disarm" });
+          } else {
+            out.push({ id, gesture: "longpress" });
+          }
         }
         if (s.pendingAt && now - s.pendingAt >= doubleTapMs) {
           s.pendingAt = 0;
           out.push({ id, gesture: "tap" });
+        }
+        if (s.armedAt && !s.downAt && now - s.armedAt >= armMs) {
+          s.armedAt = 0;
+          out.push({ id, gesture: "disarm" });
         }
       }
       return out;
@@ -17765,6 +17820,7 @@ function createGestures({ longPressMs = LONG_PRESS_MS, doubleTapMs = DOUBLE_TAP_
       for (const s of state.values()) {
         if (s.downAt && !s.longFired) soonest(s.downAt + longPressMs);
         if (s.pendingAt) soonest(s.pendingAt + doubleTapMs);
+        if (s.armedAt && !s.downAt) soonest(s.armedAt + armMs);
       }
       return at;
     }
@@ -17891,7 +17947,7 @@ var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.5.7";
+var VERSION = "2.5.9";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -18253,12 +18309,22 @@ function render(k) {
   }
   const n = parseInt(s.slot, 10) || 1;
   const def = slotDefOf(k);
-  const was = [k.isNudge, k.isQuestion];
+  const was = [k.isNudge, k.isQuestion, k.isDanger];
   k.isNudge = !!(def && def.nudge);
   k.isQuestion = !!(def && def.qid);
   k.isDetails = !!(def && def.qid && isDetailsKey(def));
-  if (was[0] !== k.isNudge || was[1] !== k.isQuestion) {
-    gest.register(k.action.id, { doubleTap: !k.isNudge && !k.isQuestion });
+  k.isDanger = !!(def && def.danger);
+  const slotSig = def ? `${def.habit}|${def.qid || ""}|${def.label || ""}|d${def.danger ? 1 : 0}` : "";
+  if (k.slotSig !== slotSig) {
+    k.armed = false;
+    k.slotSig = slotSig;
+  }
+  if (was[0] !== k.isNudge || was[1] !== k.isQuestion || was[2] !== k.isDanger) {
+    if (was[2] && !k.isDanger) k.armed = false;
+    gest.register(k.action.id, {
+      doubleTap: !k.isNudge && !k.isQuestion && !k.isDanger,
+      danger: k.isDanger
+    });
   }
   const now = Date.now();
   const qid = def && def.qid;
@@ -18270,6 +18336,16 @@ function render(k) {
     const next = owedFrame(def, now);
     setKeyFrame(k, next, now);
     k.frameUrgency = def && def.nudge ? nudgeUrgency(def, now) : 0;
+  }
+  if (k.armed) {
+    const hue = def && def.qid ? QUESTION_HUE : def && def.nudge ? hueFor(def.habit || def.label || "") : VIOLET_HUE;
+    k.action.setImage(face(ARM_GLYPH, ARM_LABEL, hue, "", 78, withFrame(k, {
+      grammar: true,
+      mono: true,
+      glyphTint: "danger",
+      armed: true
+    }, now)));
+    return;
   }
   if (def && def.qid) {
     const paint = questionPaint(def);
@@ -18289,7 +18365,11 @@ function render(k) {
       withFrame(k, { urgency: k.frameUrgency }, now)
     ));
   } else if (def) {
-    k.action.setImage(face(def.emoji || "\u2728", def.label || def.habit, VIOLET_HUE, "AI " + n, void 0, withFrame(k, null, now)));
+    k.action.setImage(face(def.emoji || "\u2728", def.label || def.habit, VIOLET_HUE, "AI " + n, void 0, withFrame(
+      k,
+      def.danger ? { glyphTint: "danger", grammar: true, mono: true } : null,
+      now
+    )));
   } else {
     k.action.setImage(face("\u2728", "Slot " + n, SILVER_HUE, "AI", 22, withFrame(k, null, now)));
   }
@@ -18355,6 +18435,23 @@ function dispatch({ id, gesture }) {
     else coachNavigate(k);
     return;
   }
+  if (gesture === "arm") {
+    k.armed = true;
+    try {
+      render(k);
+    } catch {
+    }
+    return;
+  }
+  if (gesture === "disarm") {
+    k.armed = false;
+    try {
+      render(k);
+    } catch {
+    }
+    return;
+  }
+  if (gesture === "commit") k.armed = false;
   if (gesture === "longpress") {
     if (k.isQuestion) dismissQuestion(k);
     else if (k.isNudge) dismissNudge(k);

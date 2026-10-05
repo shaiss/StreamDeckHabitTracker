@@ -22,6 +22,12 @@ export const STATE_COLORS = Object.freeze({
   blocked: '#FF4D4D'
 });
 export const FRAME_STATES = Object.freeze(Object.keys(STATE_COLORS));
+// Study §2.2 / #78: danger is an *action* property (glyph + label), not a
+// frame state. Same hex as blocked, different channel — do not add it to
+// STATE_COLORS or it becomes a frame.
+export const ACTION_DANGER = STATE_COLORS.blocked;
+export const ARM_GLYPH = '⚠';
+export const ARM_LABEL = 'CONFIRM?';
 
 // Quantized motion on the plugin poll loop (#74, same idea as urgencyStep).
 // CSS on deck.html animates for real; the plugin only repaints when the step
@@ -45,6 +51,11 @@ export function resolveFrame(state) {
   const f = state.frame ?? state.frameState ?? null;
   if (f == null || f === '') return null;
   return Object.prototype.hasOwnProperty.call(STATE_COLORS, f) ? f : null;
+}
+
+export function glyphTintColor(name) {
+  if (name === 'danger') return ACTION_DANGER;
+  return (name && STATE_COLORS[name]) || null;
 }
 
 // 0..N integer that only moves when the face would look different. Reduced
@@ -149,7 +160,9 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
   const lblSize = raw.length > 8 ? 17 : 20;
   const grammar = !!(state && state.grammar);
   const tintName = state && state.glyphTint;
-  const glyphFill = (tintName && STATE_COLORS[tintName]) || (grammar ? '#e9edf4' : null);
+  const glyphFill = glyphTintColor(tintName) || (grammar ? '#e9edf4' : null);
+  const labelFill = tintName === 'danger' ? ACTION_DANGER : '#e9edf4';
+  const armed = !!(state && state.armed);
   const labelFont = (state && state.mono)
     ? "ui-monospace,'Cascadia Mono',Consolas,monospace"
     : "'Segoe UI',Arial,sans-serif";
@@ -266,7 +279,8 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
     }
   }
   const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"` +
+    (armed ? ` data-armed="1"` : '') + `>` +
     `<defs>` +
     `<linearGradient id="b" x1="0" y1="0" x2="0" y2="1">` +
     `<stop offset="0" stop-color="#141827"/><stop offset="1" stop-color="#0a0c13"/>` +
@@ -290,7 +304,7 @@ export function face(emoji, label, hue, badge, sat = 72, state = null) {
     `<text x="${S / 2 + 1}" y="117" text-anchor="middle" font-size="${lblSize}" font-weight="600" ` +
     `font-family="${labelFont}" fill="#000000" fill-opacity="0.55">${lbl}</text>` +
     `<text x="${S / 2}" y="116" text-anchor="middle" font-size="${lblSize}" font-weight="600" ` +
-    `font-family="${labelFont}" fill="#e9edf4">${lbl}</text>` +
+    `font-family="${labelFont}" fill="${labelFill}">${lbl}</text>` +
     tally +
     // ✓ (done habit) beats badge — habit keys pass no badge, so the check is
     // the only corner mark a habit face ever shows.

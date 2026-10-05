@@ -27,6 +27,7 @@
       touch-action: manipulation; -webkit-tap-highlight-color: transparent;
     }
     .hrow .del:hover { color: var(--bad); }
+    .hrow .del.armed { color: var(--bad); font-size: 11px; font-weight: 700; letter-spacing: .04em; }
     /* the column placard above .rows — same micro-label spec as theme.css .data-table th */
     .cols { display: grid; grid-template-columns: 64px 1fr 1fr 56px 64px 40px; gap: var(--s3); padding: 0 var(--s4);
             margin-bottom: var(--s2); color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; }
@@ -52,6 +53,7 @@
     .prow .pbtns { display: flex; gap: var(--s2); }
     /* the ADD/RETIRE badge is a .chip (coach or quiet); only the gap differs */
     .kind { margin-right: var(--s2); }
+    .pbtns .btn.armed { color: var(--bad); box-shadow: inset 0 0 0 1px var(--bad); }
     /* retired: the same niche, dimmed */
     .arow { display: grid; grid-template-columns: 40px 1fr auto; gap: var(--s3); align-items: center;
             padding: var(--s3) var(--s4); margin-bottom: var(--s2); opacity: .72; }
@@ -160,7 +162,7 @@
             ${p.reason ? `<div class="why">${esc(p.reason)}</div>` : ''}
           </span>
           <span class="pbtns">
-            <button class="btn decide" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-decision="approve">${p.kind === 'retire' ? '✓ Retire it' : '✓ Add it'}</button>
+            <button class="btn decide" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-kind="${esc(p.kind)}" data-decision="approve">${p.kind === 'retire' ? '✓ Retire it' : '✓ Add it'}</button>
             <button class="btn ghost decide" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-decision="dismiss">Dismiss</button>
           </span>
         </div>`).join('');
@@ -173,8 +175,13 @@
           <button class="btn ghost restore" data-name="${esc(a.name)}">↩ Restore</button>
         </div>`).join('');
 
-      document.querySelectorAll('.decide').forEach(b => b.addEventListener('click', () =>
-        decide({ id: b.dataset.id, decision: b.dataset.decision })));
+      document.querySelectorAll('.decide').forEach(b => b.addEventListener('click', () => {
+        if (b.dataset.decision === 'approve' && b.dataset.kind === 'retire') {
+          armThenFire(b, { idleText: '✓ Retire it', onCommit: () => decide({ id: b.dataset.id, decision: b.dataset.decision }) });
+          return;
+        }
+        decide({ id: b.dataset.id, decision: b.dataset.decision });
+      }));
       document.querySelectorAll('.restore').forEach(b => b.addEventListener('click', () =>
         decide({ restore: b.dataset.name })));
     }
@@ -206,8 +213,38 @@
       }));
     }
 
+    const ARM_MS = 3000; // pinned to streamdeck-plugin/src/gestures.mjs (#78)
+    const armTimers = new WeakMap();
+    function armThenFire(btn, { idleText, onCommit }) {
+      if (btn.dataset.armed === '1') {
+        const t = armTimers.get(btn);
+        if (t) clearTimeout(t);
+        armTimers.delete(btn);
+        delete btn.dataset.armed;
+        btn.classList.remove('armed');
+        onCommit();
+        return true;
+      }
+      btn.dataset.armed = '1';
+      btn.classList.add('armed');
+      const prev = idleText != null ? idleText : btn.textContent;
+      btn.textContent = 'CONFIRM?';
+      const t = setTimeout(() => {
+        if (btn.dataset.armed !== '1') return;
+        delete btn.dataset.armed;
+        btn.classList.remove('armed');
+        btn.textContent = prev;
+        armTimers.delete(btn);
+      }, ARM_MS);
+      armTimers.set(btn, t);
+      return false;
+    }
+
     function wireRow(el) {
-      el.querySelector('.del').addEventListener('click', () => el.remove());
+      const btn = el.querySelector('.del');
+      btn.addEventListener('click', () => {
+        armThenFire(btn, { idleText: '✕', onCommit: () => el.remove() });
+      });
     }
 
     function load(keepStatus) {

@@ -630,6 +630,89 @@ test('living key faces: today state paints habit keys and repaints on change (#3
   } finally { p.done(); }
 });
 
+test('press 1 on a danger key arms CONFIRM? and never logs (#78)', async () => {
+  const p = await boot();
+  try {
+    slots = [{ habit: 'Nuke', emoji: '⚠', label: 'DELETE', danger: true, assignedAt: 1 }, null, null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>DELETE<')), { label: 'danger idle face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => p.images().some((m) => {
+      const s = svgOf(m);
+      return s.includes('data-armed="1"') && s.includes('>CONFIRM?<');
+    }), { label: 'armed CONFIRM? face' });
+    await sleep(250);
+    assert.equal(logUrls.length, 0, 'arming must not cross the bridge');
+    assert.ok(!p.sent.some((m) => m.event === 'showOk'), 'press 1 does not flash-acknowledge');
+  } finally { p.done(); }
+});
+
+test('press 2 within the arm window commits and flashes; a lapse emits nothing (#78)', async () => {
+  const p = await boot();
+  try {
+    slots = [{ habit: 'Nuke', emoji: '⚠', label: 'DELETE', danger: true, assignedAt: 1 }, null, null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>DELETE<')), { label: 'danger idle face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => p.images().some((m) => svgOf(m).includes('>CONFIRM?<')), { label: 'armed' });
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => logUrls.length === 1, { label: 'the committing press' });
+    assert.match(logUrls[0], /^GET \/api\/log\?slot=1/);
+    await until(() => p.sent.some((m) => m.event === 'showOk'), { label: 'commit flash' });
+  } finally { p.done(); }
+});
+
+test('an expired arm window disarms silently (#78)', async () => {
+  const p = await boot();
+  try {
+    slots = [{ habit: 'Nuke', emoji: '⚠', label: 'DELETE', danger: true, assignedAt: 1 }, null, null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>DELETE<')), { label: 'danger idle face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => p.images().some((m) => svgOf(m).includes('>CONFIRM?<')), { label: 'armed' });
+    await until(() => {
+      const last = p.images().filter((m) => m.context === 'ctx-slot-1').at(-1);
+      return last && svgOf(last).includes('>DELETE<') && !svgOf(last).includes('data-armed="1"');
+    }, { timeout: 5000, label: 'silent disarm after ARM_MS' });
+    assert.equal(logUrls.length, 0, 'lapse must not emit a token');
+  } finally { p.done(); }
+});
+
+test('danger flip while armed clears CONFIRM and does not log (#78)', async () => {
+  // sanitize() can drop danger for an otherwise identical slot. The armed
+  // face and gesture registration must both reset — a stale CONFIRM must not
+  // linger while the next ordinary tap commits.
+  const p = await boot();
+  try {
+    slots = [{ habit: 'Nuke', emoji: '⚠', label: 'DELETE', danger: true, assignedAt: 1 }, null, null, null];
+    await until(() => p.images().some((m) => svgOf(m).includes('>DELETE<')), { label: 'danger idle face' });
+    logUrls.length = 0;
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => p.images().some((m) => {
+      const s = svgOf(m);
+      return s.includes('data-armed="1"') && s.includes('>CONFIRM?<');
+    }), { label: 'armed CONFIRM? face' });
+    assert.equal(logUrls.length, 0, 'press 1 never hits /api/log');
+    slots = [{ habit: 'Nuke', emoji: '⚠', label: 'DELETE', assignedAt: 1 }, null, null, null];
+    await until(() => {
+      const last = p.images().filter((m) => m.context === 'ctx-slot-1').at(-1);
+      if (!last) return false;
+      const s = svgOf(last);
+      return s.includes('>DELETE<') && !s.includes('data-armed="1"') && !s.includes('>CONFIRM?<');
+    }, { label: 'disarmed after danger flip' });
+    assert.equal(logUrls.length, 0, 'danger flip must not emit a token');
+    // Stale danger registration would treat two taps as arm+commit (no
+    // intensity). A normal slot double-taps to one log with intensity=high.
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await sleep(60);
+    await p.press('ctx-slot-1', 'com.shaiss.habit-tracker.slot');
+    await until(() => logUrls.length >= 1, { label: 'post-flip double tap logs' });
+    await sleep(500);
+    assert.equal(logUrls.length, 1, 'post-flip double tap is one log, not arm+commit');
+    assert.match(logUrls[0], /[?&]intensity=high\b/, 'post-flip key is a normal slot');
+  } finally { p.done(); }
+});
+
 test('the esbuild bundle boots and paints (packaging smoke)', async () => {
   const { bundlePlugin } = await import('../../tools/bundle-plugin.mjs');
   await bundlePlugin();
