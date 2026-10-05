@@ -12,7 +12,7 @@ import { scoreSuggestions } from '../lib/scorer.js';
 import { computeToday } from '../lib/today.js';
 import { nudgePass } from '../lib/coach.js';
 import { isBlocked } from '../lib/beacon.js';
-import { handleOptions, optionalAuth, setCors } from '../lib/auth.js';
+import { handleOptions, optionalAuth, hasExplicitCredential, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
 
 function publicPayload() {
@@ -92,7 +92,11 @@ export default async function handler(req, res) {
       }
       res.status(200).json(out);
 
-      // Heartbeat write + nudge only for authenticated deck polls.
+      // Heartbeat + nudgePass are GET side-effects. Cookie-only Clerk sessions
+      // must not authorize them (cross-site GET). Plugin sends ?key=; dashboard
+      // authFetch sends Authorization: Bearer.
+      if (!hasExplicitCredential(req)) return;
+
       if (q.deck) {
         const uid = auth.userId;
         waitUntil(

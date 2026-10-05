@@ -59,7 +59,9 @@ export default async function handler(req, res) {
       res.status(405).json({ error: 'Method not allowed' });
     }, {
       // Only Clerk sessions may manage tokens.
-      verifyApiToken: async () => null
+      verifyApiToken: async () => null,
+      // Listing tokens is a read — cookie-only GET stays valid.
+      mutation: req.method !== 'GET'
     });
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });

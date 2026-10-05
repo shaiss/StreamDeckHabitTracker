@@ -57,3 +57,14 @@ to the **caller’s** Redis prefix — a non-owner cannot read the owner’s leg
 ## Plugin auth
 
 The plugin already sends `settings.key` as `?key=`. That value is now a **per-user** token (`ht_…`) minted on the dashboard, stored as SHA-256 server-side, and bound to the Clerk user. The old deployment-wide `HABIT_KEY` is no longer accepted as a write credential.
+
+## GET mutations (cookie-blind)
+
+A Clerk `__session` cookie **alone** never authorizes a state change on `GET`/`HEAD`. Third-party pages can trigger cookie-bearing GET (top-level links; SameSite=Lax). Mutations on GET need one of:
+
+1. An `ht_…` plugin token (`?key=`, `Authorization: Bearer ht_…`, or JSON `body.key`) — what the Stream Deck plugin sends
+2. An explicit `Authorization: Bearer <Clerk session JWT>` header — what `public/auth.js` `authFetch` sends on every dashboard/deck request
+
+Cookie-only sessions remain valid for **reads** (`optionalAuth`) and for **POST/DELETE** (those methods do not send cookies on cross-site form GET, and browsers will not attach `Authorization`).
+
+`defaultVerifySession` does not swallow Clerk/network failures: a missing or invalid session is **401**; an infrastructure error is **5xx**.
