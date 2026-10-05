@@ -2,7 +2,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { runAsUser, redisKey, isOwner, ownerUserId } from '../../lib/scope.js';
 import {
-  resolveAuth, requireAuth, clerkConfigured, publishableKey,
+  resolveAuth, requireAuth, optionalAuth, clerkConfigured, publishableKey,
   resolveOwnerAuth, requireOwnerAuth, isCronBearer
 } from '../../lib/auth.js';
 
@@ -282,6 +282,103 @@ test('CRON_SECRET unset: bearer path refused (even with Authorization header)', 
   assert.equal(isCronBearer(req), false);
   // Header is not an ht_ token and session verify returns null → 401
   const gate = await resolveOwnerAuth(req, ownerOpts(null));
+  assert.deepEqual(gate, { ok: false, status: 401 });
+});
+
+test('cookie-only GET mutation is rejected (no session verify)', async () => {
+  let verified = false;
+  const res = mockRes();
+  const auth = await requireAuth(
+    { method: 'GET', query: { habit: 'Drink' }, headers: { cookie: '__session=abc' } },
+    res,
+    {
+      verifySession: async () => { verified = true; return 'user_session'; },
+      verifyApiToken: async () => 'nope'
+    }
+  );
+  assert.equal(auth, null);
+  assert.equal(verified, false);
+  assert.equal(res.out.statusCode, 401);
+});
+
+test('Bearer Clerk session GET mutation is allowed', async () => {
+  const res = mockRes();
+  const auth = await requireAuth(
+    { method: 'GET', query: { habit: 'Drink' }, headers: { authorization: 'Bearer sess_abc' } },
+    res,
+    { verifySession: async () => 'user_session' }
+  );
+  assert.deepEqual(auth, { userId: 'user_session', via: 'clerk' });
+  assert.equal(res.out.statusCode, 200);
+});
+
+test('ht_ token GET mutation is allowed', async () => {
+  const res = mockRes();
+  const auth = await requireAuth(
+    {
+      method: 'GET',
+      query: { habit: 'Drink', key: 'ht_deadbeefdeadbeefdeadbeefdeadbeef' },
+      headers: {}
+    },
+    res,
+    {
+      verifyApiToken: async (t) => (t.startsWith('ht_') ? 'user_plugin' : null),
+      verifySession: async () => 'should_not_run'
+    }
+  );
+  assert.deepEqual(auth, { userId: 'user_plugin', via: 'token' });
+});
+
+test('cookie-only GET read is allowed', async () => {
+  const auth = await optionalAuth(
+    { method: 'GET', query: {}, headers: { cookie: '__session=abc' } },
+    { verifySession: async () => 'user_session' }
+  );
+  assert.deepEqual(auth, { userId: 'user_session', via: 'clerk' });
+});
+
+test('cookie-only POST mutation is still allowed', async () => {
+  const res = mockRes();
+  const auth = await requireAuth(
+    { method: 'POST', query: {}, headers: { cookie: '__session=abc' } },
+    res,
+    { verifySession: async () => 'user_session' }
+  );
+  assert.deepEqual(auth, { userId: 'user_session', via: 'clerk' });
+});
+
+test('session-verify infra error is 5xx, not 401', async () => {
+  const res = mockRes();
+  const req = { method: 'GET', query: {}, headers: { authorization: 'Bearer sess_abc' } };
+  const opts = {
+    verifySession: async () => { throw new Error('Clerk JWKS unreachable'); }
+  };
+  try {
+    await requireAuth(req, res, opts);
+    assert.fail('requireAuth should propagate infra errors');
+  } catch (err) {
+    assert.match(err.message, /JWKS unreachable/);
+    assert.equal(res.out.statusCode, 200, 'must not send 401 before throwing');
+    assert.equal(res.out.body, null);
+  }
+  // Same split the API handlers use: catch → 500, never rewrite as signed-out.
+  try {
+    await requireAuth(req, res, opts);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+  assert.equal(res.out.statusCode, 500);
+  assert.equal(res.out.body.error.includes('JWKS'), true);
+  assert.notEqual(res.out.body.error, 'Unauthorized');
+});
+
+test('cookie-only GET cannot pass owner-only cron', async () => {
+  process.env.HABIT_OWNER_USER_ID = 'user_owner';
+  process.env.CRON_SECRET = 'cron-secret';
+  const gate = await resolveOwnerAuth(
+    { method: 'GET', query: {}, headers: { cookie: '__session=abc' } },
+    ownerOpts('user_owner')
+  );
   assert.deepEqual(gate, { ok: false, status: 401 });
 });
 
