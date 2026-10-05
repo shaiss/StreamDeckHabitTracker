@@ -274,7 +274,11 @@
   <script type="module">
     import { questionPaint, isDetailsKey } from '/glyphs.js';
     const KEY = new URLSearchParams(location.search).get('key') || '';
-    const withKey = (u) => KEY ? u + (u.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY) : u;
+    // Only append ht_ plugin tokens. A legacy ?key= would otherwise win over the
+    // Clerk session on the server and 401 every signed-in tap.
+    const withKey = (u) => (KEY && KEY.startsWith('ht_'))
+      ? u + (u.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY)
+      : u;
 
     async function apiFetch(url, opts) {
       const u = withKey(url);

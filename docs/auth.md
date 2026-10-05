@@ -10,9 +10,24 @@ for any write, and scopes Redis data per Clerk `userId`.
 | `CLERK_PUBLISHABLE_KEY` | yes | Browser + `authenticateRequest` |
 | `CLERK_SECRET_KEY` | yes | Server verification |
 | `HABIT_OWNER_USER_ID` | yes (for prod data + cron) | Clerk user id of the existing single-tenant owner |
-| `CRON_SECRET` | recommended | Vercel cron `Authorization: Bearer …` |
+| `CRON_SECRET` | **required** for cron | Vercel cron `Authorization: Bearer …`. If unset, the bearer path is refused (fail closed). |
 
 Fail closed: if Clerk keys are missing, mutating endpoints return **401** (unless a valid `ht_…` plugin token is presented).
+
+## Owner-only routes
+
+These always act on the owner tenant (legacy `habits:*` keys). Callers must be
+either `Authorization: Bearer $CRON_SECRET` or the owner’s Clerk session / `ht_` token
+(`userId === HABIT_OWNER_USER_ID`). Non-owners get **403**; anonymous get **401**.
+If `HABIT_OWNER_USER_ID` is unset, no Clerk user or token passes.
+
+| Route | Why |
+|-------|-----|
+| `GET/POST /api/cron/morning` | Morning slot/roster/coach-page pass |
+| `GET/POST /api/cron/daily` | Daily digest |
+
+Per-user coaching routes (`/api/suggest`, `/api/mind`, `/api/coachpage`, …) scope
+to the **caller’s** Redis prefix — a non-owner cannot read the owner’s legacy keys.
 
 ## Clerk Dashboard setup
 
