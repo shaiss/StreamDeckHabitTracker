@@ -72,6 +72,7 @@
   </style>
 </head>
 <body>
+  <script src="/auth.js"></script>
   <script src="/nav.js" defer></script>
   <div class="wrap wide">
     <header>
@@ -99,7 +100,16 @@
       let hue = h % 320; if (hue >= 245) hue += 40; return hue;
     }
 
-    fetch('/api/mind').then(r=>r.json()).then(m => {
+    const apiFetch = (url, opts) =>
+      (window.HabitAuth && window.HabitAuth.authFetch)
+        ? window.HabitAuth.authFetch(url, opts)
+        : fetch(url, opts);
+
+    apiFetch('/api/mind').then(r=>r.json()).then(m => {
+      if (m.authRequired) {
+        document.getElementById('tagline').textContent = 'Sign in to see inside the coach.';
+        return;
+      }
       if (!m.configured) { document.getElementById('tagline').textContent = 'Storage not connected yet.'; return; }
       const s = m.stats || {};
       document.getElementById('tagline').textContent =

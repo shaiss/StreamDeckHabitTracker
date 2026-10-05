@@ -1,18 +1,11 @@
-// GET  /api/roster        -> { proposals, archive, lastRunAt, model }
-// GET  /api/roster?run=1  -> run a coach roster pass now (30s cooldown)
-// POST /api/roster        -> { id, decision: 'approve'|'dismiss' } | { restore: 'Name' }
-//
-// The self-managing-roster surface: the coach proposes changes to the fixed
-// habit list (lib/coach.js rosterPass, also run by the morning cron) and the
-// human decides here. Approvals apply immediately and atomically enough — the
-// habit list is written first, so a failure leaves the proposal pending rather
-// than silently losing the change. Retirement is soft; see lib/roster.js.
-// HABIT_KEY (if set) gates writes via ?key= or body.key, matching api/habits.js.
+// Roster reads are user-scoped; writes/runs require auth.
 import { isConfigured, getRoster, setRoster } from '../lib/store.js';
 import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
 import { rosterPass, ROSTER_COOLDOWN_MS } from '../lib/coach.js';
 import { normalizeRoster, applyDecision, restoreFromArchive } from '../lib/roster.js';
+import { handleOptions, optionalAuth, withUser, setCors } from '../lib/auth.js';
+import { runAsUser } from '../lib/scope.js';
 
 const view = (doc) => ({
   proposals: doc.proposals,
@@ -22,7 +15,8 @@ const view = (doc) => ({
 });
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (handleOptions(req, res, 'GET, POST, OPTIONS')) return;
+  setCors(res, { methods: 'GET, POST, OPTIONS' });
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
   try {
@@ -31,62 +25,62 @@ export default async function handler(req, res) {
       return;
     }
     const q = req.query || {};
-    const secret = process.env.HABIT_KEY;
 
     if (req.method !== 'POST') {
-      const current = normalizeRoster(await getRoster());
-      if (q.run !== '1') {
-        res.status(200).json(view(current));
+      if (q.run === '1') {
+        await withUser(req, res, async () => {
+          const current = normalizeRoster(await getRoster());
+          if (!zaiKey()) {
+            res.status(503).json({ error: 'No AI key set — add ZAI_API_KEY in Vercel, then redeploy.' });
+            return;
+          }
+          if (Date.now() - current.lastRunAt < ROSTER_COOLDOWN_MS) {
+            res.status(429).json({ error: 'Just ran — try again in half a minute.', ...view(current) });
+            return;
+          }
+          const doc = await rosterPass();
+          res.status(200).json({ added: doc.added, parseError: doc.parseError || undefined, ...view(doc) });
+        });
         return;
       }
-      if (secret && q.key !== secret) {
-        res.status(401).json({ error: 'Unauthorized' });
+      const auth = await optionalAuth(req);
+      if (!auth) {
+        res.status(200).json({ proposals: [], archive: [], lastRunAt: 0, model: '', authRequired: true });
         return;
       }
-      if (!zaiKey()) {
-        res.status(503).json({ error: 'No AI key set — add ZAI_API_KEY in Vercel, then redeploy.' });
-        return;
-      }
-      if (Date.now() - current.lastRunAt < ROSTER_COOLDOWN_MS) {
-        res.status(429).json({ error: 'Just ran — try again in half a minute.', ...view(current) });
-        return;
-      }
-      const doc = await rosterPass();
-      res.status(200).json({ added: doc.added, parseError: doc.parseError || undefined, ...view(doc) });
+      await runAsUser(auth.userId, async () => {
+        res.status(200).json(view(normalizeRoster(await getRoster())));
+      });
       return;
     }
 
-    const body = typeof req.body === 'object' && req.body ? req.body : {};
-    if (secret && body.key !== secret && q.key !== secret) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-    const [habits, roster] = await Promise.all([getHabits(), getRoster()]);
-    const result = body.restore
-      ? restoreFromArchive({ habits, roster, name: String(body.restore) })
-      : applyDecision({
-          habits,
-          roster,
-          id: String(body.id || ''),
-          decision: String(body.decision || '')
-        });
-    if (result.error) {
-      res.status(400).json({ error: result.error });
-      return;
-    }
-    // Defense in depth: the coach influenced this list, so it has to pass the
-    // same validation a hand-edited save does before it can land.
-    let saved = habits;
-    if (result.habits !== habits) {
-      const err = validateHabits(result.habits);
-      if (err) {
-        res.status(400).json({ error: err });
+    await withUser(req, res, async () => {
+      const body = typeof req.body === 'object' && req.body ? req.body : {};
+      const [habits, roster] = await Promise.all([getHabits(), getRoster()]);
+      const result = body.restore
+        ? restoreFromArchive({ habits, roster, name: String(body.restore) })
+        : applyDecision({
+            habits,
+            roster,
+            id: String(body.id || ''),
+            decision: String(body.decision || '')
+          });
+      if (result.error) {
+        res.status(400).json({ error: result.error });
         return;
       }
-      saved = await saveHabits(result.habits);
-    }
-    await setRoster(result.roster);
-    res.status(200).json({ ok: true, applied: result.applied, habits: saved, ...view(result.roster) });
+      let saved = habits;
+      if (result.habits !== habits) {
+        const err = validateHabits(result.habits);
+        if (err) {
+          res.status(400).json({ error: err });
+          return;
+        }
+        saved = await saveHabits(result.habits);
+      }
+      await setRoster(result.roster);
+      res.status(200).json({ ok: true, applied: result.applied, habits: saved, ...view(result.roster) });
+    });
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }

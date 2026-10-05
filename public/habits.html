@@ -61,6 +61,7 @@
   </style>
 </head>
 <body>
+  <script src="/auth.js"></script>
   <script src="/nav.js" defer></script>
   <div class="wrap narrow">
     <h1>Habits</h1>
@@ -194,10 +195,15 @@
       return `${a.label} is a fixed key now — re-import your deck profile to give it a physical key.`;
     }
 
+    const apiFetch = (url, opts) =>
+      (window.HabitAuth && window.HabitAuth.authFetch)
+        ? window.HabitAuth.authFetch(url, opts)
+        : fetch(url, opts);
+
     function decide(payload) {
       document.querySelectorAll('.decide, .restore').forEach(b => { b.disabled = true; });
       statusEl.className = 'status'; statusEl.textContent = 'Working…';
-      return fetch('/api/roster', {
+      return apiFetch('/api/roster', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -249,8 +255,8 @@
 
     function load(keepStatus) {
       return Promise.all([
-        fetch('/api/habits').then(r=>r.json()),
-        fetch('/api/roster').then(r=>r.json()).catch(() => ({}))
+        apiFetch('/api/habits').then(r=>r.json()),
+        apiFetch('/api/roster').then(r=>r.json()).catch(() => ({}))
       ]).then(([j, r]) => {
         rowsEl.innerHTML = (j.habits||[]).map(h => rowHtml(h, false)).join('');
         rowsEl.querySelectorAll('.hrow').forEach(wireRow);
@@ -268,7 +274,8 @@
       rowsEl.lastElementChild.querySelector('.emoji').focus();
     });
 
-    document.getElementById('saveBtn').addEventListener('click', () => {
+    document.getElementById('saveBtn').addEventListener('click', async () => {
+      if (window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
       const habits = [...rowsEl.querySelectorAll('.hrow')].map(el => {
         const g = parseInt(el.querySelector('.goal').value, 10);
         return {
@@ -290,7 +297,7 @@
         seen.add(k);
       }
       statusEl.className = 'status'; statusEl.textContent = 'Saving…';
-      fetch('/api/habits', {
+      apiFetch('/api/habits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ habits })

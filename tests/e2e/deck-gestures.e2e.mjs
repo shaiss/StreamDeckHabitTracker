@@ -24,10 +24,26 @@ let mockBlocked = false;
 let mockQuestion = false;
 let mockPicker = false;
 let mockDanger = false;
+let mockSignedIn = true;    // default: signed-in so existing gesture tests still log
 
 before(async () => {
   server = createServer((req, res) => {
     const url = req.url.split('?')[0];
+    if (url === '/api/auth/config') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ configured: false, publishableKey: null }));
+      return;
+    }
+    if (url === '/auth.js') {
+      // Inject a signed-in/out mock before the real HabitAuth IIFE so deck
+      // taps respect auth without talking to Clerk.
+      const mock =
+        `window.__HABIT_AUTH_MOCK__={signedIn:${mockSignedIn ? 'true' : 'false'},` +
+        `getToken:async()=>'mock-session'};\n`;
+      res.writeHead(200, { 'Content-Type': 'text/javascript' });
+      res.end(mock + readFileSync(join(ROOT, 'auth.js'), 'utf8'));
+      return;
+    }
     if (url === '/api/log') {
       calls.push(req.method + ' ' + req.url);
       res.writeHead(logStatus, { 'Content-Type': 'text/plain' });
@@ -35,6 +51,12 @@ before(async () => {
       return;
     }
     if (url === '/api/nudge') {
+      calls.push(req.method + ' ' + req.url);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ dismissed: true }));
+      return;
+    }
+    if (url === '/api/question') {
       calls.push(req.method + ' ' + req.url);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ dismissed: true }));
@@ -112,7 +134,7 @@ before(async () => {
 after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false } = {}) {
+async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false, signedIn = true } = {}) {
   calls = [];
   logStatus = 200;
   nudgeFraction = nudge;
@@ -121,6 +143,7 @@ async function open({ nudge = null, roster = 0, blocked = false, question = fals
   mockQuestion = question;
   mockPicker = picker;
   mockDanger = danger;
+  mockSignedIn = signedIn;
   await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.k[data-habit="0"]');
   return page.locator('.k[data-habit="0"]');
@@ -136,6 +159,14 @@ test('a tap logs the habit as a plain GET', async () => {
   assert.equal(calls.length, 1, 'exactly one request');
   assert.match(calls[0], /^GET \/api\/log\?hkey=1/);
   assert.doesNotMatch(calls[0], /intensity=/, 'a plain tap carries no intensity');
+});
+
+test('signed-out tap shows sign-in prompt and never hits /api/log', async () => {
+  const key = await open({ signedIn: false });
+  await key.click();
+  await settle();
+  assert.equal(calls.length, 0, 'no /api/log when signed out');
+  assert.match(await page.$eval('#hint', (e) => e.textContent), /Sign in/i);
 });
 
 test('a hold undoes with DELETE and does not also log the release', async () => {
