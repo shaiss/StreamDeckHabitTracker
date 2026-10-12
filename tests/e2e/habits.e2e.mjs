@@ -48,6 +48,17 @@ const rosterView = () => ({ proposals: roster.proposals, archive: roster.archive
 before(async () => {
   server = createServer((req, res) => {
     const url = req.url.split('?')[0];
+    if (url === '/api/auth/config') {
+      json(res, 200, { configured: false, publishableKey: null });
+      return;
+    }
+    if (url === '/auth.js') {
+      const mock =
+        `window.__HABIT_AUTH_MOCK__={signedIn:true,getToken:async()=>'mock-session'};\n`;
+      res.writeHead(200, { 'Content-Type': 'text/javascript' });
+      res.end(mock + readFileSync(join(ROOT, 'auth.js'), 'utf8'));
+      return;
+    }
     if (url === '/api/habits' && req.method === 'POST') {
       readBody(req, (body) => {
         posted.push(body);
