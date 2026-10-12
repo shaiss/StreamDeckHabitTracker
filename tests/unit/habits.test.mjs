@@ -48,6 +48,33 @@ test('goal is optional (no goal still validates)', () => {
   assert.equal(validateHabits([{ name: 'Eat', emoji: '🍽', label: 'Eat' }]), null);
 });
 
+// #70 — object-form goal is backward-compatible with the bare int.
+test('accepts object-form goal {target, setBy, reason, floor, ceil}', () => {
+  assert.equal(validateHabits([{
+    name: 'Caffeine', emoji: '☕', label: 'Caf',
+    goal: { target: 3, setBy: 'coach', reason: 'eased', updatedAt: 1, floor: 1, ceil: 5 }
+  }]), null);
+});
+
+test('plain-number goal still validates alongside an object-form neighbor', () => {
+  assert.equal(validateHabits([
+    { name: 'Drink', emoji: '💧', label: 'Drink', goal: 8 },
+    { name: 'Caffeine', emoji: '☕', label: 'Caf', goal: { target: 2, setBy: 'human' } }
+  ]), null);
+});
+
+test('rejects object goal with bad target / floor>ceil / target outside pins', () => {
+  assert.match(validateHabits([{
+    name: 'X', emoji: '💧', label: 'D', goal: { target: 0, setBy: 'human' }
+  }]), /goal/i);
+  assert.match(validateHabits([{
+    name: 'X', emoji: '💧', label: 'D', goal: { target: 5, floor: 6, ceil: 4 }
+  }]), /floor/i);
+  assert.match(validateHabits([{
+    name: 'X', emoji: '💧', label: 'D', goal: { target: 2, floor: 3 }
+  }]), /below/i);
+});
+
 test('isPreviousSeed matches the pre-Code eight-entry catalog (origin extras ok)', () => {
   assert.equal(isPreviousSeed(PREVIOUS_SEED.map((h) => ({ ...h }))), true);
   assert.equal(
