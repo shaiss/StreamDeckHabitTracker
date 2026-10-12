@@ -320,8 +320,10 @@
     .spec .cap b { color: var(--ink2); font-weight: 600; }
 
     .section { margin: var(--s6) 0; }
-    .section .section-h { display: flex; align-items: baseline; gap: var(--s3); }
-    .section .section-h .ref { font-size: 11px; color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
+    .section h2.section-h,
+    .section h3.section-h { display: flex; align-items: baseline; gap: var(--s3); }
+    .section h2.section-h .ref,
+    .section h3.section-h .ref { font-size: 11px; color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
     .blurb { color: var(--ink2); font-size: 13.5px; line-height: 1.6; margin: var(--s2) 0 var(--s4); max-width: 72ch; }
 
     .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--s5); }
@@ -373,7 +375,7 @@
       </ul>
       <p class="rail-meta">
         A living guide. The full study lives in
-        <a href="https://github.com/shaiss/StreamDeckHabitTracker/tree/claude/stream-deck-developers-tqy1gj/design/ai-human-bridge">design/ai-human-bridge/</a>
+        <a href="https://github.com/shaiss/StreamDeckHabitTracker/tree/HEAD/design/ai-human-bridge">design/ai-human-bridge/</a>
         — this page renders it.
       </p>
     </nav>
@@ -499,7 +501,7 @@
 
         <!-- 3a · ANATOMY -->
         <div class="section">
-          <h2 class="section-h">3.1 · Key anatomy <span class="ref">doc 2.1 — the five zones</span></h2>
+          <h3 class="section-h">3.1 · Key anatomy <span class="ref">doc 2.1 — the five zones</span></h3>
           <div class="panel">
             <div class="anatomy">
               <div class="stage">
@@ -528,7 +530,7 @@
 
         <!-- 3b · STATE COLOR -->
         <div class="section" id="states">
-          <h2 class="section-h">3.2 · The state color system <span class="ref">doc 2.2 — color + motion, redundantly encoded</span></h2>
+          <h3 class="section-h">3.2 · The state color system <span class="ref">doc 2.2 — color + motion, redundantly encoded</span></h3>
           <p class="blurb">
             Color is reserved almost entirely for <b>turn-state</b>. Each hue has exactly one job, and each state is
             carried <em>twice</em> — color <i>and</i> motion — so the meaning survives when the color can't. Hit
@@ -583,7 +585,7 @@
 
         <!-- 3c · MOTION -->
         <div class="section">
-          <h2 class="section-h">3.3 · The motion vocabulary <span class="ref">doc 2.3 — calm by default</span></h2>
+          <h3 class="section-h">3.3 · The motion vocabulary <span class="ref">doc 2.3 — calm by default</span></h3>
           <p class="blurb">
             These are screens, not static keycaps, so <b>motion is a first-class token</b> — often more glanceable
             than color. The governing rule: <strong>calm by default; loud only when earned.</strong> At most
@@ -605,7 +607,7 @@
 
         <!-- 3d · TYPOGRAPHY -->
         <div class="section">
-          <h2 class="section-h">3.4 · Typography <span class="ref">doc 2.4 — ruthless at 72px</span></h2>
+          <h3 class="section-h">3.4 · Typography <span class="ref">doc 2.4 — ruthless at 72px</span></h3>
           <p>A key is 72–120px and read from 2–3 feet away. Type is ruthless:</p>
           <ul class="prose">
             <li><strong>One word if possible, two at most.</strong> <code>APPROVE</code>, <code>RUN TESTS</code>, <code>HANDOFF</code>.</li>
@@ -618,7 +620,7 @@
 
         <!-- 3e · GLYPH GRAMMAR -->
         <div class="section">
-          <h2 class="section-h">3.5 · The glyph grammar <span class="ref">doc 2.5 — one verb, one glyph, everywhere</span></h2>
+          <h3 class="section-h">3.5 · The glyph grammar <span class="ref">doc 2.5 — one verb, one glyph, everywhere</span></h3>
           <p class="blurb">
             Glyphs name the <b>verb</b> — what pressing <i>does</i> — so the affordance is legible before the label
             is read. Filled means active/running; outline means available. A small, teachable set.
@@ -834,7 +836,7 @@
   "state": "wait",           <span style="color:var(--muted)">// idle | working | wait | confirming | done | blocked</span>
   "badge": null,             <span style="color:var(--muted)">// number, or null</span>
   "agent": "builder",        <span style="color:var(--muted)">// → identity dot hue</span>
-  "danger": true,            <span style="color:var(--muted)">// arms two-stage confirm (3.8)</span>
+  "danger": true,            <span style="color:var(--muted)">// arms two-stage confirm (4.3)</span>
   "action": "approve:deploy" <span style="color:var(--muted)">// token returned to the AI on the committing press</span>
 }</pre>
           <p class="cap"><b>state</b> is what the AI emits. The two-stage <code>armed</code> window is a <em>deck-local</em> substate the bridge tracks for <code>danger</code> keys — it isn't an AI-emitted value, so the enum stays six values.</p>
