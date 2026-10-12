@@ -3,10 +3,16 @@ import assert from 'node:assert/strict';
 import { runAsUser, redisKey, isOwner, ownerUserId } from '../../lib/scope.js';
 import {
   resolveAuth, requireAuth, optionalAuth, clerkConfigured, publishableKey,
-  resolveOwnerAuth, requireOwnerAuth, isCronBearer
+  resolveOwnerAuth, requireOwnerAuth, isCronBearer,
+  authorizedParties, defaultAuthorizedParties, authenticateRequestOpts
 } from '../../lib/auth.js';
 
-const ENV_KEYS = ['HABIT_OWNER_USER_ID', 'CLERK_PUBLISHABLE_KEY', 'CLERK_SECRET_KEY', 'CRON_SECRET'];
+const ENV_KEYS = [
+  'HABIT_OWNER_USER_ID', 'CLERK_PUBLISHABLE_KEY', 'CLERK_SECRET_KEY', 'CRON_SECRET',
+  'CLERK_AUTHORIZED_PARTIES',
+  'VERCEL_PROJECT_PRODUCTION_URL', 'VERCEL_BRANCH_URL', 'VERCEL_URL', 'VERCEL_ENV',
+  'NODE_ENV'
+];
 const saved = {};
 beforeEach(() => {
   for (const k of ENV_KEYS) saved[k] = process.env[k];
@@ -394,4 +400,61 @@ test('wrong CRON_SECRET does not grant access and does not leak owner data', asy
   assert.equal(res.out.statusCode, 401);
   assert.equal(JSON.stringify(res.out.body).includes('user_owner'), false);
   assert.deepEqual(res.out.body, { error: 'Unauthorized' });
+});
+
+// --- authorizedParties (Clerk azp / CSRF hardening) ---
+
+test('authorizedParties: trims and drops empty comma entries', () => {
+  process.env.CLERK_AUTHORIZED_PARTIES = ' https://a.example , ,https://b.example,  ';
+  assert.deepEqual(authorizedParties(), ['https://a.example', 'https://b.example']);
+});
+
+test('authorizedParties: unset falls back to Vercel https origins + localhost off-prod', () => {
+  delete process.env.CLERK_AUTHORIZED_PARTIES;
+  delete process.env.VERCEL_ENV;
+  delete process.env.NODE_ENV;
+  process.env.VERCEL_PROJECT_PRODUCTION_URL = 'stream-deck-habit-tracker.vercel.app';
+  process.env.VERCEL_BRANCH_URL = 'https://preview-branch.vercel.app';
+  process.env.VERCEL_URL = 'deploy-hash.vercel.app';
+  assert.deepEqual(authorizedParties(), [
+    'https://stream-deck-habit-tracker.vercel.app',
+    'https://preview-branch.vercel.app',
+    'https://deploy-hash.vercel.app',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000'
+  ]);
+});
+
+test('authorizedParties: blank env falls back (protection on by default)', () => {
+  process.env.CLERK_AUTHORIZED_PARTIES = '  ,  ';
+  process.env.VERCEL_ENV = 'production';
+  process.env.VERCEL_PROJECT_PRODUCTION_URL = 'prod.vercel.app';
+  delete process.env.VERCEL_BRANCH_URL;
+  delete process.env.VERCEL_URL;
+  assert.deepEqual(authorizedParties(), ['https://prod.vercel.app']);
+  assert.deepEqual(authorizedParties(), defaultAuthorizedParties());
+});
+
+test('authorizedParties: production omits localhost', () => {
+  delete process.env.CLERK_AUTHORIZED_PARTIES;
+  process.env.VERCEL_ENV = 'production';
+  process.env.VERCEL_PROJECT_PRODUCTION_URL = 'prod.vercel.app';
+  delete process.env.VERCEL_BRANCH_URL;
+  delete process.env.VERCEL_URL;
+  assert.deepEqual(authorizedParties(), ['https://prod.vercel.app']);
+});
+
+test('authenticateRequestOpts passes authorizedParties to Clerk options', () => {
+  process.env.CLERK_PUBLISHABLE_KEY = 'pk_test_x';
+  process.env.CLERK_SECRET_KEY = 'sk_test_x';
+  process.env.CLERK_AUTHORIZED_PARTIES = 'https://habitdeck.fyi, https://www.habitdeck.fyi';
+  const opts = authenticateRequestOpts();
+  assert.equal(opts.secretKey, 'sk_test_x');
+  assert.equal(opts.publishableKey, 'pk_test_x');
+  assert.deepEqual(opts.authorizedParties, [
+    'https://habitdeck.fyi',
+    'https://www.habitdeck.fyi'
+  ]);
+  // Same list the session path feeds authenticateRequest.
+  assert.deepEqual(opts.authorizedParties, authorizedParties());
 });

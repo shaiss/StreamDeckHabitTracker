@@ -9,10 +9,11 @@ for any write, and scopes Redis data per Clerk `userId`.
 |------|----------|-------|
 | `CLERK_PUBLISHABLE_KEY` | yes | Browser + `authenticateRequest` |
 | `CLERK_SECRET_KEY` | yes | Server verification |
+| `CLERK_AUTHORIZED_PARTIES` | recommended | Comma-separated origins allowed as the session `azp` (e.g. `https://habitdeck.fyi,https://www.habitdeck.fyi,https://stream-deck-habit-tracker.vercel.app`). Trimmed; empty entries dropped. When unset/blank, falls back to `https://` origins from `VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_BRANCH_URL`, `VERCEL_URL`, plus `http://localhost:3000` / `http://127.0.0.1:3000` only outside production. Custom domains (habitdeck.fyi) are **not** in Vercel system vars — set this explicitly in production. |
 | `HABIT_OWNER_USER_ID` | yes (for prod data + cron) | Clerk user id of the existing single-tenant owner |
 | `CRON_SECRET` | **required** for cron | Vercel cron `Authorization: Bearer …`. If unset, the bearer path is refused (fail closed). |
 
-Fail closed: if Clerk keys are missing, mutating endpoints return **401** (unless a valid `ht_…` plugin token is presented).
+Fail closed: if Clerk keys are missing, mutating endpoints return **401** (unless a valid `ht_…` plugin token is presented). Session verification always passes `authorizedParties` into Clerk `authenticateRequest` so a token minted for another origin is rejected.
 
 ## Owner-only routes
 
