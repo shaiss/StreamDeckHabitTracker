@@ -57,7 +57,9 @@ test('every seed habit has a committed /icons/animated/<name>.gif', () => {
 test('static local asset paths referenced by pages exist under public/', () => {
   // Match quoted /… paths to files with common static extensions. Skips
   // /api/* (runtime) and protocol-relative / absolute URLs.
-  const re = /['"`](\/(?!\/)[^'"`?#]+\.(?:gif|png|svg|jpg|jpeg|webp|css|js|mjs|ico|woff2?))['"`]/gi;
+  // Allow ?query / #fragment after the extension so cache-busted refs like
+  // `/missing.js?v=1` are still scanned (path capture excludes the suffix).
+  const re = /['"`](\/(?!\/)[^'"`?#]+\.(?:gif|png|svg|jpg|jpeg|webp|css|js|mjs|ico|woff2?))(?:[?#][^'"`]*)?['"`]/gi;
   const missing = [];
   for (const p of pages) {
     const src = readFileSync(p, 'utf8');
