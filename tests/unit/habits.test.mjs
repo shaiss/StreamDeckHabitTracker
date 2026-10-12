@@ -7,6 +7,18 @@ import {
   seedHabits,
   getHabits
 } from '../../lib/habits.js';
+import { runAsUser } from '../../lib/scope.js';
+
+const OWNER = 'user_owner_habits_test';
+
+function withOwnerScope(fn) {
+  const prev = process.env.HABIT_OWNER_USER_ID;
+  process.env.HABIT_OWNER_USER_ID = OWNER;
+  return runAsUser(OWNER, fn).finally(() => {
+    if (prev === undefined) delete process.env.HABIT_OWNER_USER_ID;
+    else process.env.HABIT_OWNER_USER_ID = prev;
+  });
+}
 
 test('accepts a clean list with origins', () => {
   assert.equal(validateHabits([
@@ -87,7 +99,7 @@ const EXPECTED_CAS_LUA =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('set', KEYS[1], ARGV[2]) else return false end";
 
 /** Assert EVAL carries the real CAS script, then compare-and-set against `currentRaw`. */
-function evalCas(args, currentRaw) {
+function evalCas(args, currentRaw, expectedKey = 'habits:config') {
   assert.equal(args[0], 'EVAL');
   const lua = args[1];
   assert.equal(lua, EXPECTED_CAS_LUA);
@@ -95,7 +107,7 @@ function evalCas(args, currentRaw) {
   assert.match(lua, /redis\.call\(\s*'get'\s*,\s*KEYS\[1\]\s*\)\s*==\s*ARGV\[1\]/);
   assert.match(lua, /redis\.call\(\s*'set'\s*,\s*KEYS\[1\]\s*,\s*ARGV\[2\]\s*\)/);
   assert.equal(args[2], '1');
-  assert.equal(args[3], 'habits:config');
+  assert.equal(args[3], expectedKey);
   if (currentRaw === args[4]) return 'OK';
   return null;
 }
@@ -110,6 +122,7 @@ test('getHabits migrates persisted previous seed to the Code catalog once', asyn
     const args = JSON.parse(opts.body);
     calls.push(args);
     if (args[0] === 'GET') {
+      assert.equal(args[1], 'habits:config');
       return {
         ok: true,
         json: async () => ({ result: redisValue })
@@ -126,7 +139,7 @@ test('getHabits migrates persisted previous seed to the Code catalog once', asyn
   try {
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
-    const list = await getHabits();
+    const list = await withOwnerScope(() => getHabits());
     assert.deepEqual(list.map((h) => h.name), seedHabits().map((h) => h.name));
     assert.equal(list[8].name, 'Code');
     assert.equal(calls[0][0], 'GET');
@@ -158,10 +171,11 @@ test('getHabits leaves an intentionally custom catalog unchanged', async () => {
   try {
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
-    const list = await getHabits();
+    const list = await withOwnerScope(() => getHabits());
     assert.deepEqual(list, custom);
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], 'GET');
+    assert.equal(calls[0][1], 'habits:config');
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.KV_REST_API_URL;
@@ -185,6 +199,7 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
     const args = JSON.parse(opts.body);
     calls.push(args);
     if (args[0] === 'GET') {
+      assert.equal(args[1], 'habits:config');
       return { ok: true, json: async () => ({ result: redisValue }) };
     }
     if (args[0] === 'EVAL') {
@@ -203,7 +218,7 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
   try {
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
-    const list = await getHabits();
+    const list = await withOwnerScope(() => getHabits());
     assert.deepEqual(list, custom);
     assert.equal(calls[0][0], 'GET');
     assert.equal(calls[1][0], 'EVAL');
@@ -214,5 +229,45 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
     globalThis.fetch = originalFetch;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabits CAS migration uses per-user scoped Redis key for non-owners', async () => {
+  const uid = 'user_other_scoped';
+  const scopedKey = `u:${uid}:habits:config`;
+  const calls = [];
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prevRaw = JSON.stringify(prev);
+  let redisValue = prevRaw;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    if (args[0] === 'GET') {
+      assert.equal(args[1], scopedKey);
+      return { ok: true, json: async () => ({ result: redisValue }) };
+    }
+    if (args[0] === 'EVAL') {
+      const result = evalCas(args, redisValue, scopedKey);
+      if (result === 'OK') redisValue = args[5];
+      return { ok: true, json: async () => ({ result }) };
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  const prevOwner = process.env.HABIT_OWNER_USER_ID;
+  try {
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    process.env.HABIT_OWNER_USER_ID = OWNER; // owner is someone else
+    const list = await runAsUser(uid, () => getHabits());
+    assert.equal(list[8].name, 'Code');
+    assert.equal(calls[0][1], scopedKey);
+    assert.equal(calls[1][3], scopedKey);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+    if (prevOwner === undefined) delete process.env.HABIT_OWNER_USER_ID;
+    else process.env.HABIT_OWNER_USER_ID = prevOwner;
   }
 });
