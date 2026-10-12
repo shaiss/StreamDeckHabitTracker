@@ -42,6 +42,11 @@
       "emoji": "🍳",
       "label": "Cook",
       "name": "Cook"
+    },
+    {
+      "emoji": "💻",
+      "label": "Code",
+      "name": "Code"
     }
   ]
 }
