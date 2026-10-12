@@ -81,10 +81,30 @@ test('seedHabits includes Code as the ninth entry (hkey=9)', () => {
   assert.ok(!isPreviousSeed(seed));
 });
 
+// Redis CAS migration must GET-compare before SET. An unconditional SET script
+// (or a mock that ignores the Lua body) must not pass these tests.
+const EXPECTED_CAS_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('set', KEYS[1], ARGV[2]) else return false end";
+
+/** Assert EVAL carries the real CAS script, then compare-and-set against `currentRaw`. */
+function evalCas(args, currentRaw) {
+  assert.equal(args[0], 'EVAL');
+  const lua = args[1];
+  assert.equal(lua, EXPECTED_CAS_LUA);
+  // Essential shape — fails if someone swaps in unconditional SET.
+  assert.match(lua, /redis\.call\(\s*'get'\s*,\s*KEYS\[1\]\s*\)\s*==\s*ARGV\[1\]/);
+  assert.match(lua, /redis\.call\(\s*'set'\s*,\s*KEYS\[1\]\s*,\s*ARGV\[2\]\s*\)/);
+  assert.equal(args[2], '1');
+  assert.equal(args[3], 'habits:config');
+  if (currentRaw === args[4]) return 'OK';
+  return null;
+}
+
 test('getHabits migrates persisted previous seed to the Code catalog once', async () => {
   const calls = [];
   const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
   const prevRaw = JSON.stringify(prev);
+  let redisValue = prevRaw;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, opts) => {
     const args = JSON.parse(opts.body);
@@ -92,15 +112,14 @@ test('getHabits migrates persisted previous seed to the Code catalog once', asyn
     if (args[0] === 'GET') {
       return {
         ok: true,
-        json: async () => ({ result: prevRaw })
+        json: async () => ({ result: redisValue })
       };
     }
     if (args[0] === 'EVAL') {
-      // CAS: only SET when GET bytes still match what we read.
-      assert.equal(args[3], 'habits:config');
-      assert.equal(args[4], prevRaw);
+      const result = evalCas(args, redisValue);
       assert.deepEqual(JSON.parse(args[5]), seedHabits());
-      return { ok: true, json: async () => ({ result: 'OK' }) };
+      if (result === 'OK') redisValue = args[5];
+      return { ok: true, json: async () => ({ result }) };
     }
     throw new Error(`unexpected redis ${args[0]}`);
   };
@@ -113,6 +132,7 @@ test('getHabits migrates persisted previous seed to the Code catalog once', asyn
     assert.equal(calls[0][0], 'GET');
     assert.equal(calls[1][0], 'EVAL');
     assert.equal(calls.length, 2);
+    assert.deepEqual(JSON.parse(redisValue), seedHabits());
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.KV_REST_API_URL;
@@ -158,19 +178,22 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
     { name: 'Meditate', emoji: '🧘', label: 'Meditate', origin: 'coach' }
   ];
   const customRaw = JSON.stringify(custom);
+  // Concurrent saveHabits landed between our GET and EVAL.
+  let redisValue = prevRaw;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, opts) => {
     const args = JSON.parse(opts.body);
     calls.push(args);
     if (args[0] === 'GET') {
-      // First GET: stale seed. Re-GET after failed CAS: concurrent custom.
-      const result = calls.filter((c) => c[0] === 'GET').length === 1 ? prevRaw : customRaw;
-      return { ok: true, json: async () => ({ result }) };
+      return { ok: true, json: async () => ({ result: redisValue }) };
     }
     if (args[0] === 'EVAL') {
+      // Race: custom catalog is already in Redis before CAS runs.
+      redisValue = customRaw;
       assert.equal(args[4], prevRaw);
-      // Simulate Redis: value no longer equals expected seed bytes.
-      return { ok: true, json: async () => ({ result: null }) };
+      const result = evalCas(args, redisValue);
+      assert.equal(result, null);
+      return { ok: true, json: async () => ({ result }) };
     }
     if (args[0] === 'SET') {
       throw new Error('unconditional SET must not run during seed migration');
@@ -186,6 +209,7 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
     assert.equal(calls[1][0], 'EVAL');
     assert.equal(calls[2][0], 'GET');
     assert.ok(!calls.some((c) => c[0] === 'SET'));
+    assert.equal(redisValue, customRaw);
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.KV_REST_API_URL;
