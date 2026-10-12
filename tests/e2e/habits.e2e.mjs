@@ -177,7 +177,8 @@ test('a hand-added duplicate is blocked client-side before POST', async () => {
 test('the coach’s roster proposals render with their reason and both choices', async () => {
   await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
   assert.equal(await page.$eval('#propSect', (s) => s.hidden), false);
-  assert.equal((await page.$$('.prow')).length, 3);
+  // Scope to #propRows — target raise cards also use .prow (in #targetPropRows).
+  assert.equal((await page.$$('#propRows .prow')).length, 3);
   const retire = await page.$eval('.decide[data-name="Pee"][data-decision="approve"]', (b) => b.textContent);
   assert.match(retire, /Retire it/, 'a retirement must not read like an add');
   assert.match(await page.$eval('.prow .why', (e) => e.textContent), /six hours/);
