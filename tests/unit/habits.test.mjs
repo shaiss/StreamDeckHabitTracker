@@ -84,6 +84,7 @@ test('seedHabits includes Code as the ninth entry (hkey=9)', () => {
 test('getHabits migrates persisted previous seed to the Code catalog once', async () => {
   const calls = [];
   const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prevRaw = JSON.stringify(prev);
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, opts) => {
     const args = JSON.parse(opts.body);
@@ -91,10 +92,14 @@ test('getHabits migrates persisted previous seed to the Code catalog once', asyn
     if (args[0] === 'GET') {
       return {
         ok: true,
-        json: async () => ({ result: JSON.stringify(prev) })
+        json: async () => ({ result: prevRaw })
       };
     }
-    if (args[0] === 'SET') {
+    if (args[0] === 'EVAL') {
+      // CAS: only SET when GET bytes still match what we read.
+      assert.equal(args[3], 'habits:config');
+      assert.equal(args[4], prevRaw);
+      assert.deepEqual(JSON.parse(args[5]), seedHabits());
       return { ok: true, json: async () => ({ result: 'OK' }) };
     }
     throw new Error(`unexpected redis ${args[0]}`);
@@ -106,9 +111,8 @@ test('getHabits migrates persisted previous seed to the Code catalog once', asyn
     assert.deepEqual(list.map((h) => h.name), seedHabits().map((h) => h.name));
     assert.equal(list[8].name, 'Code');
     assert.equal(calls[0][0], 'GET');
-    assert.equal(calls[1][0], 'SET');
-    assert.equal(calls[1][1], 'habits:config');
-    assert.deepEqual(JSON.parse(calls[1][2]), seedHabits());
+    assert.equal(calls[1][0], 'EVAL');
+    assert.equal(calls.length, 2);
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.KV_REST_API_URL;
@@ -138,6 +142,50 @@ test('getHabits leaves an intentionally custom catalog unchanged', async () => {
     assert.deepEqual(list, custom);
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], 'GET');
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabits migration CAS aborts when a concurrent saveHabits wins', async () => {
+  const calls = [];
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prevRaw = JSON.stringify(prev);
+  const custom = [
+    { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+    { name: 'Meditate', emoji: '🧘', label: 'Meditate', origin: 'coach' }
+  ];
+  const customRaw = JSON.stringify(custom);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    if (args[0] === 'GET') {
+      // First GET: stale seed. Re-GET after failed CAS: concurrent custom.
+      const result = calls.filter((c) => c[0] === 'GET').length === 1 ? prevRaw : customRaw;
+      return { ok: true, json: async () => ({ result }) };
+    }
+    if (args[0] === 'EVAL') {
+      assert.equal(args[4], prevRaw);
+      // Simulate Redis: value no longer equals expected seed bytes.
+      return { ok: true, json: async () => ({ result: null }) };
+    }
+    if (args[0] === 'SET') {
+      throw new Error('unconditional SET must not run during seed migration');
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    const list = await getHabits();
+    assert.deepEqual(list, custom);
+    assert.equal(calls[0][0], 'GET');
+    assert.equal(calls[1][0], 'EVAL');
+    assert.equal(calls[2][0], 'GET');
+    assert.ok(!calls.some((c) => c[0] === 'SET'));
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.KV_REST_API_URL;
