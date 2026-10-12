@@ -16,7 +16,8 @@ const ROOT = fileURLToPath(new URL('../../public', import.meta.url));
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.gif': 'image/gif', '.png': 'image/png' };
 
 let server, browser, context, page, port;
-let calls = [];        // every /api/log + /api/nudge request, as "METHOD url"
+let calls = [];        // every /api/log + /api/nudge + /api/profile request, as "METHOD url"
+let profileBodies = []; // parsed JSON bodies posted to /api/profile
 let logStatus = 200;
 let nudgeFraction = null;   // null = slot 1 holds a plain suggestion
 let mockRosterPending = 0;
@@ -24,6 +25,7 @@ let mockBlocked = false;
 let mockQuestion = false;
 let mockPicker = false;
 let mockDanger = false;
+let mockCoachNav = 'off';
 
 before(async () => {
   server = createServer((req, res) => {
@@ -38,6 +40,20 @@ before(async () => {
       calls.push(req.method + ' ' + req.url);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ dismissed: true }));
+      return;
+    }
+    if (url === '/api/profile') {
+      calls.push(req.method + ' ' + req.url);
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        let parsed = {};
+        try { parsed = body ? JSON.parse(body) : {}; } catch { /* empty */ }
+        profileBodies.push(parsed);
+        if (parsed.coachNav !== undefined) mockCoachNav = parsed.coachNav;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, coachNav: mockCoachNav }));
+      });
       return;
     }
     if (url === '/api/slots') {
@@ -89,6 +105,7 @@ before(async () => {
         ],
         rosterPending: mockRosterPending,
         blocked: mockBlocked,
+        coachNav: mockCoachNav,
         today: {}
       }));
       return;
@@ -112,8 +129,9 @@ before(async () => {
 after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false } = {}) {
+async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false, coachNav = 'off' } = {}) {
   calls = [];
+  profileBodies = [];
   logStatus = 200;
   nudgeFraction = nudge;
   mockRosterPending = roster;
@@ -121,6 +139,7 @@ async function open({ nudge = null, roster = 0, blocked = false, question = fals
   mockQuestion = question;
   mockPicker = picker;
   mockDanger = danger;
+  mockCoachNav = coachNav;
   await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.k[data-habit="0"]');
   return page.locator('.k[data-habit="0"]');
@@ -215,6 +234,53 @@ test('the Stats key still opens the dashboard on a plain tap', async () => {
   const p = await popup;
   assert.match(p.url(), /\/$/);
   await p.close();
+});
+
+test('Autonomy Toggle: press cycles MANUAL → ASSIST → AUTO and posts profile (#94)', async () => {
+  await open({ coachNav: 'off' });
+  await page.waitForSelector('.k[data-autonomy]');
+  const faceOf = () => page.$eval('.k[data-autonomy]', (el) => ({
+    cls: el.querySelector('.facecss')?.className || '',
+    frame: el.querySelector('.stateframe')?.className || '',
+    label: el.querySelector('.lb')?.textContent || '',
+    glyph: el.querySelector('.em')?.textContent || '',
+    consent: el.dataset.consent || '',
+    mode: el.dataset.mode || ''
+  }));
+  let f = await faceOf();
+  assert.match(f.cls, /autonomyface/);
+  assert.match(f.frame, /frame-idle/);
+  assert.equal(f.glyph, '⚙');
+  assert.equal(f.label, 'MANUAL');
+  assert.equal(f.consent, 'off');
+  assert.equal(f.mode, 'MANUAL');
+
+  calls = [];
+  profileBodies = [];
+  await page.locator('.k[data-autonomy]').click();
+  await settle();
+  assert.ok(calls.some((c) => c.startsWith('POST /api/profile')), 'persists via /api/profile');
+  assert.ok(!calls.some((c) => c.includes('/api/log')), 'never logs a habit');
+  assert.equal(profileBodies.at(-1)?.coachNav, 'nudge-only');
+  f = await faceOf();
+  assert.equal(f.label, 'ASSIST');
+  assert.equal(f.consent, 'nudge-only');
+  assert.equal(f.mode, 'ASSISTED');
+  assert.match(f.frame, /frame-idle/, 'sticky key stays calm');
+
+  await page.locator('.k[data-autonomy]').click();
+  await settle();
+  assert.equal(profileBodies.at(-1)?.coachNav, 'may-navigate');
+  f = await faceOf();
+  assert.equal(f.label, 'AUTO');
+  assert.equal(f.mode, 'AUTO');
+
+  await page.locator('.k[data-autonomy]').click();
+  await settle();
+  assert.equal(profileBodies.at(-1)?.coachNav, 'off');
+  f = await faceOf();
+  assert.equal(f.label, 'MANUAL');
+  assert.equal(f.mode, 'MANUAL');
 });
 
 test('Attention Beacon: idle / wait+count / blocked faces; tap never logs (#75)', async () => {

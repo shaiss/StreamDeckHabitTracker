@@ -1,6 +1,6 @@
 // Habit Tracker AI — Stream Deck plugin (Node runtime).
 //
-// Three actions:
+// Four actions:
 //  - …habit  settings: { base, index (0-based position), key? }
 //  - …slot   settings: { base, slot (1-16), key? } — 1-4 render from the
 //    front slots array, 5-16 from the coach page (#52)
@@ -8,6 +8,9 @@
 //    Beacon (#75): idle/dark when quiet, wait-frame + count when the coach
 //    is owed a decision, blocked-frame when something hard-stopped. Tap
 //    jumps to the Coach page (signpost only — never logs). (#53, needs #50)
+//  - …autonomy settings: { base, key? } — Autonomy Toggle sticky key (#94 /
+//    study §3.5): shows MANUAL / ASSIST / AUTO (coachNav off / nudge-only /
+//    may-navigate). Tap cycles; idle frame; persists via /api/profile.
 //
 // Generated keys also carry { page: N } so the appeared-key set derives which
 // page of our profile is visible — see visibility.mjs (#53).
@@ -38,7 +41,10 @@ import { deriveVisibility } from './visibility.mjs';
 import { nudgeUrgency, urgencyStep } from '../../lib/nudge.js';
 // The takeover gate (#54) lives server-adjacent for the same reason: the
 // deck and the backend must not disagree about when the coach may navigate.
-import { takeoverDue, RESTORE_MS, SUPPRESS_MS } from '../../lib/takeover.js';
+import {
+  takeoverDue, RESTORE_MS, SUPPRESS_MS,
+  cycleConsent, autonomyOf, normalizeConsent
+} from '../../lib/takeover.js';
 import { beaconOf } from '../../lib/beacon.js';
 import { questionPaint, isDetailsKey } from '../../public/glyphs.js';
 
@@ -78,7 +84,7 @@ const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.9';
+let VERSION = '2.5.11';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -86,7 +92,7 @@ try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no regis
 // profiles distributed with the plugin, as defined within the manifest".
 const PROFILE_NAME = 'profiles/Habit Tracker AI';
 
-const keys = new Map();   // action instance id -> { kind: 'habit'|'slot'|'coach', settings, action, deviceId }
+const keys = new Map();   // action instance id -> { kind: 'habit'|'slot'|'coach'|'autonomy', settings, action, deviceId }
 let slotCache = null;     // latest slots array from the server
 let coachCache = null;    // latest coach-page array (#52) — slots 5..16 render from it
 let habitCache = null;    // latest habit list from the server (live-editable)
@@ -235,7 +241,9 @@ function refreshSlots(now) {
       const coachPage = j.coachPage || [];
       const habits = j.habits || [];
       const today = j.today || {};
-      consentCache = j.coachNav || 'off';   // #54: flipping consent off lands within one poll
+      const nextConsent = normalizeConsent(j.coachNav); // #54 / #94
+      const consentChanged = nextConsent !== consentCache;
+      consentCache = nextConsent;   // flipping consent lands within one poll
       const rosterPending = Number(j.rosterPending) || 0;
       const blocked = !!j.blocked;
       const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) ||
@@ -253,6 +261,7 @@ function refreshSlots(now) {
         // One bad face must not strand the rest of the deck on stale images.
         try {
           if (slotsChanged && (k.kind === 'slot' || k.kind === 'coach')) render(k);
+          if (consentChanged && k.kind === 'autonomy') render(k);
           if (k.kind === 'habit' && (habitsChanged || todayChanged)) render(k);
         } catch { /* next poll retries this key */ }
       }
@@ -335,6 +344,59 @@ function renderCoach(k) {
   // Identity is sacred: same glyph, same violet, same sat. Frame + count badge
   // do the talking. Do NOT pass urgency — that would brighten the interior.
   k.action.setImage(face('🧭', 'Coach', VIOLET_HUE, snap.badge, 72, withFrame(k, null, now)));
+}
+
+// Autonomy Toggle (#94 / study §3.5). Sticky state the human owns: glyph +
+// short label show the CURRENT mode; the outer frame stays idle (calm).
+// Consent defaults to off / MANUAL until /api/slots says otherwise.
+function renderAutonomy(k) {
+  const now = Date.now();
+  setKeyFrame(k, 'idle');
+  const snap = autonomyOf(consentCache);
+  k.action.setImage(face(snap.glyph, snap.label, VIOLET_HUE, '', 72, withFrame(k, {
+    grammar: true, mono: true
+  }, now)));
+}
+
+// Tap cycles MANUAL → ASSISTED → AUTO → MANUAL and persists via the same
+// /api/profile write path the dashboard settings form uses (#54 coachNav).
+function cycleAutonomy(k) {
+  const prev = consentCache;
+  const next = cycleConsent(consentCache);
+  consentCache = next;
+  for (const other of keys.values()) {
+    if (other.kind === 'autonomy') {
+      try { render(other); } catch { /* next tick */ }
+    }
+  }
+  const s = k.settings;
+  const url = baseOf(s) + '/api/profile';
+  const body = { coachNav: next };
+  if (s.key) body.key = s.key;
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+    .then((r) => {
+      if (r.ok) { k.action.showOk(); return; }
+      consentCache = prev;
+      for (const other of keys.values()) {
+        if (other.kind === 'autonomy') {
+          try { render(other); } catch { /* next tick */ }
+        }
+      }
+      k.action.showAlert();
+    })
+    .catch(() => {
+      consentCache = prev;
+      for (const other of keys.values()) {
+        if (other.kind === 'autonomy') {
+          try { render(other); } catch { /* next tick */ }
+        }
+      }
+      k.action.showAlert();
+    });
 }
 
 // Tap on the coach key: jump to the Coach page of the bundled profile. Only
@@ -475,6 +537,7 @@ function showQuestionContext(k) {
 function render(k) {
   const s = k.settings;
   if (k.kind === 'coach') { renderCoach(k); return; }
+  if (k.kind === 'autonomy') { renderAutonomy(k); return; }
   if (k.kind === 'habit') {
     const idx = +s.index || 0;
     const def = habitCache ? habitCache[idx] : null;
@@ -648,6 +711,11 @@ function dispatch({ id, gesture }) {
     else coachNavigate(k);
     return;
   }
+  if (k.kind === 'autonomy') {
+    // Sticky mode dial (#94): tap cycles; hold/double are not distinct acts.
+    if (gesture === 'tap' || gesture === 'commit') cycleAutonomy(k);
+    return;
+  }
   // Two-stage Confirm (#78): arm/disarm never cross the bridge. commit is
   // the same emitting press a non-danger tap would have been.
   if (gesture === 'arm') {
@@ -710,9 +778,9 @@ function defineAction(uuid, kind) {
       deviceId: (ev.action.device && ev.action.device.id) || undefined
     });
     // Habit and slot keys both log something undoable and quantifiable, so
-    // both answer to all three gestures. The coach key logs nothing — a
-    // double-tap would only defer its single meaning (navigate).
-    gest.register(ev.action.id, { doubleTap: kind !== 'coach' });
+    // both answer to all three gestures. Coach + autonomy log nothing — a
+    // double-tap would only defer their single meaning (navigate / cycle).
+    gest.register(ev.action.id, { doubleTap: kind !== 'coach' && kind !== 'autonomy' });
     lastPageChangeAt = Date.now();   // page churn = the human (or we) moved (#54)
     render(keys.get(ev.action.id));
     startClock();
@@ -754,6 +822,7 @@ function defineAction(uuid, kind) {
 streamDeck.actions.registerAction(defineAction('com.shaiss.habit-tracker.habit', 'habit'));
 streamDeck.actions.registerAction(defineAction('com.shaiss.habit-tracker.slot', 'slot'));
 streamDeck.actions.registerAction(defineAction('com.shaiss.habit-tracker.coach', 'coach'));
+streamDeck.actions.registerAction(defineAction('com.shaiss.habit-tracker.autonomy', 'autonomy'));
 
 // System wake / device reconnect = faces are certainly stale. Guarded: these
 // namespaces vary across SDK minors, and losing them only costs a faster

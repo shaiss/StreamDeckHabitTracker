@@ -294,6 +294,19 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   assert.ok(deck.includes("blocked ? 'blocked' : pending > 0 ? 'wait' : 'idle'"),
     'virtual deck uses the same frame ranking as lib/beacon.js');
 
+  // Autonomy Toggle (#94 / §3.5): sticky key parity — idle frame, violet ⚙.
+  assert.ok(deck.includes('.autonomyface') || deck.includes('autonomyface'),
+    'virtual deck must have an autonomy face class');
+  assert.ok(deck.includes('data-autonomy'), 'virtual deck must place the page-0 autonomy key');
+  assert.ok(deck.includes("label: 'MANUAL'") && deck.includes("label: 'ASSIST'") && deck.includes("label: 'AUTO'"),
+    'virtual deck embeds the three short mode labels');
+  assert.ok(plugin.includes("com.shaiss.habit-tracker.autonomy"),
+    'plugin registers the autonomy action');
+  assert.ok(plugin.includes('cycleConsent') && plugin.includes('autonomyOf'),
+    'plugin drives the sticky key from lib/takeover.js helpers');
+  assert.ok(plugin.includes("setKeyFrame(k, 'idle')") || plugin.includes("setKeyFrame(k, \"idle\")"),
+    'autonomy face keeps the calm idle frame');
+
   // The base gradient under every key face.
   for (const stop of ['#141827', '#0a0c13']) {
     assert.ok(faces.includes(stop), `faces.mjs lost the base stop ${stop}`);

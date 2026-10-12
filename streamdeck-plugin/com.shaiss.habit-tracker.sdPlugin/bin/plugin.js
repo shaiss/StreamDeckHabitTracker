@@ -316,7 +316,7 @@ var require_permessage_deflate = __commonJS({
       acceptAsServer(offers) {
         const opts = this._options;
         const accepted = offers.find((params) => {
-          if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && (typeof params.client_max_window_bits === "number" ? opts.clientMaxWindowBits > params.client_max_window_bits : !params.client_max_window_bits)) {
+          if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && !params.client_max_window_bits) {
             return false;
           }
           return true;
@@ -2334,23 +2334,11 @@ var require_websocket = __commonJS({
           this._isServer = false;
           this._redirects = 0;
           if (protocols === void 0) {
-            if (!options || options.protocols === void 0) {
-              protocols = [];
-            } else if (Array.isArray(options.protocols)) {
-              protocols = options.protocols;
-            } else {
-              protocols = [options.protocols];
-            }
+            protocols = [];
           } else if (!Array.isArray(protocols)) {
             if (typeof protocols === "object" && protocols !== null) {
               options = protocols;
-              if (options.protocols === void 0) {
-                protocols = [];
-              } else if (Array.isArray(options.protocols)) {
-                protocols = options.protocols;
-              } else {
-                protocols = [options.protocols];
-              }
+              protocols = [];
             } else {
               protocols = [protocols];
             }
@@ -2547,6 +2535,7 @@ var require_websocket = __commonJS({
           }
           return;
         }
+        this._readyState = _WebSocket.CLOSING;
         this._sender.close(code, data, !this._isServer, (err) => {
           if (err) return;
           this._closeFrameSent = true;
@@ -2554,7 +2543,6 @@ var require_websocket = __commonJS({
             this._socket.end();
           }
         });
-        this._readyState = _WebSocket.CLOSING;
         setCloseTimer(this);
       }
       /**
@@ -2779,7 +2767,6 @@ var require_websocket = __commonJS({
         socketPath: void 0,
         hostname: void 0,
         protocol: void 0,
-        protocols: void 0,
         timeout: void 0,
         method: "GET",
         host: void 0,
@@ -15329,6 +15316,10 @@ var Version = class {
   }
 };
 
+// node_modules/@elgato/streamdeck/dist/plugin/logging/index.js
+import path3 from "node:path";
+import { cwd } from "node:process";
+
 // node_modules/@elgato/utils/dist/logging/console-target.js
 var ConsoleTarget = class {
   /**
@@ -15613,10 +15604,6 @@ var FileTarget = class {
     }
   }
 };
-
-// node_modules/@elgato/streamdeck/dist/plugin/logging/index.js
-import path3 from "node:path";
-import { cwd } from "node:process";
 
 // node_modules/@elgato/streamdeck/dist/plugin/common/utils.js
 import path2 from "node:path";
@@ -17872,6 +17859,20 @@ var CONSENT_LEVELS = ["off", "nudge-only", "may-navigate"];
 function normalizeConsent(v) {
   return CONSENT_LEVELS.includes(v) ? v : "off";
 }
+var AUTONOMY_GLYPH = "\u2699";
+var AUTONOMY_MODES = Object.freeze({
+  off: { consent: "off", mode: "MANUAL", label: "MANUAL", glyph: AUTONOMY_GLYPH },
+  "nudge-only": { consent: "nudge-only", mode: "ASSISTED", label: "ASSIST", glyph: AUTONOMY_GLYPH },
+  "may-navigate": { consent: "may-navigate", mode: "AUTO", label: "AUTO", glyph: AUTONOMY_GLYPH }
+});
+function autonomyOf(consent) {
+  return AUTONOMY_MODES[normalizeConsent(consent)];
+}
+function cycleConsent(consent) {
+  const cur = normalizeConsent(consent);
+  const i = CONSENT_LEVELS.indexOf(cur);
+  return CONSENT_LEVELS[(i + 1) % CONSENT_LEVELS.length];
+}
 var HUMAN_LOCK_MS = 10 * 6e4;
 var RESTORE_MS = 9e4;
 var SUPPRESS_MS = 24 * 36e5;
@@ -17947,7 +17948,7 @@ var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.5.9";
+var VERSION = "2.5.11";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -18071,7 +18072,9 @@ function refreshSlots(now) {
     const coachPage = j.coachPage || [];
     const habits = j.habits || [];
     const today = j.today || {};
-    consentCache = j.coachNav || "off";
+    const nextConsent = normalizeConsent(j.coachNav);
+    const consentChanged = nextConsent !== consentCache;
+    consentCache = nextConsent;
     const rosterPending = Number(j.rosterPending) || 0;
     const blocked = !!j.blocked;
     const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) || !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage) || rosterPendingCache !== rosterPending || blockedCache !== blocked;
@@ -18086,6 +18089,7 @@ function refreshSlots(now) {
     for (const k of keys.values()) {
       try {
         if (slotsChanged && (k.kind === "slot" || k.kind === "coach")) render(k);
+        if (consentChanged && k.kind === "autonomy") render(k);
         if (k.kind === "habit" && (habitsChanged || todayChanged)) render(k);
       } catch {
       }
@@ -18161,6 +18165,63 @@ function renderCoach(k) {
   k.frame = snap.frame;
   k.beaconSig = snap.frame + ":" + snap.pending;
   k.action.setImage(face("\u{1F9ED}", "Coach", VIOLET_HUE, snap.badge, 72, withFrame(k, null, now)));
+}
+function renderAutonomy(k) {
+  const now = Date.now();
+  setKeyFrame(k, "idle");
+  const snap = autonomyOf(consentCache);
+  k.action.setImage(face(snap.glyph, snap.label, VIOLET_HUE, "", 72, withFrame(k, {
+    grammar: true,
+    mono: true
+  }, now)));
+}
+function cycleAutonomy(k) {
+  const prev = consentCache;
+  const next = cycleConsent(consentCache);
+  consentCache = next;
+  for (const other of keys.values()) {
+    if (other.kind === "autonomy") {
+      try {
+        render(other);
+      } catch {
+      }
+    }
+  }
+  const s = k.settings;
+  const url2 = baseOf(s) + "/api/profile";
+  const body = { coachNav: next };
+  if (s.key) body.key = s.key;
+  fetch(url2, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  }).then((r) => {
+    if (r.ok) {
+      k.action.showOk();
+      return;
+    }
+    consentCache = prev;
+    for (const other of keys.values()) {
+      if (other.kind === "autonomy") {
+        try {
+          render(other);
+        } catch {
+        }
+      }
+    }
+    k.action.showAlert();
+  }).catch(() => {
+    consentCache = prev;
+    for (const other of keys.values()) {
+      if (other.kind === "autonomy") {
+        try {
+          render(other);
+        } catch {
+        }
+      }
+    }
+    k.action.showAlert();
+  });
 }
 function coachNavigate(k) {
   const raw = parseInt(k.settings.coachPage, 10);
@@ -18295,6 +18356,10 @@ function render(k) {
   const s = k.settings;
   if (k.kind === "coach") {
     renderCoach(k);
+    return;
+  }
+  if (k.kind === "autonomy") {
+    renderAutonomy(k);
     return;
   }
   if (k.kind === "habit") {
@@ -18435,6 +18500,10 @@ function dispatch({ id, gesture }) {
     else coachNavigate(k);
     return;
   }
+  if (k.kind === "autonomy") {
+    if (gesture === "tap" || gesture === "commit") cycleAutonomy(k);
+    return;
+  }
   if (gesture === "arm") {
     k.armed = true;
     try {
@@ -18504,7 +18573,7 @@ function defineAction(uuid3, kind) {
       // switchToProfile needs the device (#53); the SDK stamps it on the action.
       deviceId: ev.action.device && ev.action.device.id || void 0
     });
-    gest.register(ev.action.id, { doubleTap: kind !== "coach" });
+    gest.register(ev.action.id, { doubleTap: kind !== "coach" && kind !== "autonomy" });
     lastPageChangeAt = Date.now();
     render(keys.get(ev.action.id));
     startClock();
@@ -18544,6 +18613,7 @@ function defineAction(uuid3, kind) {
 plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.habit", "habit"));
 plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.slot", "slot"));
 plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.coach", "coach"));
+plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.autonomy", "autonomy"));
 try {
   plugin_default.system.onSystemDidWakeUp(() => {
     sched.forcePoll();

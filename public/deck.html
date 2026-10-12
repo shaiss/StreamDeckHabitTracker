@@ -124,7 +124,7 @@
     .facecss .lb { font-size: calc(var(--key) * .13); font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.6); letter-spacing: .02em; }
     .facecss .lb.mono { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; text-transform: uppercase; letter-spacing: .06em; }
     .facecss .badge { position: absolute; top: 6px; right: 8px; font-size: calc(var(--key) * .085); font-weight: 700; color: rgba(255,255,255,.85); }
-    .slotface, .coachface { background:
+    .slotface, .coachface, .autonomyface { background:
       radial-gradient(circle at 50% 36%, hsla(262,72%,58%,.62) 0%, hsla(262,72%,45%,.18) 42%, transparent 68%),
       linear-gradient(180deg,#141827,#0a0c13); }
     /* a live nudge: Ritual identity hue on the interior (hueFor(habit)), wait
@@ -280,6 +280,7 @@
     let coachPage = [];
     let rosterPending = 0;
     let beaconBlocked = false;
+    let coachNav = 'off';   // Autonomy Toggle (#94) — off | nudge-only | may-navigate
     let habits = [];
     let today = {};   // habitName -> {count, goal, doneToday, streak, ringFill} (#32)
     let built = false;
@@ -345,7 +346,15 @@
       });
       beacon.dataset.beacon = '1';
       face.appendChild(beacon);
-      const used = habits.length + 1 + 4 + 1; // habits + stats + AI slots + beacon
+      // Autonomy Toggle (#94 / §3.5): sticky mode dial. Tap cycles consent
+      // through /api/profile; never logs. Does not steal the beacon key.
+      const autonomy = keyEl({
+        title: 'Autonomy — tap to cycle MANUAL → ASSIST → AUTO',
+        onTap: (e2) => cycleAutonomy(e2)
+      });
+      autonomy.dataset.autonomy = '1';
+      face.appendChild(autonomy);
+      const used = habits.length + 1 + 4 + 1 + 1; // habits + stats + AI slots + beacon + autonomy
       for (let i = 0; i < Math.max(0, 15 - used); i++) {
         const off = document.createElement('button');
         off.className = 'k off'; off.disabled = true; off.tabIndex = -1;
@@ -522,6 +531,27 @@
       return { pending, blocked, frame, badge: pending > 0 ? String(pending) : '' };
     }
 
+    // Autonomy Toggle (#94 / §3.5). Same mapping as lib/takeover.js —
+    // drift-guarded in tests/unit/autonomy.test.mjs.
+    const CONSENT_LEVELS = ['off', 'nudge-only', 'may-navigate'];
+    const AUTONOMY_GLYPH = '⚙';
+    const AUTONOMY_MODES = {
+      off: { consent: 'off', mode: 'MANUAL', label: 'MANUAL', glyph: AUTONOMY_GLYPH },
+      'nudge-only': { consent: 'nudge-only', mode: 'ASSISTED', label: 'ASSIST', glyph: AUTONOMY_GLYPH },
+      'may-navigate': { consent: 'may-navigate', mode: 'AUTO', label: 'AUTO', glyph: AUTONOMY_GLYPH }
+    };
+    function normalizeConsent(v) {
+      return CONSENT_LEVELS.includes(v) ? v : 'off';
+    }
+    function autonomyOf(consent) {
+      return AUTONOMY_MODES[normalizeConsent(consent)];
+    }
+    function cycleConsent(consent) {
+      const cur = normalizeConsent(consent);
+      const i = CONSENT_LEVELS.indexOf(cur);
+      return CONSENT_LEVELS[(i + 1) % CONSENT_LEVELS.length];
+    }
+
     // Opt-in turn-state frame (#74). Same alias as faces.mjs resolveFrame
     // (`frame` or `frameState`). Absent / unknown → no element, same as today.
     function resolveFrame(src) {
@@ -606,6 +636,7 @@
           : ('AI slot ' + n + ' — empty');
       });
       paintBeacon();
+      paintAutonomy();
     }
 
     function paintBeacon() {
@@ -620,6 +651,46 @@
       el.title = b.blocked
         ? 'Coach blocked — tap for context (does not decide)'
         : (b.pending ? b.pending + ' pending — tap for context (does not decide)' : 'Coach quiet');
+    }
+
+    function paintAutonomy() {
+      const el = document.querySelector('.k[data-autonomy]');
+      if (!el) return;
+      const snap = autonomyOf(coachNav);
+      // Sticky key: idle frame always; violet interior; ⚙ + short mode label.
+      el.innerHTML = '<span class="facecss autonomyface">' + stateFrameHtml('idle') +
+        '<span class="em">' + esc(snap.glyph) + '</span>' +
+        '<span class="lb mono">' + esc(snap.label) + '</span></span>' +
+        '<span class="glass"></span><span class="flash"></span>';
+      el.title = 'Autonomy ' + snap.mode + ' — tap to cycle (never logs)';
+      el.dataset.consent = snap.consent;
+      el.dataset.mode = snap.mode;
+    }
+
+    function cycleAutonomy(el) {
+      const prev = coachNav;
+      const next = cycleConsent(coachNav);
+      coachNav = next;
+      paintAutonomy();
+      el.classList.add('pressed');
+      setTimeout(() => el.classList.remove('pressed'), 120);
+      const body = { coachNav: next };
+      if (KEY) body.key = KEY;
+      fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+        .then((r) => {
+          flash(el, r.ok);
+          if (!r.ok) { coachNav = prev; paintAutonomy(); }
+          else {
+            const snap = autonomyOf(coachNav);
+            hint.innerHTML = '<b>Autonomy → ' + esc(snap.mode) + '</b> — coach leash is now ' +
+              esc(snap.consent) + '.';
+          }
+        })
+        .catch(() => { coachNav = prev; paintAutonomy(); flash(el, false); });
     }
 
     function settleQuestionSiblings(pressedN, qid) {
@@ -754,6 +825,7 @@
         coachPage = j.coachPage || [];
         rosterPending = Number(j.rosterPending) || 0;
         beaconBlocked = !!j.blocked;
+        coachNav = normalizeConsent(j.coachNav);
         today = j.today || {};
         if (!built && habits.length) build();
         paintSlots();
