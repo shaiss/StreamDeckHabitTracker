@@ -249,7 +249,9 @@ test('formatTargetLine is plain language for down and up', () => {
   );
 });
 
-test('normalizeTargets fills defaults for a missing/corrupt doc', () => {
+test('normalizeTargets fills defaults for a missing/non-object doc', () => {
+  // Store-layer corrupt values throw (TARGETS_CORRUPT) before normalize;
+  // null remains the first-boot / missing-key shape.
   assert.deepEqual(normalizeTargets(null), {
     proposals: [], history: [], rejected: [], lastRunAt: 0, model: '', engine: ''
   });

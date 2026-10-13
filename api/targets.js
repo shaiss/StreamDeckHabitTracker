@@ -134,10 +134,8 @@ export default async function handler(req, res) {
       ...view(result.targets)
     });
   } catch (err) {
-    const exposed = targetsClientMessage(err);
-    if (exposed !== (err?.message || String(err))) {
-      console.error('[api/targets] storage error:', err?.message || err);
-    }
-    res.status(500).json({ error: exposed });
+    // Log the real failure; clients only ever see a stable generic 500 body.
+    console.error('[api/targets] error:', err?.message || err);
+    res.status(500).json({ error: targetsClientMessage(err) });
   }
 }

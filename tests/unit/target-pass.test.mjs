@@ -327,6 +327,96 @@ test('getTargets still returns null for a missing doc (distinct from throw)', as
   }
 });
 
+test('getTargets: unparseable value throws (does not empty-normalize)', async () => {
+  const state = { [TARGETS_KEY]: '{not-json' };
+  const mock = installRedisMock(state);
+  try {
+    await assert.rejects(
+      () => getTargets(),
+      (err) => err && err.code === 'TARGETS_CORRUPT' && /unparseable/.test(err.message)
+    );
+    await assert.rejects(() => readTargetsForPass(), (err) => err?.code === 'TARGETS_CORRUPT');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('getTargets: non-object JSON throws (array/string/null literal)', async () => {
+  for (const bad of ['[]', '"oops"', 'null', '42']) {
+    const state = { [TARGETS_KEY]: bad };
+    const mock = installRedisMock(state);
+    try {
+      await assert.rejects(
+        () => getTargets(),
+        (err) => err && err.code === 'TARGETS_CORRUPT' && /unexpected shape/.test(err.message),
+        `expected TARGETS_CORRUPT for ${bad}`
+      );
+    } finally {
+      mock.restore();
+    }
+  }
+});
+
+test('commitTargetPass: malformed habits:targets never writes (fail closed)', async () => {
+  // Corrupt-but-present value must not become normalizeTargets(null) → empty
+  // doc → setTargets wipe. Throw before any SET of habits:targets / habits:config.
+  const state = {
+    [TARGETS_KEY]: '{truncated',
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Caffeine', emoji: '☕', label: 'Caf', goal: 5, origin: 'human' }
+    ])
+  };
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    if (args[0] === 'SET' && args[1] === LOCK_KEY) {
+      if (state[LOCK_KEY] != null) return { ok: true, json: async () => ({ result: null }) };
+      state[LOCK_KEY] = args[2];
+      return { ok: true, json: async () => ({ result: 'OK' }) };
+    }
+    if (args[0] === 'EVAL') {
+      assert.equal(args[1], RELEASE_LUA);
+      if (state[args[3]] === args[4]) delete state[args[3]];
+      return { ok: true, json: async () => ({ result: 1 }) };
+    }
+    if (args[0] === 'GET' && args[1] === TARGETS_KEY) {
+      return { ok: true, json: async () => ({ result: state[TARGETS_KEY] }) };
+    }
+    if (args[0] === 'GET' && args[1] === HABITS_KEY) {
+      return { ok: true, json: async () => ({ result: state[HABITS_KEY] }) };
+    }
+    if (args[0] === 'SET' || args[0] === 'MSET') {
+      throw new Error(`write must not run on corrupt targets: ${JSON.stringify(args)}`);
+    }
+    throw new Error(`unexpected redis ${JSON.stringify(args)}`);
+  };
+  process.env.KV_REST_API_URL = 'https://example.test';
+  process.env.KV_REST_API_TOKEN = 'test';
+  try {
+    await assert.rejects(
+      () => commitTargetPass({
+        raw: [{ name: 'Caffeine', to: 3, reason: 'must not land' }],
+        engine: 'test'
+      }),
+      (err) => err && err.code === 'TARGETS_CORRUPT'
+    );
+    assert.ok(!calls.some((c) => c[0] === 'SET' && c[1] === TARGETS_KEY),
+      'setTargets must not run after corrupt read');
+    assert.ok(!calls.some((c) => c[0] === 'SET' && c[1] === HABITS_KEY),
+      'saveHabits must not run after corrupt read');
+    assert.ok(!calls.some(isHabitsTargetsMset),
+      'atomic writer must not run after corrupt read');
+    assert.equal(state[TARGETS_KEY], '{truncated', 'corrupt value left untouched (no empty overwrite)');
+    assert.equal(state[LOCK_KEY], undefined, 'lock released in finally');
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
 test('setHabitsAndTargets: MSET failure leaves both keys untouched', async () => {
   const habitsBefore = [
     { name: 'Caffeine', emoji: '☕', label: 'Caf', goal: 5, origin: 'human' }
