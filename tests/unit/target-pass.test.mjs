@@ -11,8 +11,12 @@ const HABITS_KEY = 'habits:config';
 const LOCK_KEY = 'habits:targets:lock';
 const RELEASE_LUA =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
-const SET_BOTH_LUA =
-  "redis.call('set', KEYS[1], ARGV[1]); redis.call('set', KEYS[2], ARGV[2]); return 'OK'";
+
+function isHabitsTargetsMset(args) {
+  return args[0] === 'MSET'
+    && args[1] === HABITS_KEY
+    && args[3] === TARGETS_KEY;
+}
 
 function installRedisMock(state, { failAtomic = false } = {}) {
   const originalFetch = globalThis.fetch;
@@ -34,6 +38,16 @@ function installRedisMock(state, { failAtomic = false } = {}) {
       state[key] = val;
       return { ok: true, json: async () => ({ result: 'OK' }) };
     }
+    if (op === 'MSET') {
+      assert.ok(isHabitsTargetsMset(args), 'expected habits+targets MSET');
+      if (failAtomic) {
+        return { ok: false, status: 503, text: async () => 'atomic blip' };
+      }
+      // Single command: both keys land together (or neither, on failAtomic).
+      state[args[1]] = args[2];
+      state[args[3]] = args[4];
+      return { ok: true, json: async () => ({ result: 'OK' }) };
+    }
     if (op === 'EVAL') {
       const lua = args[1];
       if (lua === RELEASE_LUA) {
@@ -44,17 +58,6 @@ function installRedisMock(state, { failAtomic = false } = {}) {
           return { ok: true, json: async () => ({ result: 1 }) };
         }
         return { ok: true, json: async () => ({ result: 0 }) };
-      }
-      if (lua === SET_BOTH_LUA) {
-        assert.equal(args[2], '2');
-        assert.equal(args[3], HABITS_KEY);
-        assert.equal(args[4], TARGETS_KEY);
-        if (failAtomic) {
-          return { ok: false, status: 503, text: async () => 'atomic blip' };
-        }
-        state[args[3]] = args[5];
-        state[args[4]] = args[6];
-        return { ok: true, json: async () => ({ result: 'OK' }) };
       }
       throw new Error(`unexpected EVAL ${lua}`);
     }
@@ -264,7 +267,7 @@ test('commitTargetPass: getHabitsStrict failure under lock never writes (no wipe
       'saveHabits must not run after a failed habits read');
     assert.ok(!calls.some((c) => c[0] === 'SET' && c[1] === TARGETS_KEY),
       'setTargets must not run after a failed habits read');
-    assert.ok(!calls.some((c) => c[0] === 'EVAL' && c[1] === SET_BOTH_LUA),
+    assert.ok(!calls.some(isHabitsTargetsMset),
       'atomic writer must not run after a failed habits read');
     assert.deepEqual(JSON.parse(state[HABITS_KEY]), customHabits,
       'custom roster untouched');
@@ -324,7 +327,7 @@ test('getTargets still returns null for a missing doc (distinct from throw)', as
   }
 });
 
-test('setHabitsAndTargets: EVAL failure leaves both keys untouched', async () => {
+test('setHabitsAndTargets: MSET failure leaves both keys untouched', async () => {
   const habitsBefore = [
     { name: 'Caffeine', emoji: '☕', label: 'Caf', goal: 5, origin: 'human' }
   ];
@@ -352,13 +355,13 @@ test('setHabitsAndTargets: EVAL failure leaves both keys untouched', async () =>
     );
     assert.deepEqual(JSON.parse(state[HABITS_KEY]), habitsBefore, 'habits not partially written');
     assert.deepEqual(JSON.parse(state[TARGETS_KEY]), targetsBefore, 'targets not partially written');
-    assert.ok(mock.calls.some((c) => c[0] === 'EVAL' && c[1] === SET_BOTH_LUA));
+    assert.ok(mock.calls.some(isHabitsTargetsMset));
   } finally {
     mock.restore();
   }
 });
 
-test('commitTargetPass: auto-down uses atomic EVAL; failed atomic write leaves both docs', async () => {
+test('commitTargetPass: auto-down uses atomic MSET; failed atomic write leaves both docs', async () => {
   const habitsBefore = [
     { name: 'Caffeine', emoji: '☕', label: 'Caffeine', goal: 5, origin: 'human' },
     { name: 'Exercise', emoji: '🏃', label: 'Exercise', goal: 2, origin: 'human' }
@@ -384,8 +387,8 @@ test('commitTargetPass: auto-down uses atomic EVAL; failed atomic write leaves b
       }),
       /store 503/
     );
-    assert.ok(mock.calls.some((c) => c[0] === 'EVAL' && c[1] === SET_BOTH_LUA),
-      'auto-down must use atomic two-key EVAL');
+    assert.ok(mock.calls.some(isHabitsTargetsMset),
+      'auto-down must use atomic two-key MSET');
     assert.ok(!mock.calls.some((c) => c[0] === 'SET' && c[1] === HABITS_KEY),
       'must not sequential-SET habits before targets');
     assert.ok(!mock.calls.some((c) => c[0] === 'SET' && c[1] === TARGETS_KEY),
@@ -400,7 +403,7 @@ test('commitTargetPass: auto-down uses atomic EVAL; failed atomic write leaves b
   }
 });
 
-test('commitTargetPass: successful auto-down writes habits+targets in one EVAL', async () => {
+test('commitTargetPass: successful auto-down writes habits+targets in one MSET', async () => {
   const state = {
     [TARGETS_KEY]: JSON.stringify({
       proposals: [],
@@ -422,16 +425,16 @@ test('commitTargetPass: successful auto-down writes habits+targets in one EVAL',
       engine: 'test'
     });
     assert.equal(doc.autoApplied, 1);
-    const atomic = mock.calls.find((c) => c[0] === 'EVAL' && c[1] === SET_BOTH_LUA);
-    assert.ok(atomic, 'expected setHabitsAndTargets EVAL');
+    const atomic = mock.calls.find(isHabitsTargetsMset);
+    assert.ok(atomic, 'expected setHabitsAndTargets MSET');
     const habits = JSON.parse(state[HABITS_KEY]);
     const targets = JSON.parse(state[TARGETS_KEY]);
     assert.equal(habits[0].goal.target, 4);
     assert.equal(habits[0].goal.setBy, 'coach');
     assert.equal(targets.history[0].via, 'auto');
     assert.equal(targets.history[0].to, 4);
-    assert.deepEqual(JSON.parse(atomic[5]), habits);
-    assert.deepEqual(JSON.parse(atomic[6]).history, targets.history);
+    assert.deepEqual(JSON.parse(atomic[2]), habits);
+    assert.deepEqual(JSON.parse(atomic[4]).history, targets.history);
   } finally {
     mock.restore();
   }

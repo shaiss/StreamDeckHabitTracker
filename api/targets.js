@@ -10,7 +10,13 @@ import { isConfigured, getTargets, setTargets, setHabitsAndTargets, withTargetsL
 import { getHabitsStrict, prepareHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
 import { targetPass, TARGET_COOLDOWN_MS } from '../lib/coach.js';
-import { normalizeTargets, applyTargetDecision, formatTargetLine } from '../lib/target.js';
+import {
+  normalizeTargets,
+  applyTargetDecision,
+  formatTargetLine,
+  targetsClientMessage,
+  TARGETS_WRITE_FAILED_MSG
+} from '../lib/target.js';
 
 const view = (doc) => ({
   proposals: doc.proposals,
@@ -19,6 +25,14 @@ const view = (doc) => ({
   model: doc.model,
   lines: doc.history.slice(0, 8).map(formatTargetLine)
 });
+
+function wrapTargetsWriteError(op, err) {
+  console.error(`[api/targets] ${op} failed:`, err?.message || err);
+  const e = new Error(TARGETS_WRITE_FAILED_MSG);
+  e.code = 'TARGETS_WRITE_FAILED';
+  e.cause = err;
+  return e;
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -88,9 +102,17 @@ export default async function handler(req, res) {
           }
           // Atomic with history — same rail as commitTargetPass auto-downs.
           saved = prepareHabits(result.habits);
-          await setHabitsAndTargets(saved, result.targets);
+          try {
+            await setHabitsAndTargets(saved, result.targets);
+          } catch (writeErr) {
+            throw wrapTargetsWriteError('setHabitsAndTargets', writeErr);
+          }
         } else {
-          await setTargets(result.targets);
+          try {
+            await setTargets(result.targets);
+          } catch (writeErr) {
+            throw wrapTargetsWriteError('setTargets', writeErr);
+          }
         }
       });
     } catch (err) {
@@ -112,6 +134,10 @@ export default async function handler(req, res) {
       ...view(result.targets)
     });
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    const exposed = targetsClientMessage(err);
+    if (exposed !== (err?.message || String(err))) {
+      console.error('[api/targets] storage error:', err?.message || err);
+    }
+    res.status(500).json({ error: exposed });
   }
 }
