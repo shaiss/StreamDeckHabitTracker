@@ -88,6 +88,16 @@ test('invalid/missing goal treated as 1', () => {
   assert.equal(out.Z.goal, 1);
 });
 
+test('object-form goal (#70) uses goal.target for ringFill / doneToday', () => {
+  const habits = [{ name: 'Drink', emoji: '💧', label: 'Drink', goal: { target: 4, setBy: 'coach', reason: 'eased' } }];
+  const entries = [entry('Drink', NOON), entry('Drink', NOON)];
+  const out = computeToday(habits, entries, NOON, 0);
+  assert.equal(out.Drink.goal, 4);
+  assert.equal(out.Drink.count, 2);
+  assert.equal(out.Drink.ringFill, 0.5);
+  assert.equal(out.Drink.doneToday, false);
+});
+
 test('skips habit entries with no name and ignores entries for unknown habits', () => {
   const out = computeToday([habit('Eat')], [entry('Drink', NOON)], NOON, 0);
   assert.deepEqual(out.Eat, { count: 0, goal: 1, doneToday: false, streak: 0, ringFill: 0 });

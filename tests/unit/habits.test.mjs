@@ -5,7 +5,8 @@ import {
   isPreviousSeed,
   PREVIOUS_SEED,
   seedHabits,
-  getHabits
+  getHabits,
+  getHabitsStrict
 } from '../../lib/habits.js';
 
 test('accepts a clean list with origins', () => {
@@ -46,6 +47,33 @@ test('rejects out-of-range or non-integer goal (must be a whole number 1-99)', (
 
 test('goal is optional (no goal still validates)', () => {
   assert.equal(validateHabits([{ name: 'Eat', emoji: '🍽', label: 'Eat' }]), null);
+});
+
+// #70 — object-form goal is backward-compatible with the bare int.
+test('accepts object-form goal {target, setBy, reason, floor, ceil}', () => {
+  assert.equal(validateHabits([{
+    name: 'Caffeine', emoji: '☕', label: 'Caf',
+    goal: { target: 3, setBy: 'coach', reason: 'eased', updatedAt: 1, floor: 1, ceil: 5 }
+  }]), null);
+});
+
+test('plain-number goal still validates alongside an object-form neighbor', () => {
+  assert.equal(validateHabits([
+    { name: 'Drink', emoji: '💧', label: 'Drink', goal: 8 },
+    { name: 'Caffeine', emoji: '☕', label: 'Caf', goal: { target: 2, setBy: 'human' } }
+  ]), null);
+});
+
+test('rejects object goal with bad target / floor>ceil / target outside pins', () => {
+  assert.match(validateHabits([{
+    name: 'X', emoji: '💧', label: 'D', goal: { target: 0, setBy: 'human' }
+  }]), /goal/i);
+  assert.match(validateHabits([{
+    name: 'X', emoji: '💧', label: 'D', goal: { target: 5, floor: 6, ceil: 4 }
+  }]), /floor/i);
+  assert.match(validateHabits([{
+    name: 'X', emoji: '💧', label: 'D', goal: { target: 2, floor: 3 }
+  }]), /below/i);
 });
 
 test('isPreviousSeed matches the pre-Code eight-entry catalog (origin extras ok)', () => {
@@ -169,6 +197,40 @@ test('getHabits leaves an intentionally custom catalog unchanged', async () => {
   }
 });
 
+test('getHabitsStrict throws on store read failure; getHabits still soft-falls-back', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => 'down' });
+  try {
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    await assert.rejects(() => getHabitsStrict(), /store 503/);
+    // Soft reader keeps dashboards alive on a blip.
+    assert.deepEqual(await getHabits(), seedHabits());
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict returns seed only for a missing/empty key (not on error)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    assert.equal(args[0], 'GET');
+    return { ok: true, json: async () => ({ result: null }) };
+  };
+  try {
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    assert.deepEqual(await getHabitsStrict(), seedHabits());
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
 test('getHabits migration CAS aborts when a concurrent saveHabits wins', async () => {
   const calls = [];
   const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
@@ -210,6 +272,64 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
     assert.equal(calls[2][0], 'GET');
     assert.ok(!calls.some((c) => c[0] === 'SET'));
     assert.equal(redisValue, customRaw);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict: migration CAS store failure throws (does not serve seed)', async () => {
+  // Former catch returned seedHabits() after a failed CAS — a later saveHabits
+  // could then overwrite a concurrent custom roster with BASE_HABITS.
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    if (args[0] === 'GET') {
+      return { ok: true, json: async () => ({ result: JSON.stringify(prev) }) };
+    }
+    if (args[0] === 'EVAL') {
+      return { ok: false, status: 503, text: async () => 'cas down' };
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    await assert.rejects(() => getHabitsStrict(), /store 503/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict: CAS miss + unreadable key throws (does not serve seed)', async () => {
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prevRaw = JSON.stringify(prev);
+  let gets = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    if (args[0] === 'GET') {
+      gets++;
+      if (gets === 1) {
+        return { ok: true, json: async () => ({ result: prevRaw }) };
+      }
+      // Empty after CAS miss — must not fall through to returning seedHabits().
+      return { ok: true, json: async () => ({ result: null }) };
+    }
+    if (args[0] === 'EVAL') {
+      assert.equal(args[4], prevRaw);
+      return { ok: true, json: async () => ({ result: null }) }; // CAS miss
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    await assert.rejects(() => getHabitsStrict(), /unreadable after CAS miss/);
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.KV_REST_API_URL;
