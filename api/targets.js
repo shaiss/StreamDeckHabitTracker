@@ -6,8 +6,8 @@
 // (lib/coach.js targetPass, also run by the morning cron after roster). Downs
 // auto-apply; ups wait here for a human decision. HABIT_KEY (if set) gates
 // writes via ?key= or body.key, matching api/roster.js / api/habits.js.
-import { isConfigured, getTargets, setTargets, withTargetsLock } from '../lib/store.js';
-import { getHabitsStrict, saveHabits, validateHabits } from '../lib/habits.js';
+import { isConfigured, getTargets, setTargets, setHabitsAndTargets, withTargetsLock } from '../lib/store.js';
+import { getHabitsStrict, prepareHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
 import { targetPass, TARGET_COOLDOWN_MS } from '../lib/coach.js';
 import { normalizeTargets, applyTargetDecision, formatTargetLine } from '../lib/target.js';
@@ -86,9 +86,12 @@ export default async function handler(req, res) {
             result = { error: err };
             return;
           }
-          saved = await saveHabits(result.habits);
+          // Atomic with history — same rail as commitTargetPass auto-downs.
+          saved = prepareHabits(result.habits);
+          await setHabitsAndTargets(saved, result.targets);
+        } else {
+          await setTargets(result.targets);
         }
-        await setTargets(result.targets);
       });
     } catch (err) {
       if (err?.code === 'TARGETS_BUSY') {

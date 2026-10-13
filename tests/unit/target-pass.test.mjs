@@ -1,16 +1,20 @@
 // Rails for adaptive-targets I/O (#70 CodeRabbit follow-ups): the shared
-// withTargetsLock, abort-on-read-failure, and commit re-read under the lock.
+// withTargetsLock, abort-on-read-failure, atomic habits+targets write, and
+// commit re-read under the lock.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { withTargetsLock, getTargets, setTargets } from '../../lib/store.js';
+import { withTargetsLock, getTargets, setTargets, setHabitsAndTargets } from '../../lib/store.js';
 import { readTargetsForPass, commitTargetPass } from '../../lib/target-pass.js';
 
 const TARGETS_KEY = 'habits:targets';
+const HABITS_KEY = 'habits:config';
 const LOCK_KEY = 'habits:targets:lock';
 const RELEASE_LUA =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+const SET_BOTH_LUA =
+  "redis.call('set', KEYS[1], ARGV[1]); redis.call('set', KEYS[2], ARGV[2]); return 'OK'";
 
-function installRedisMock(state) {
+function installRedisMock(state, { failAtomic = false } = {}) {
   const originalFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (_url, opts) => {
@@ -32,14 +36,27 @@ function installRedisMock(state) {
     }
     if (op === 'EVAL') {
       const lua = args[1];
-      const key = args[3];
-      const token = args[4];
-      assert.equal(lua, RELEASE_LUA);
-      if (state[key] === token) {
-        delete state[key];
-        return { ok: true, json: async () => ({ result: 1 }) };
+      if (lua === RELEASE_LUA) {
+        const key = args[3];
+        const token = args[4];
+        if (state[key] === token) {
+          delete state[key];
+          return { ok: true, json: async () => ({ result: 1 }) };
+        }
+        return { ok: true, json: async () => ({ result: 0 }) };
       }
-      return { ok: true, json: async () => ({ result: 0 }) };
+      if (lua === SET_BOTH_LUA) {
+        assert.equal(args[2], '2');
+        assert.equal(args[3], HABITS_KEY);
+        assert.equal(args[4], TARGETS_KEY);
+        if (failAtomic) {
+          return { ok: false, status: 503, text: async () => 'atomic blip' };
+        }
+        state[args[3]] = args[5];
+        state[args[4]] = args[6];
+        return { ok: true, json: async () => ({ result: 'OK' }) };
+      }
+      throw new Error(`unexpected EVAL ${lua}`);
     }
     throw new Error(`unexpected redis ${op}`);
   };
@@ -204,7 +221,7 @@ test('commitTargetPass: getHabitsStrict failure under lock never writes (no wipe
   };
   const state = {
     [TARGETS_KEY]: JSON.stringify(preservedTargets),
-    'habits:config': JSON.stringify(customHabits)
+    [HABITS_KEY]: JSON.stringify(customHabits)
   };
   const originalFetch = globalThis.fetch;
   const calls = [];
@@ -224,7 +241,7 @@ test('commitTargetPass: getHabitsStrict failure under lock never writes (no wipe
     if (args[0] === 'GET' && args[1] === TARGETS_KEY) {
       return { ok: true, json: async () => ({ result: state[TARGETS_KEY] }) };
     }
-    if (args[0] === 'GET' && args[1] === 'habits:config') {
+    if (args[0] === 'GET' && args[1] === HABITS_KEY) {
       return { ok: false, status: 503, text: async () => 'blip' };
     }
     if (args[0] === 'SET') {
@@ -243,11 +260,13 @@ test('commitTargetPass: getHabitsStrict failure under lock never writes (no wipe
       }),
       /store 503/
     );
-    assert.ok(!calls.some((c) => c[0] === 'SET' && c[1] === 'habits:config'),
+    assert.ok(!calls.some((c) => c[0] === 'SET' && c[1] === HABITS_KEY),
       'saveHabits must not run after a failed habits read');
     assert.ok(!calls.some((c) => c[0] === 'SET' && c[1] === TARGETS_KEY),
       'setTargets must not run after a failed habits read');
-    assert.deepEqual(JSON.parse(state['habits:config']), customHabits,
+    assert.ok(!calls.some((c) => c[0] === 'EVAL' && c[1] === SET_BOTH_LUA),
+      'atomic writer must not run after a failed habits read');
+    assert.deepEqual(JSON.parse(state[HABITS_KEY]), customHabits,
       'custom roster untouched');
     assert.deepEqual(JSON.parse(state[TARGETS_KEY]), preservedTargets,
       'proposals/history/rejected untouched');
@@ -300,6 +319,119 @@ test('getTargets still returns null for a missing doc (distinct from throw)', as
     const doc = await readTargetsForPass();
     assert.deepEqual(doc.proposals, []);
     assert.deepEqual(doc.rejected, []);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('setHabitsAndTargets: EVAL failure leaves both keys untouched', async () => {
+  const habitsBefore = [
+    { name: 'Caffeine', emoji: '☕', label: 'Caf', goal: 5, origin: 'human' }
+  ];
+  const targetsBefore = {
+    proposals: [],
+    history: [],
+    rejected: ['drink:12']
+  };
+  const state = {
+    [HABITS_KEY]: JSON.stringify(habitsBefore),
+    [TARGETS_KEY]: JSON.stringify(targetsBefore)
+  };
+  const mock = installRedisMock(state, { failAtomic: true });
+  try {
+    await assert.rejects(
+      () => setHabitsAndTargets(
+        [{ name: 'Caffeine', emoji: '☕', label: 'Caf', goal: { target: 3, setBy: 'coach' }, origin: 'human' }],
+        {
+          proposals: [],
+          history: [{ name: 'Caffeine', from: 5, to: 3, via: 'auto' }],
+          rejected: ['drink:12']
+        }
+      ),
+      /store 503/
+    );
+    assert.deepEqual(JSON.parse(state[HABITS_KEY]), habitsBefore, 'habits not partially written');
+    assert.deepEqual(JSON.parse(state[TARGETS_KEY]), targetsBefore, 'targets not partially written');
+    assert.ok(mock.calls.some((c) => c[0] === 'EVAL' && c[1] === SET_BOTH_LUA));
+  } finally {
+    mock.restore();
+  }
+});
+
+test('commitTargetPass: auto-down uses atomic EVAL; failed atomic write leaves both docs', async () => {
+  const habitsBefore = [
+    { name: 'Caffeine', emoji: '☕', label: 'Caffeine', goal: 5, origin: 'human' },
+    { name: 'Exercise', emoji: '🏃', label: 'Exercise', goal: 2, origin: 'human' }
+  ];
+  const targetsBefore = {
+    proposals: [],
+    history: [],
+    rejected: ['drink:12'],
+    lastRunAt: 1,
+    model: '',
+    engine: ''
+  };
+  const state = {
+    [TARGETS_KEY]: JSON.stringify(targetsBefore),
+    [HABITS_KEY]: JSON.stringify(habitsBefore)
+  };
+  const mock = installRedisMock(state, { failAtomic: true });
+  try {
+    await assert.rejects(
+      () => commitTargetPass({
+        raw: [{ name: 'Caffeine', to: 3, reason: 'easing after misses' }],
+        engine: 'test'
+      }),
+      /store 503/
+    );
+    assert.ok(mock.calls.some((c) => c[0] === 'EVAL' && c[1] === SET_BOTH_LUA),
+      'auto-down must use atomic two-key EVAL');
+    assert.ok(!mock.calls.some((c) => c[0] === 'SET' && c[1] === HABITS_KEY),
+      'must not sequential-SET habits before targets');
+    assert.ok(!mock.calls.some((c) => c[0] === 'SET' && c[1] === TARGETS_KEY),
+      'must not sequential-SET targets after habits');
+    assert.deepEqual(JSON.parse(state[HABITS_KEY]), habitsBefore,
+      'goal change must not stick without history');
+    assert.deepEqual(JSON.parse(state[TARGETS_KEY]), targetsBefore,
+      'history must not land without goal change');
+    assert.equal(state[LOCK_KEY], undefined, 'lock released in finally');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('commitTargetPass: successful auto-down writes habits+targets in one EVAL', async () => {
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({
+      proposals: [],
+      history: [],
+      rejected: [],
+      lastRunAt: 1,
+      model: '',
+      engine: ''
+    }),
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Caffeine', emoji: '☕', label: 'Caffeine', goal: 5, origin: 'human' }
+    ])
+  };
+  const mock = installRedisMock(state);
+  try {
+    // Step clamp: from 5, maxStep is 1 — ask for 4 so sanitize does not rewrite.
+    const doc = await commitTargetPass({
+      raw: [{ name: 'Caffeine', to: 4, reason: 'easing after misses' }],
+      engine: 'test'
+    });
+    assert.equal(doc.autoApplied, 1);
+    const atomic = mock.calls.find((c) => c[0] === 'EVAL' && c[1] === SET_BOTH_LUA);
+    assert.ok(atomic, 'expected setHabitsAndTargets EVAL');
+    const habits = JSON.parse(state[HABITS_KEY]);
+    const targets = JSON.parse(state[TARGETS_KEY]);
+    assert.equal(habits[0].goal.target, 4);
+    assert.equal(habits[0].goal.setBy, 'coach');
+    assert.equal(targets.history[0].via, 'auto');
+    assert.equal(targets.history[0].to, 4);
+    assert.deepEqual(JSON.parse(atomic[5]), habits);
+    assert.deepEqual(JSON.parse(atomic[6]).history, targets.history);
   } finally {
     mock.restore();
   }

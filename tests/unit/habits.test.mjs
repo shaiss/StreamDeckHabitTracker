@@ -278,3 +278,61 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
     delete process.env.KV_REST_API_TOKEN;
   }
 });
+
+test('getHabitsStrict: migration CAS store failure throws (does not serve seed)', async () => {
+  // Former catch returned seedHabits() after a failed CAS — a later saveHabits
+  // could then overwrite a concurrent custom roster with BASE_HABITS.
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    if (args[0] === 'GET') {
+      return { ok: true, json: async () => ({ result: JSON.stringify(prev) }) };
+    }
+    if (args[0] === 'EVAL') {
+      return { ok: false, status: 503, text: async () => 'cas down' };
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    await assert.rejects(() => getHabitsStrict(), /store 503/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict: CAS miss + unreadable key throws (does not serve seed)', async () => {
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prevRaw = JSON.stringify(prev);
+  let gets = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    if (args[0] === 'GET') {
+      gets++;
+      if (gets === 1) {
+        return { ok: true, json: async () => ({ result: prevRaw }) };
+      }
+      // Empty after CAS miss — must not fall through to returning seedHabits().
+      return { ok: true, json: async () => ({ result: null }) };
+    }
+    if (args[0] === 'EVAL') {
+      assert.equal(args[4], prevRaw);
+      return { ok: true, json: async () => ({ result: null }) }; // CAS miss
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    await assert.rejects(() => getHabitsStrict(), /unreadable after CAS miss/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
