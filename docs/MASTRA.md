@@ -113,6 +113,14 @@ issues should assume AI SDK direct.
 
 ## Implementation tracking
 
-Follow-up issues (filed from this decision) own the code change. Link them from
-[#66](https://github.com/shaiss/StreamDeckHabitTracker/issues/66). Do not merge
-opportunistic Mastra adoption PRs against the old spike framing.
+Follow-up issues own the code change (also linked from [#66](https://github.com/shaiss/StreamDeckHabitTracker/issues/66)):
+
+| Issue | Slice |
+|---|---|
+| [#97](https://github.com/shaiss/StreamDeckHabitTracker/issues/97) | Remove `@mastra/core` dependency and imports |
+| [#98](https://github.com/shaiss/StreamDeckHabitTracker/issues/98) | Port coach agent/LLM calls to AI SDK |
+| [#100](https://github.com/shaiss/StreamDeckHabitTracker/issues/100) | Re-wire Redis memory tools on AI SDK |
+| [#99](https://github.com/shaiss/StreamDeckHabitTracker/issues/99) | Keep quality/dataset code and tests |
+| [#101](https://github.com/shaiss/StreamDeckHabitTracker/issues/101) | Update tests, CI notes, and docs |
+
+Do not merge opportunistic Mastra adoption PRs against the old spike framing.
