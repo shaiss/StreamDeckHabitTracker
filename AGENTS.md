@@ -45,5 +45,8 @@ match:
 - **Default branch deploys production** — don't push broken code to it.
 - **Vercel project**: `stream-deck-habit-tracker` (team `shaiss-projects`),
   git-connected. Production at https://stream-deck-habit-tracker.vercel.app.
+- **Coach stack**: Vercel AI SDK `generateText` + `tool()` over z.ai GLM
+  (Mastra was dropped — decision #66 / PR #96). Do not re-add `@mastra/*`.
+  Prompt/sanitizer tests stay on `lib/coach-shape.js` (zero-dep unit suite).
 - **Tool deps are NOT in `package.json`** (keeps Vercel's install lean):
   `npm i playwright-core pngjs gifenc --no-save` once per machine.
