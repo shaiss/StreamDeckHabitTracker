@@ -6,7 +6,7 @@
 // (lib/coach.js targetPass, also run by the morning cron after roster). Downs
 // auto-apply; ups wait here for a human decision. HABIT_KEY (if set) gates
 // writes via ?key= or body.key, matching api/roster.js / api/habits.js.
-import { isConfigured, getTargets, setTargets } from '../lib/store.js';
+import { isConfigured, getTargets, setTargets, withTargetsLock } from '../lib/store.js';
 import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
 import { targetPass, TARGET_COOLDOWN_MS } from '../lib/coach.js';
@@ -65,27 +65,42 @@ export default async function handler(req, res) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const [habits, targets] = await Promise.all([getHabits(), getTargets()]);
-    const result = applyTargetDecision({
-      habits,
-      targets,
-      id: String(body.id || ''),
-      decision: String(body.decision || '')
-    });
+    // Same lock as commitTargetPass — covers reads+writes of habits and targets
+    // so a concurrent coach pass cannot SET a stale snapshot over this decision.
+    let saved;
+    let result;
+    try {
+      await withTargetsLock(async () => {
+        const [habits, targets] = await Promise.all([getHabits(), getTargets()]);
+        result = applyTargetDecision({
+          habits,
+          targets,
+          id: String(body.id || ''),
+          decision: String(body.decision || '')
+        });
+        if (result.error) return;
+        saved = habits;
+        if (result.habits !== habits) {
+          const err = validateHabits(result.habits);
+          if (err) {
+            result = { error: err };
+            return;
+          }
+          saved = await saveHabits(result.habits);
+        }
+        await setTargets(result.targets);
+      });
+    } catch (err) {
+      if (err?.code === 'TARGETS_BUSY') {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
     if (result.error) {
       res.status(400).json({ error: result.error });
       return;
     }
-    let saved = habits;
-    if (result.habits !== habits) {
-      const err = validateHabits(result.habits);
-      if (err) {
-        res.status(400).json({ error: err });
-        return;
-      }
-      saved = await saveHabits(result.habits);
-    }
-    await setTargets(result.targets);
     res.status(200).json({
       ok: true,
       applied: result.applied,

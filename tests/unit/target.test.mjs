@@ -209,6 +209,35 @@ test('applyTargetDecision: stale raise (already at/above) drops without rewritin
   assert.equal(r.targets.proposals.length, 0);
 });
 
+test('applyTargetDecision: proposal above live ceiling is stale (not a validateHabits 400)', () => {
+  // Human lowered ceil to 8 while a raise-to-10 sat in the tray. Mark stale
+  // before writeGoal so approval clears the proposal instead of erroring forever.
+  const habits = [{
+    name: 'Drink', emoji: '💧', label: 'Drink',
+    goal: { target: 8, setBy: 'human', floor: 4, ceil: 8 }
+  }];
+  const r = applyTargetDecision({
+    habits,
+    targets: {
+      proposals: [{
+        id: 't1', name: 'Drink', label: 'Drink', emoji: '💧',
+        from: 8, to: 10, direction: 'up', reason: 'hitting it', createdAt: 1, auto: false
+      }],
+      history: [{ name: 'prior' }],
+      rejected: ['caffeine:6']
+    },
+    id: 't1',
+    decision: 'approve',
+    now: 9100
+  });
+  assert.equal(r.applied.status, 'stale');
+  assert.equal(r.habits[0].goal.target, 8);
+  assert.equal(r.habits[0].goal.ceil, 8);
+  assert.equal(r.targets.proposals.length, 0);
+  assert.deepEqual(r.targets.rejected, ['caffeine:6']);
+  assert.equal(r.targets.history[0].name, 'prior');
+});
+
 test('formatTargetLine is plain language for down and up', () => {
   assert.match(
     formatTargetLine({ label: 'Caffeine', from: 5, to: 3, direction: 'down', reason: 'well over all week' }),
