@@ -7,7 +7,7 @@
 // auto-apply; ups wait here for a human decision. HABIT_KEY (if set) gates
 // writes via ?key= or body.key, matching api/roster.js / api/habits.js.
 import { isConfigured, getTargets, setTargets, withTargetsLock } from '../lib/store.js';
-import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
+import { getHabitsStrict, saveHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
 import { targetPass, TARGET_COOLDOWN_MS } from '../lib/coach.js';
 import { normalizeTargets, applyTargetDecision, formatTargetLine } from '../lib/target.js';
@@ -71,7 +71,7 @@ export default async function handler(req, res) {
     let result;
     try {
       await withTargetsLock(async () => {
-        const [habits, targets] = await Promise.all([getHabits(), getTargets()]);
+        const [habits, targets] = await Promise.all([getHabitsStrict(), getTargets()]);
         result = applyTargetDecision({
           habits,
           targets,

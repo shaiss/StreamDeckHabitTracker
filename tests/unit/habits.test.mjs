@@ -5,7 +5,8 @@ import {
   isPreviousSeed,
   PREVIOUS_SEED,
   seedHabits,
-  getHabits
+  getHabits,
+  getHabitsStrict
 } from '../../lib/habits.js';
 
 test('accepts a clean list with origins', () => {
@@ -189,6 +190,40 @@ test('getHabits leaves an intentionally custom catalog unchanged', async () => {
     assert.deepEqual(list, custom);
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], 'GET');
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict throws on store read failure; getHabits still soft-falls-back', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => 'down' });
+  try {
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    await assert.rejects(() => getHabitsStrict(), /store 503/);
+    // Soft reader keeps dashboards alive on a blip.
+    assert.deepEqual(await getHabits(), seedHabits());
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict returns seed only for a missing/empty key (not on error)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    assert.equal(args[0], 'GET');
+    return { ok: true, json: async () => ({ result: null }) };
+  };
+  try {
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    assert.deepEqual(await getHabitsStrict(), seedHabits());
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.KV_REST_API_URL;

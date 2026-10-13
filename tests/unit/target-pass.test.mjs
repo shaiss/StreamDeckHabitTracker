@@ -187,6 +187,78 @@ test('commitTargetPass: getTargets failure under lock never writes (preserves st
   }
 });
 
+test('commitTargetPass: getHabitsStrict failure under lock never writes (no wipe)', async () => {
+  // Custom roster + targets with proposals/history/rejected — a soft getHabits()
+  // seed fallback would let saveHabits/setTargets clobber all of this.
+  const customHabits = [
+    { name: 'Stretch', emoji: '🧘', label: 'Stretch', goal: 3, origin: 'human' },
+    { name: 'Code', emoji: '💻', label: 'Code', goal: 2, origin: 'coach' }
+  ];
+  const preservedTargets = {
+    proposals: [{ id: 'p1', name: 'Stretch', from: 3, to: 4 }],
+    history: [{ name: 'Code', from: 3, to: 2, via: 'auto' }],
+    rejected: ['caffeine:6'],
+    lastRunAt: 42,
+    model: 'kept',
+    engine: 'kept'
+  };
+  const state = {
+    [TARGETS_KEY]: JSON.stringify(preservedTargets),
+    'habits:config': JSON.stringify(customHabits)
+  };
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    if (args[0] === 'SET' && args[1] === LOCK_KEY) {
+      if (state[LOCK_KEY] != null) return { ok: true, json: async () => ({ result: null }) };
+      state[LOCK_KEY] = args[2];
+      return { ok: true, json: async () => ({ result: 'OK' }) };
+    }
+    if (args[0] === 'EVAL') {
+      assert.equal(args[1], RELEASE_LUA);
+      if (state[args[3]] === args[4]) delete state[args[3]];
+      return { ok: true, json: async () => ({ result: 1 }) };
+    }
+    if (args[0] === 'GET' && args[1] === TARGETS_KEY) {
+      return { ok: true, json: async () => ({ result: state[TARGETS_KEY] }) };
+    }
+    if (args[0] === 'GET' && args[1] === 'habits:config') {
+      return { ok: false, status: 503, text: async () => 'blip' };
+    }
+    if (args[0] === 'SET') {
+      state[args[1]] = args[2];
+      return { ok: true, json: async () => ({ result: 'OK' }) };
+    }
+    throw new Error(`unexpected redis ${JSON.stringify(args)}`);
+  };
+  process.env.KV_REST_API_URL = 'https://example.test';
+  process.env.KV_REST_API_TOKEN = 'test';
+  try {
+    await assert.rejects(
+      () => commitTargetPass({
+        raw: [{ name: 'Stretch', to: 1, reason: 'must not land' }],
+        engine: 'test'
+      }),
+      /store 503/
+    );
+    assert.ok(!calls.some((c) => c[0] === 'SET' && c[1] === 'habits:config'),
+      'saveHabits must not run after a failed habits read');
+    assert.ok(!calls.some((c) => c[0] === 'SET' && c[1] === TARGETS_KEY),
+      'setTargets must not run after a failed habits read');
+    assert.deepEqual(JSON.parse(state['habits:config']), customHabits,
+      'custom roster untouched');
+    assert.deepEqual(JSON.parse(state[TARGETS_KEY]), preservedTargets,
+      'proposals/history/rejected untouched');
+    assert.equal(state[LOCK_KEY], undefined, 'lock released in finally');
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
 test('commitTargetPass: re-read under lock drops a raise already approved by POST', async () => {
   // POST already cleared the Exercise proposal and wrote history; a stale pass
   // that still "wanted" to keep it must not restore it.
