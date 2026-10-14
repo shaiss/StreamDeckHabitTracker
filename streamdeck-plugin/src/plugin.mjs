@@ -395,14 +395,17 @@ function cycleAutonomy(k) {
   const url = baseOf(s) + '/api/profile';
   const body = { coachNav: next, navSeq: seq };
   if (s.key) body.key = s.key;
-  const applySettle = (ok) => {
+  const applySettle = (ok, server) => {
     const settled = settleConsentWrite({
       currentSeq: consentSeq, writeSeq: seq, ok,
-      current: consentCache, prev
+      current: consentCache, prev, server
     });
     if (!settled.applied) return; // superseded by a newer tap
     consentWritePending = settled.pending;
-    if (ok) confirmedConsent = settled.consent;
+    confirmedConsent = settled.consent;
+    if (typeof settled.sequence === 'number' && settled.sequence > consentSeq) {
+      consentSeq = settled.sequence;
+    }
     if (settled.consent !== consentCache) {
       consentCache = settled.consent;
       for (const other of keys.values()) {
@@ -419,7 +422,13 @@ function cycleAutonomy(k) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   })
-    .then((r) => applySettle(r.ok))
+    .then(async (r) => {
+      let server;
+      if (r.status === 409) {
+        try { server = await r.json(); } catch { /* no body → prev fallback */ }
+      }
+      applySettle(r.ok, server);
+    })
     .catch(() => applySettle(false));
 }
 

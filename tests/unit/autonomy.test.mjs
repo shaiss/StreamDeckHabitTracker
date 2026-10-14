@@ -236,6 +236,98 @@ test('acceptCoachNavSeq orders Autonomy writes; non-positive tokens refuse', () 
   assert.equal(acceptCoachNavSeq(0, '2'), true, 'numeric string coerces');
 });
 
+test('409 settle reconciles server coachNav + coachNavSeq; no auto-retry of intent', () => {
+  // Client never polled (seq 0); another client already owns seq 10 / ASSIST.
+  // Local tap optimistically paints AUTO and POSTs navSeq=1 → 409 with server truth.
+  let consent = 'off';
+  let confirmed = 'off';
+  let seq = 0;
+  let pending = false;
+  const prev = confirmed;
+  const next = cycleConsent(consent); // nudge-only — but we simulate a bigger gap
+  // Optimistic cycle as the plugin does: off → nudge-only with writeSeq 1.
+  const writeSeq = beginConsentWrite(seq);
+  seq = writeSeq;
+  pending = true;
+  consent = next;
+  assert.equal(consent, 'nudge-only');
+  assert.equal(writeSeq, 1);
+
+  // Server says ASSIST at seq 10 — reconcile, do not retry the rejected intent.
+  const settled = settleConsentWrite({
+    currentSeq: seq, writeSeq, ok: false,
+    current: consent, prev,
+    server: { coachNav: 'nudge-only', coachNavSeq: 10 }
+  });
+  assert.equal(settled.applied, true);
+  assert.equal(settled.pending, false);
+  assert.equal(settled.consent, 'nudge-only');
+  assert.equal(settled.sequence, 10);
+  consent = settled.consent;
+  confirmed = settled.consent;
+  pending = settled.pending;
+  if (typeof settled.sequence === 'number' && settled.sequence > seq) {
+    seq = settled.sequence;
+  }
+  assert.equal(confirmed, 'nudge-only');
+  assert.equal(seq, 10, 'local navSeq advances to server so the next tap can win');
+  assert.equal(pending, false);
+  // Next tap starts at 11 — no automatic re-POST of the rejected intent.
+  const nextWrite = beginConsentWrite(seq);
+  assert.equal(nextWrite, 11);
+  assert.notEqual(nextWrite, writeSeq, 'rejected navSeq is not retried');
+});
+
+test('409 settle with may-navigate server state updates confirmed away from prev', () => {
+  // Local confirmed=off; optimistic may-navigate rejected; server is AUTO @ 5.
+  const settled = settleConsentWrite({
+    currentSeq: 1, writeSeq: 1, ok: false,
+    current: 'may-navigate', prev: 'off',
+    server: { coachNav: 'may-navigate', coachNavSeq: 5 }
+  });
+  assert.equal(settled.applied, true);
+  assert.equal(settled.consent, 'may-navigate');
+  assert.equal(settled.sequence, 5);
+  assert.notEqual(settled.consent, 'off');
+});
+
+test('409 settle without valid server state still falls back to prev', () => {
+  const noBody = settleConsentWrite({
+    currentSeq: 1, writeSeq: 1, ok: false,
+    current: 'nudge-only', prev: 'off'
+  });
+  assert.equal(noBody.consent, 'off');
+  assert.equal(noBody.sequence, undefined);
+
+  const badSeq = settleConsentWrite({
+    currentSeq: 1, writeSeq: 1, ok: false,
+    current: 'nudge-only', prev: 'off',
+    server: { coachNav: 'may-navigate', coachNavSeq: 1.5 }
+  });
+  assert.equal(badSeq.consent, 'off', 'non-integer coachNavSeq → prev');
+  assert.equal(badSeq.sequence, undefined);
+
+  const missingNav = settleConsentWrite({
+    currentSeq: 1, writeSeq: 1, ok: false,
+    current: 'nudge-only', prev: 'off',
+    server: { coachNavSeq: 3 }
+  });
+  assert.equal(missingNav.consent, 'off');
+  assert.equal(missingNav.sequence, undefined);
+});
+
+test('stale 409 settle is still a no-op when a newer write is in flight', () => {
+  const settled = settleConsentWrite({
+    currentSeq: 2, writeSeq: 1, ok: false,
+    current: 'may-navigate', prev: 'off',
+    server: { coachNav: 'nudge-only', coachNavSeq: 99 }
+  });
+  assert.equal(settled.applied, false);
+  assert.equal(settled.consent, 'may-navigate');
+  assert.equal(settled.pending, true);
+  assert.equal(settled.sequence, undefined);
+});
+
 test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift)', () => {
   const deck = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
   const plugin = readFileSync(new URL('../../streamdeck-plugin/src/plugin.mjs', import.meta.url), 'utf8');
@@ -260,6 +352,8 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
     'confirmedConsent',
     'pendingAtStart',
     'navSeq',
+    'r.status === 409',
+    'settled.sequence',
     'data-autonomy',
     'autonomyface'
   ]) {
@@ -274,9 +368,12 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
   assert.match(plugin, /confirmedConsent/);
   assert.match(plugin, /pendingAtStart/);
   assert.match(plugin, /navSeq/);
+  assert.match(plugin, /r\.status === 409/);
+  assert.match(plugin, /settled\.sequence/);
   assert.match(plugin, /com\.shaiss\.habit-tracker\.autonomy/);
   assert.match(plugin, /kind === 'autonomy'/);
   assert.match(plugin, /\/api\/profile/);
+  assert.match(takeover, /server\?\.coachNavSeq/);
 });
 
 test('plugin profiles reserve one Autonomy key regardless of pageCount', () => {

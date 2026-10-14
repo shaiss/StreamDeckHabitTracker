@@ -17876,11 +17876,20 @@ function cycleConsent(consent) {
 function beginConsentWrite(seq) {
   return (Number(seq) || 0) + 1;
 }
-function settleConsentWrite({ currentSeq, writeSeq, ok, current, prev }) {
+function settleConsentWrite({ currentSeq, writeSeq, ok, current, prev, server }) {
   if (writeSeq !== currentSeq) {
     return { consent: current, pending: true, applied: false };
   }
   if (ok) return { consent: current, pending: false, applied: true };
+  const serverSeq = Number(server?.coachNavSeq);
+  if (typeof server?.coachNav === "string" && Number.isInteger(serverSeq) && serverSeq >= 0) {
+    return {
+      consent: normalizeConsent(server.coachNav),
+      sequence: serverSeq,
+      pending: false,
+      applied: true
+    };
+  }
   return { consent: normalizeConsent(prev), pending: false, applied: true };
 }
 function mergePolledConsent({
@@ -18242,17 +18251,21 @@ function cycleAutonomy(k) {
   const url2 = baseOf(s) + "/api/profile";
   const body = { coachNav: next, navSeq: seq };
   if (s.key) body.key = s.key;
-  const applySettle = (ok) => {
+  const applySettle = (ok, server) => {
     const settled = settleConsentWrite({
       currentSeq: consentSeq,
       writeSeq: seq,
       ok,
       current: consentCache,
-      prev
+      prev,
+      server
     });
     if (!settled.applied) return;
     consentWritePending = settled.pending;
-    if (ok) confirmedConsent = settled.consent;
+    confirmedConsent = settled.consent;
+    if (typeof settled.sequence === "number" && settled.sequence > consentSeq) {
+      consentSeq = settled.sequence;
+    }
     if (settled.consent !== consentCache) {
       consentCache = settled.consent;
       for (const other of keys.values()) {
@@ -18271,7 +18284,16 @@ function cycleAutonomy(k) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
-  }).then((r) => applySettle(r.ok)).catch(() => applySettle(false));
+  }).then(async (r) => {
+    let server;
+    if (r.status === 409) {
+      try {
+        server = await r.json();
+      } catch {
+      }
+    }
+    applySettle(r.ok, server);
+  }).catch(() => applySettle(false));
 }
 function coachNavigate(k) {
   const raw = parseInt(k.settings.coachPage, 10);
