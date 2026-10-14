@@ -4,9 +4,25 @@
 // reads on every pass, and coachNav — the tri-state navigation consent
 // (off | nudge-only | may-navigate, issue #54; unknown values normalize to
 // off). HABIT_KEY (if set) gates writes via ?key=.
-import { getProfile, setProfile, isConfigured } from '../lib/store.js';
+//
+// Autonomy clients (#94) may also send navSeq — a monotonic ordering token
+// stored as coachNavSeq. When present, stale tokens are rejected (409) via
+// an atomic CAS so two rapid POSTs cannot persist out of tap order. Clients
+// that omit navSeq (dashboard form, older builds) keep the unconditional path.
+import {
+  getProfile, getProfileRaw, setProfile, setProfileIfNavSeq, isConfigured
+} from '../lib/store.js';
 import { isValidTz, HOME_TZ } from '../lib/tz.js';
-import { normalizeConsent } from '../lib/takeover.js';
+import { normalizeConsent, acceptCoachNavSeq } from '../lib/takeover.js';
+
+function parseProfileRaw(raw) {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) || {};
+  } catch {
+    return {};
+  }
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -28,6 +44,7 @@ export default async function handler(req, res) {
         name: p.name || '',
         about: p.about || '',
         coachNav: normalizeConsent(p.coachNav),
+        coachNavSeq: Math.max(0, Number(p.coachNavSeq) || 0),
         updatedAt: p.updatedAt || 0
       });
       return;
@@ -40,7 +57,14 @@ export default async function handler(req, res) {
       return;
     }
 
-    const prev = (await getProfile()) || {};
+    // Optional Autonomy ordering token. Absent / non-positive → unconditional
+    // write (backward compatible). Present → must be strictly newer than the
+    // stored coachNavSeq, applied atomically with the profile SET.
+    const rawNavSeq = body.navSeq !== undefined ? Number(body.navSeq) : NaN;
+    const useNavSeq = Number.isFinite(rawNavSeq) && Number.isInteger(rawNavSeq) && rawNavSeq > 0;
+
+    const expectedRaw = useNavSeq ? await getProfileRaw() : null;
+    const prev = useNavSeq ? parseProfileRaw(expectedRaw) : ((await getProfile()) || {});
     const next = { ...prev, updatedAt: Date.now() };
     if (body.tz !== undefined) {
       const tz = String(body.tz).trim();
@@ -54,10 +78,39 @@ export default async function handler(req, res) {
     if (body.about !== undefined) next.about = String(body.about).slice(0, 1000);
     // Navigation consent is a guardrail: anything unrecognized stores as off.
     if (body.coachNav !== undefined) next.coachNav = normalizeConsent(String(body.coachNav));
-    await setProfile(next);
+
+    if (useNavSeq) {
+      if (body.coachNav === undefined) {
+        res.status(400).json({ error: 'navSeq requires coachNav' });
+        return;
+      }
+      if (!acceptCoachNavSeq(prev.coachNavSeq, rawNavSeq)) {
+        res.status(409).json({
+          error: 'stale navSeq',
+          coachNav: normalizeConsent(prev.coachNav),
+          coachNavSeq: Math.max(0, Number(prev.coachNavSeq) || 0)
+        });
+        return;
+      }
+      next.coachNavSeq = rawNavSeq;
+      const ok = await setProfileIfNavSeq(next, rawNavSeq, expectedRaw);
+      if (!ok) {
+        const cur = (await getProfile()) || {};
+        res.status(409).json({
+          error: 'stale navSeq',
+          coachNav: normalizeConsent(cur.coachNav),
+          coachNavSeq: Math.max(0, Number(cur.coachNavSeq) || 0)
+        });
+        return;
+      }
+    } else {
+      await setProfile(next);
+    }
+
     res.status(200).json({
       ok: true, tz: next.tz || '', name: next.name || '', about: next.about || '',
-      coachNav: normalizeConsent(next.coachNav)
+      coachNav: normalizeConsent(next.coachNav),
+      coachNavSeq: Math.max(0, Number(next.coachNavSeq) || 0)
     });
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });

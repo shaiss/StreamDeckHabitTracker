@@ -17881,12 +17881,28 @@ function settleConsentWrite({ currentSeq, writeSeq, ok, current, prev }) {
     return { consent: current, pending: true, applied: false };
   }
   if (ok) return { consent: current, pending: false, applied: true };
-  return { consent: prev, pending: false, applied: true };
+  return { consent: normalizeConsent(prev), pending: false, applied: true };
 }
-function mergePolledConsent({ pending, current, polled }) {
-  if (pending) return { consent: current, applied: false };
+function mergePolledConsent({
+  pending,
+  current,
+  polled,
+  pollSeq,
+  currentSeq,
+  pendingAtStart
+} = {}) {
+  if (pending || pendingAtStart) {
+    return { consent: current, applied: false, ignored: true };
+  }
+  if (pollSeq !== void 0 && currentSeq !== void 0 && pollSeq !== currentSeq) {
+    return { consent: current, applied: false, ignored: true };
+  }
   const next = normalizeConsent(polled);
-  return { consent: next, applied: next !== normalizeConsent(current) };
+  return {
+    consent: next,
+    applied: next !== normalizeConsent(current),
+    ignored: false
+  };
 }
 var HUMAN_LOCK_MS = 10 * 6e4;
 var RESTORE_MS = 9e4;
@@ -17977,6 +17993,7 @@ var todayCache = null;
 var rosterPendingCache = 0;
 var blockedCache = false;
 var consentCache = "off";
+var confirmedConsent = "off";
 var consentSeq = 0;
 var consentWritePending = false;
 var lastKeypressAt = 0;
@@ -18081,6 +18098,8 @@ function refreshSlots(now) {
   }
   const seq = sched.pollStarted(now);
   const url2 = base.replace(/\/+$/, "") + "/api/slots?deck=" + encodeURIComponent(VERSION) + "&keys=" + keys.size + "&tz=" + (/* @__PURE__ */ new Date()).getTimezoneOffset() + (secret ? "&key=" + encodeURIComponent(secret) : "");
+  const pollSeq = consentSeq;
+  const pendingAtStart = consentWritePending;
   inflightCtrl = new AbortController();
   fetch(url2, { signal: inflightCtrl.signal }).then((r) => r.json()).then((j) => {
     if (!sched.pollSettled(seq)) return;
@@ -18092,10 +18111,18 @@ function refreshSlots(now) {
     const polled = mergePolledConsent({
       pending: consentWritePending,
       current: consentCache,
-      polled: j.coachNav
+      polled: j.coachNav,
+      pollSeq,
+      currentSeq: consentSeq,
+      pendingAtStart
     });
     const consentChanged = polled.applied;
     if (polled.applied) consentCache = polled.consent;
+    if (!polled.ignored) {
+      confirmedConsent = polled.consent;
+      const serverSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+      if (serverSeq > consentSeq) consentSeq = serverSeq;
+    }
     const rosterPending = Number(j.rosterPending) || 0;
     const blocked = !!j.blocked;
     const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) || !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage) || rosterPendingCache !== rosterPending || blockedCache !== blocked;
@@ -18197,7 +18224,7 @@ function renderAutonomy(k) {
   }, now)));
 }
 function cycleAutonomy(k) {
-  const prev = consentCache;
+  const prev = confirmedConsent;
   const next = cycleConsent(consentCache);
   const seq = beginConsentWrite(consentSeq);
   consentSeq = seq;
@@ -18213,7 +18240,7 @@ function cycleAutonomy(k) {
   }
   const s = k.settings;
   const url2 = baseOf(s) + "/api/profile";
-  const body = { coachNav: next };
+  const body = { coachNav: next, navSeq: seq };
   if (s.key) body.key = s.key;
   const applySettle = (ok) => {
     const settled = settleConsentWrite({
@@ -18225,6 +18252,7 @@ function cycleAutonomy(k) {
     });
     if (!settled.applied) return;
     consentWritePending = settled.pending;
+    if (ok) confirmedConsent = settled.consent;
     if (settled.consent !== consentCache) {
       consentCache = settled.consent;
       for (const other of keys.values()) {

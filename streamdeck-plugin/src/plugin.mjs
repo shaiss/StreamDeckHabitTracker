@@ -106,6 +106,7 @@ let todayCache = null;    // { habitName: {count, goal, doneToday, streak, ringF
 let rosterPendingCache = 0;      // queued roster proposals (#75 beacon count)
 let blockedCache = false;        // poll-level hard-stop (#75 blocked frame)
 let consentCache = 'off';        // coachNav from the poll; off until told otherwise
+let confirmedConsent = 'off';    // last persisted consent — rollback target (not tap-prev)
 let consentSeq = 0;              // Autonomy write sequence (#94 race guard)
 let consentWritePending = false; // ignore poll coachNav while a POST is in flight
 let lastKeypressAt = 0;          // human-priority lock: last physical keypress
@@ -234,6 +235,10 @@ function refreshSlots(now) {
   const url = base.replace(/\/+$/, '') + '/api/slots?deck=' + encodeURIComponent(VERSION) +
     '&keys=' + keys.size + '&tz=' + new Date().getTimezoneOffset() +
     (secret ? '&key=' + encodeURIComponent(secret) : '');
+  // Capture write state at poll *start* — a slots response that raced a
+  // completed /api/profile write must not feed a stale coachNav into takeoverDue().
+  const pollSeq = consentSeq;
+  const pendingAtStart = consentWritePending;
   inflightCtrl = new AbortController();
   fetch(url, { signal: inflightCtrl.signal })
     .then((r) => r.json())
@@ -246,10 +251,16 @@ function refreshSlots(now) {
       const today = j.today || {};
       // #54 / #94 — never let a stale poll overwrite an in-flight optimistic cycle.
       const polled = mergePolledConsent({
-        pending: consentWritePending, current: consentCache, polled: j.coachNav
+        pending: consentWritePending, current: consentCache, polled: j.coachNav,
+        pollSeq, currentSeq: consentSeq, pendingAtStart
       });
       const consentChanged = polled.applied;
       if (polled.applied) consentCache = polled.consent;
+      if (!polled.ignored) {
+        confirmedConsent = polled.consent;
+        const serverSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+        if (serverSeq > consentSeq) consentSeq = serverSeq;
+      }
       const rosterPending = Number(j.rosterPending) || 0;
       const blocked = !!j.blocked;
       const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) ||
@@ -368,7 +379,8 @@ function renderAutonomy(k) {
 // /api/profile write path the dashboard settings form uses (#54 coachNav).
 // Sequence-guarded: only the latest POST may roll back or clear pending.
 function cycleAutonomy(k) {
-  const prev = consentCache;
+  // Roll back to last persisted consent, not the prior tap's optimistic value.
+  const prev = confirmedConsent;
   const next = cycleConsent(consentCache);
   const seq = beginConsentWrite(consentSeq);
   consentSeq = seq;
@@ -381,7 +393,7 @@ function cycleAutonomy(k) {
   }
   const s = k.settings;
   const url = baseOf(s) + '/api/profile';
-  const body = { coachNav: next };
+  const body = { coachNav: next, navSeq: seq };
   if (s.key) body.key = s.key;
   const applySettle = (ok) => {
     const settled = settleConsentWrite({
@@ -390,6 +402,7 @@ function cycleAutonomy(k) {
     });
     if (!settled.applied) return; // superseded by a newer tap
     consentWritePending = settled.pending;
+    if (ok) confirmedConsent = settled.consent;
     if (settled.consent !== consentCache) {
       consentCache = settled.consent;
       for (const other of keys.values()) {

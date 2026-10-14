@@ -281,6 +281,7 @@
     let rosterPending = 0;
     let beaconBlocked = false;
     let coachNav = 'off';   // Autonomy Toggle (#94) — off | nudge-only | may-navigate
+    let confirmedConsent = 'off'; // last persisted consent — rollback target (not tap-prev)
     let consentSeq = 0;     // write sequence — stale failures must not roll back newer success
     let consentWritePending = false; // ignore poll coachNav while a POST is in flight
     let habits = [];
@@ -558,12 +559,23 @@
     function settleConsentWrite({ currentSeq, writeSeq, ok, current, prev }) {
       if (writeSeq !== currentSeq) return { consent: current, pending: true, applied: false };
       if (ok) return { consent: current, pending: false, applied: true };
-      return { consent: prev, pending: false, applied: true };
+      return { consent: normalizeConsent(prev), pending: false, applied: true };
     }
-    function mergePolledConsent({ pending, current, polled }) {
-      if (pending) return { consent: current, applied: false };
+    function mergePolledConsent({
+      pending, current, polled, pollSeq, currentSeq, pendingAtStart
+    }) {
+      if (pending || pendingAtStart) {
+        return { consent: current, applied: false, ignored: true };
+      }
+      if (pollSeq !== undefined && currentSeq !== undefined && pollSeq !== currentSeq) {
+        return { consent: current, applied: false, ignored: true };
+      }
       const next = normalizeConsent(polled);
-      return { consent: next, applied: next !== normalizeConsent(current) };
+      return {
+        consent: next,
+        applied: next !== normalizeConsent(current),
+        ignored: false
+      };
     }
 
     // Opt-in turn-state frame (#74). Same alias as faces.mjs resolveFrame
@@ -682,7 +694,8 @@
     }
 
     function cycleAutonomy(el) {
-      const prev = coachNav;
+      // Roll back to last persisted consent, not the prior tap's optimistic value.
+      const prev = confirmedConsent;
       const next = cycleConsent(coachNav);
       const seq = beginConsentWrite(consentSeq);
       consentSeq = seq;
@@ -691,7 +704,7 @@
       paintAutonomy();
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
-      const body = { coachNav: next };
+      const body = { coachNav: next, navSeq: seq };
       if (KEY) body.key = KEY;
       const applySettle = (ok) => {
         const settled = settleConsentWrite({
@@ -700,6 +713,7 @@
         });
         if (!settled.applied) return; // superseded by a newer tap
         consentWritePending = settled.pending;
+        if (ok) confirmedConsent = settled.consent;
         if (settled.consent !== coachNav) {
           coachNav = settled.consent;
           paintAutonomy();
@@ -846,17 +860,26 @@
       // ?tz= lets the server bucket "today" in the viewer's timezone (matches
       // the dashboard), so living key faces read the right day (#32).
       const tz = new Date().getTimezoneOffset(); // minutes; UTC-5 → 300
+      // Capture write state at poll *start* — a slots response that raced a
+      // completed /api/profile write must not clobber the new consent.
+      const pollSeq = consentSeq;
+      const pendingAtStart = consentWritePending;
       fetch('/api/slots?tz=' + tz).then((r) => r.json()).then((j) => {
         habits = j.habits || habits;
         slots = j.slots || slots;
         coachPage = j.coachPage || [];
         rosterPending = Number(j.rosterPending) || 0;
         beaconBlocked = !!j.blocked;
-        // Ignore poll coachNav while an optimistic Autonomy write is in flight.
         const polled = mergePolledConsent({
-          pending: consentWritePending, current: coachNav, polled: j.coachNav
+          pending: consentWritePending, current: coachNav, polled: j.coachNav,
+          pollSeq, currentSeq: consentSeq, pendingAtStart
         });
         if (polled.applied) coachNav = polled.consent;
+        if (!polled.ignored) {
+          confirmedConsent = polled.consent;
+          const serverSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+          if (serverSeq > consentSeq) consentSeq = serverSeq;
+        }
         today = j.today || {};
         if (!built && habits.length) build();
         paintSlots();

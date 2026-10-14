@@ -53,7 +53,11 @@ export default async function handler(req, res) {
     // on every poll, so flipping it off lands within one poll beat.
     const out = {
       ...base, suggestedAt: doc.suggestedAt, slots: doc.slots, coachPage: coachPage.slots,
-      coachNav: normalizeConsent(profile?.coachNav), today,
+      coachNav: normalizeConsent(profile?.coachNav),
+      // Monotonic Autonomy write token (#94) — clients sync consentSeq from it
+      // so a restarted plugin cannot send a low navSeq after a prior session.
+      coachNavSeq: Math.max(0, Number(profile?.coachNavSeq) || 0),
+      today,
       // Count-only: the Attention Beacon (#75) adds this to the pending tally
       // without pulling the full roster doc onto every plugin poll. `blocked`
       // is the same isBlocked() the plugin/deck already run on the payload —
