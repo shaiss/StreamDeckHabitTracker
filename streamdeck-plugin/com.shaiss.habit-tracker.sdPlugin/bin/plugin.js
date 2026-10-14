@@ -17873,6 +17873,21 @@ function cycleConsent(consent) {
   const i = CONSENT_LEVELS.indexOf(cur);
   return CONSENT_LEVELS[(i + 1) % CONSENT_LEVELS.length];
 }
+function beginConsentWrite(seq) {
+  return (Number(seq) || 0) + 1;
+}
+function settleConsentWrite({ currentSeq, writeSeq, ok, current, prev }) {
+  if (writeSeq !== currentSeq) {
+    return { consent: current, pending: true, applied: false };
+  }
+  if (ok) return { consent: current, pending: false, applied: true };
+  return { consent: prev, pending: false, applied: true };
+}
+function mergePolledConsent({ pending, current, polled }) {
+  if (pending) return { consent: current, applied: false };
+  const next = normalizeConsent(polled);
+  return { consent: next, applied: next !== normalizeConsent(current) };
+}
 var HUMAN_LOCK_MS = 10 * 6e4;
 var RESTORE_MS = 9e4;
 var SUPPRESS_MS = 24 * 36e5;
@@ -17962,6 +17977,8 @@ var todayCache = null;
 var rosterPendingCache = 0;
 var blockedCache = false;
 var consentCache = "off";
+var consentSeq = 0;
+var consentWritePending = false;
 var lastKeypressAt = 0;
 var lastPageChangeAt = 0;
 var lastTakeoverDay = "";
@@ -18072,9 +18089,13 @@ function refreshSlots(now) {
     const coachPage = j.coachPage || [];
     const habits = j.habits || [];
     const today = j.today || {};
-    const nextConsent = normalizeConsent(j.coachNav);
-    const consentChanged = nextConsent !== consentCache;
-    consentCache = nextConsent;
+    const polled = mergePolledConsent({
+      pending: consentWritePending,
+      current: consentCache,
+      polled: j.coachNav
+    });
+    const consentChanged = polled.applied;
+    if (polled.applied) consentCache = polled.consent;
     const rosterPending = Number(j.rosterPending) || 0;
     const blocked = !!j.blocked;
     const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) || !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage) || rosterPendingCache !== rosterPending || blockedCache !== blocked;
@@ -18178,6 +18199,9 @@ function renderAutonomy(k) {
 function cycleAutonomy(k) {
   const prev = consentCache;
   const next = cycleConsent(consentCache);
+  const seq = beginConsentWrite(consentSeq);
+  consentSeq = seq;
+  consentWritePending = true;
   consentCache = next;
   for (const other of keys.values()) {
     if (other.kind === "autonomy") {
@@ -18191,37 +18215,35 @@ function cycleAutonomy(k) {
   const url2 = baseOf(s) + "/api/profile";
   const body = { coachNav: next };
   if (s.key) body.key = s.key;
+  const applySettle = (ok) => {
+    const settled = settleConsentWrite({
+      currentSeq: consentSeq,
+      writeSeq: seq,
+      ok,
+      current: consentCache,
+      prev
+    });
+    if (!settled.applied) return;
+    consentWritePending = settled.pending;
+    if (settled.consent !== consentCache) {
+      consentCache = settled.consent;
+      for (const other of keys.values()) {
+        if (other.kind === "autonomy") {
+          try {
+            render(other);
+          } catch {
+          }
+        }
+      }
+    }
+    if (ok) k.action.showOk();
+    else k.action.showAlert();
+  };
   fetch(url2, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
-  }).then((r) => {
-    if (r.ok) {
-      k.action.showOk();
-      return;
-    }
-    consentCache = prev;
-    for (const other of keys.values()) {
-      if (other.kind === "autonomy") {
-        try {
-          render(other);
-        } catch {
-        }
-      }
-    }
-    k.action.showAlert();
-  }).catch(() => {
-    consentCache = prev;
-    for (const other of keys.values()) {
-      if (other.kind === "autonomy") {
-        try {
-          render(other);
-        } catch {
-        }
-      }
-    }
-    k.action.showAlert();
-  });
+  }).then((r) => applySettle(r.ok)).catch(() => applySettle(false));
 }
 function coachNavigate(k) {
   const raw = parseInt(k.settings.coachPage, 10);

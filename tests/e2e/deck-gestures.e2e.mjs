@@ -26,6 +26,10 @@ let mockQuestion = false;
 let mockPicker = false;
 let mockDanger = false;
 let mockCoachNav = 'off';
+// Autonomy write-race harness (#94): each /api/profile POST consumes one
+// scripted outcome. 'ok' | 'fail' | { holdMs, then: 'ok'|'fail' }.
+let profileScript = [];
+let heldProfiles = [];
 
 before(async () => {
   server = createServer((req, res) => {
@@ -50,9 +54,22 @@ before(async () => {
         let parsed = {};
         try { parsed = body ? JSON.parse(body) : {}; } catch { /* empty */ }
         profileBodies.push(parsed);
-        if (parsed.coachNav !== undefined) mockCoachNav = parsed.coachNav;
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, coachNav: mockCoachNav }));
+        const step = profileScript.length ? profileScript.shift() : 'ok';
+        const finish = (ok) => {
+          if (ok && parsed.coachNav !== undefined) mockCoachNav = parsed.coachNav;
+          res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(ok ? { ok: true, coachNav: mockCoachNav } : { ok: false }));
+        };
+        if (step && typeof step === 'object' && step.holdMs) {
+          heldProfiles.push({ finish, then: step.then || 'ok', holdMs: step.holdMs });
+          setTimeout(() => {
+            const i = heldProfiles.findIndex((h) => h.finish === finish);
+            if (i >= 0) heldProfiles.splice(i, 1);
+            finish(step.then !== 'fail');
+          }, step.holdMs);
+          return;
+        }
+        finish(step !== 'fail');
       });
       return;
     }
@@ -237,6 +254,7 @@ test('the Stats key still opens the dashboard on a plain tap', async () => {
 });
 
 test('Autonomy Toggle: press cycles MANUAL → ASSIST → AUTO and posts profile (#94)', async () => {
+  profileScript = [];
   await open({ coachNav: 'off' });
   await page.waitForSelector('.k[data-autonomy]');
   const faceOf = () => page.$eval('.k[data-autonomy]', (el) => ({
@@ -281,6 +299,39 @@ test('Autonomy Toggle: press cycles MANUAL → ASSIST → AUTO and posts profile
   f = await faceOf();
   assert.equal(f.label, 'MANUAL');
   assert.equal(f.mode, 'MANUAL');
+});
+
+test('Autonomy Toggle: stale failed POST does not roll back a newer success (#94)', async () => {
+  // First POST held then fails; second POST succeeds quickly. Face must stay AUTO.
+  profileScript = [
+    { holdMs: 400, then: 'fail' },
+    'ok'
+  ];
+  await open({ coachNav: 'off' });
+  await page.waitForSelector('.k[data-autonomy]');
+  const faceOf = () => page.$eval('.k[data-autonomy]', (el) => ({
+    label: el.querySelector('.lb')?.textContent || '',
+    consent: el.dataset.consent || '',
+    mode: el.dataset.mode || ''
+  }));
+
+  calls = [];
+  profileBodies = [];
+  await page.locator('.k[data-autonomy]').click(); // → ASSIST (held)
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only');
+  await page.locator('.k[data-autonomy]').click(); // → AUTO (ok)
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'may-navigate');
+  // Wait out the held failure settle.
+  await new Promise((r) => setTimeout(r, 550));
+  await settle();
+  const f = await faceOf();
+  assert.equal(f.label, 'AUTO', 'stale failure must not restore MANUAL/ASSIST');
+  assert.equal(f.consent, 'may-navigate');
+  assert.equal(f.mode, 'AUTO');
+  assert.equal(mockCoachNav, 'may-navigate', 'server kept the newer success');
+  profileScript = [];
 });
 
 test('Attention Beacon: idle / wait+count / blocked faces; tap never logs (#75)', async () => {

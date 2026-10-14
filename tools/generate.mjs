@@ -137,10 +137,10 @@ const buildSlotUrl = (n) => {
 // Multi-page plugin layouts get a Coach key on page 0 (#53): an ambient
 // attention face that consumes no slot, whose tap jumps to the Coach page.
 const coachKeyCount = usePlugin && pageCount > 1 ? 1 : 0;
-// Autonomy Toggle (#94 / §3.5): sticky mode dial on page 0, beside the
-// beacon — never steals the Coach key. Shrinks the front AI-slot fill when
-// capacity is tight (same accounting as coachKeyCount).
-const autonomyKeyCount = usePlugin && pageCount > 1 ? 1 : 0;
+// Autonomy Toggle (#94 / §3.5): sticky mode dial on page 0 for EVERY plugin
+// profile (one-page defaults included) — never steals the Coach key. Shrinks
+// the front AI-slot fill when capacity is tight (same accounting as coachKeyCount).
+const autonomyKeyCount = usePlugin ? 1 : 0;
 // Page 0 also loses its bottom-right cell to the built-in "next page" key on
 // multi-page layouts (reservedFor(0)) — that cell is not available to fills.
 const navKeyCount = pageCount > 1 ? 1 : 0;

@@ -43,7 +43,8 @@ import { nudgeUrgency, urgencyStep } from '../../lib/nudge.js';
 // deck and the backend must not disagree about when the coach may navigate.
 import {
   takeoverDue, RESTORE_MS, SUPPRESS_MS,
-  cycleConsent, autonomyOf, normalizeConsent
+  cycleConsent, autonomyOf, normalizeConsent,
+  beginConsentWrite, settleConsentWrite, mergePolledConsent
 } from '../../lib/takeover.js';
 import { beaconOf } from '../../lib/beacon.js';
 import { questionPaint, isDetailsKey } from '../../public/glyphs.js';
@@ -105,6 +106,8 @@ let todayCache = null;    // { habitName: {count, goal, doneToday, streak, ringF
 let rosterPendingCache = 0;      // queued roster proposals (#75 beacon count)
 let blockedCache = false;        // poll-level hard-stop (#75 blocked frame)
 let consentCache = 'off';        // coachNav from the poll; off until told otherwise
+let consentSeq = 0;              // Autonomy write sequence (#94 race guard)
+let consentWritePending = false; // ignore poll coachNav while a POST is in flight
 let lastKeypressAt = 0;          // human-priority lock: last physical keypress
 let lastPageChangeAt = 0;        // …and last page change (appeared-key churn)
 let lastTakeoverDay = '';        // local memory of a spent budget
@@ -241,9 +244,12 @@ function refreshSlots(now) {
       const coachPage = j.coachPage || [];
       const habits = j.habits || [];
       const today = j.today || {};
-      const nextConsent = normalizeConsent(j.coachNav); // #54 / #94
-      const consentChanged = nextConsent !== consentCache;
-      consentCache = nextConsent;   // flipping consent lands within one poll
+      // #54 / #94 — never let a stale poll overwrite an in-flight optimistic cycle.
+      const polled = mergePolledConsent({
+        pending: consentWritePending, current: consentCache, polled: j.coachNav
+      });
+      const consentChanged = polled.applied;
+      if (polled.applied) consentCache = polled.consent;
       const rosterPending = Number(j.rosterPending) || 0;
       const blocked = !!j.blocked;
       const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) ||
@@ -360,9 +366,13 @@ function renderAutonomy(k) {
 
 // Tap cycles MANUAL → ASSISTED → AUTO → MANUAL and persists via the same
 // /api/profile write path the dashboard settings form uses (#54 coachNav).
+// Sequence-guarded: only the latest POST may roll back or clear pending.
 function cycleAutonomy(k) {
   const prev = consentCache;
   const next = cycleConsent(consentCache);
+  const seq = beginConsentWrite(consentSeq);
+  consentSeq = seq;
+  consentWritePending = true;
   consentCache = next;
   for (const other of keys.values()) {
     if (other.kind === 'autonomy') {
@@ -373,30 +383,31 @@ function cycleAutonomy(k) {
   const url = baseOf(s) + '/api/profile';
   const body = { coachNav: next };
   if (s.key) body.key = s.key;
+  const applySettle = (ok) => {
+    const settled = settleConsentWrite({
+      currentSeq: consentSeq, writeSeq: seq, ok,
+      current: consentCache, prev
+    });
+    if (!settled.applied) return; // superseded by a newer tap
+    consentWritePending = settled.pending;
+    if (settled.consent !== consentCache) {
+      consentCache = settled.consent;
+      for (const other of keys.values()) {
+        if (other.kind === 'autonomy') {
+          try { render(other); } catch { /* next tick */ }
+        }
+      }
+    }
+    if (ok) k.action.showOk();
+    else k.action.showAlert();
+  };
   fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   })
-    .then((r) => {
-      if (r.ok) { k.action.showOk(); return; }
-      consentCache = prev;
-      for (const other of keys.values()) {
-        if (other.kind === 'autonomy') {
-          try { render(other); } catch { /* next tick */ }
-        }
-      }
-      k.action.showAlert();
-    })
-    .catch(() => {
-      consentCache = prev;
-      for (const other of keys.values()) {
-        if (other.kind === 'autonomy') {
-          try { render(other); } catch { /* next tick */ }
-        }
-      }
-      k.action.showAlert();
-    });
+    .then((r) => applySettle(r.ok))
+    .catch(() => applySettle(false));
 }
 
 // Tap on the coach key: jump to the Coach page of the bundled profile. Only
