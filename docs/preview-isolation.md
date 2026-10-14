@@ -1,16 +1,18 @@
-# Preview isolation (issue #104)
+# Preview / non-production isolation (issues #104 / #106)
 
-Preview deployments must not share Production Redis data or write secrets.
-This page is the ops checklist for the Vercel project
+Non-production deployments must not share Production Redis data or write
+secrets. This page is the ops checklist for the Vercel project
 `stream-deck-habit-tracker` (team `shaiss-projects`).
 
 **Interim rule (until this issue is closed and the checklist below is done):**
 no keyed or write calls against any Preview URL.
 
-Code in this repo enforces a fail-closed gate when `VERCEL_ENV=preview` and
-Redis is configured: Preview must have either a non-empty `REDIS_KEY_PREFIX`
-(or `PREVIEW_REDIS_PREFIX`) **or** `PREVIEW_REDIS_ISOLATED=1`. See
-`lib/store.js`.
+Code in this repo enforces a fail-closed gate whenever `VERCEL_ENV` is **not**
+exactly `production` and Redis is configured (#106): the runtime must have
+either a non-empty `REDIS_KEY_PREFIX` (or `PREVIEW_REDIS_PREFIX`) **or**
+`PREVIEW_REDIS_ISOLATED=1`. That covers `preview`, `development`, unset, and
+any unexpected value — not only `VERCEL_ENV=preview`. Production is
+unrestricted by this gate. See `lib/store.js`.
 
 ---
 
@@ -55,16 +57,19 @@ In Vercel → Project → **Settings → Environment Variables**:
 3. Redeploy Preview (and Production after any Production env edit) — env vars
    bind at deploy time.
 
-### 3. Set Preview isolation env vars
+### 3. Set non-production isolation env vars
 
-Still under Environment Variables, for **Preview** only:
+Still under Environment Variables, for **Preview** (and **Development** if
+that environment has Redis credentials):
 
 | Variable | Value | Notes |
 |---|---|---|
 | `REDIS_KEY_PREFIX` | `preview:` | Applied to every `habits:*` key in `lib/store.js` / habits / dataset |
-| `PREVIEW_REDIS_ISOLATED` | `1` | Attests the Preview Upstash DB is not Production |
+| `PREVIEW_REDIS_ISOLATED` | `1` | Attests the non-prod Upstash DB is not Production |
 
-Production must leave both unset (or empty).
+Production must leave both unset (or empty). Local/`vercel dev` runs with
+`VERCEL_ENV=development` — if Redis env vars are present there, the same
+prefix or attestation flag is required (#106).
 
 Optional alias: `PREVIEW_REDIS_PREFIX` if you prefer that name;
 `REDIS_KEY_PREFIX` wins when both are set.
@@ -111,6 +116,7 @@ Docs:
    ```json
    "previewIsolation": {
      "vercelEnv": "preview",
+     "nonProduction": true,
      "required": true,
      "ok": true,
      "keyPrefixSet": true,
@@ -118,10 +124,13 @@ Docs:
    }
    ```
 
+   The response field remains `previewIsolation` for callers; `nonProduction`
+   clarifies that the gate applies whenever `VERCEL_ENV !== 'production'`.
    `ok: false` with Redis configured means the fail-closed gate is active —
    finish steps 2–3 and redeploy.
-3. On Production `/api/health`, `previewIsolation.required` should be `false`
-   and `keyPrefixSet` / `separateDbFlag` should be `false`.
+3. On Production `/api/health`, `previewIsolation.nonProduction` /
+   `previewIsolation.required` should be `false` and `keyPrefixSet` /
+   `separateDbFlag` should be `false`.
 4. Optional smoke (Preview only, after isolation is green): a single
    `GET /api/log?habit=Test` against Preview, then confirm Production
    `habits:log` did not gain a row (separate DB and/or `preview:` prefix).
@@ -130,9 +139,10 @@ Docs:
 
 ## Code behavior (reference)
 
+- `isNonProductionEnv()` is `VERCEL_ENV !== 'production'` (#106).
 - `redisKey('habits:…')` prepends `REDIS_KEY_PREFIX` / `PREVIEW_REDIS_PREFIX`.
 - Every Redis command goes through `redisCmd` / `cmd` in `lib/store.js`, which
-  calls `assertPreviewStorageSafe()` first.
+  calls `assertPreviewStorageSafe()` first (name kept; gate is non-prod).
 - `lib/habits.js` and `lib/dataset.js` use the same helpers (no private Redis
   client that could bypass the gate).
 - Unit coverage: `tests/unit/store-prefix.test.mjs`.
@@ -143,4 +153,4 @@ Docs:
 
 This work is hardening only. Do not merge Web Analytics (#93) or other
 product work that writes against Preview until this checklist is done and
-#104 is closed.
+#104 / #106 are closed.

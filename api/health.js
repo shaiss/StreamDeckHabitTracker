@@ -11,8 +11,8 @@ export default async function handler(req, res) {
   const aiKeys = Object.keys(process.env).filter((k) => /(ZAI|Z_AI|GLM|ZHIPU)/i.test(k));
   const configured = isConfigured();
   const isolation = previewIsolationStatus();
-  // Skip deck read when Preview would fail closed — avoids a 500 on /api/health
-  // before ops finishes the env split (#104).
+  // Skip deck read when non-prod would fail closed — avoids a 500 on /api/health
+  // before ops finishes the env split (#104 / #106).
   const deck =
     configured && isolation.ok ? await getDeckState().catch(() => null) : null;
   res.status(200).json({

@@ -67,7 +67,8 @@ ships with a regression test. After merging, also probe the live deployment:
 
 - `GET /api/health` — storage + AI wiring (env var names only; never values),
  plus `deck` — when a *physical* Stream Deck last polled (`null` = the plugin
- has never connected), plus `previewIsolation` (booleans for #104). First
+ has never connected), plus `previewIsolation` (booleans for #104 / #106 —
+ non-production Redis gate; field name kept for callers). First
  thing to check when hardware keys look stale. Preview Redis/`HABIT_KEY`
  scoping: [docs/preview-isolation.md](docs/preview-isolation.md).
 - `GET /api/slots` — current AI slot assignments, plus `coachPage` (the wider

@@ -4,6 +4,7 @@ import {
   redisKeyPrefix,
   redisKey,
   isPreviewEnv,
+  isNonProductionEnv,
   previewRedisIsolatedFlag,
   previewStorageAllowed,
   assertPreviewStorageSafe,
@@ -37,6 +38,11 @@ afterEach(() => {
     else process.env[k] = saved[k];
   }
 });
+
+function withConfiguredRedis() {
+  process.env.KV_REST_API_URL = 'https://example.test';
+  process.env.KV_REST_API_TOKEN = 'token-long-enough';
+}
 
 test('redisKeyPrefix is empty when unset (Production default)', () => {
   assert.equal(redisKeyPrefix(), '');
@@ -78,6 +84,18 @@ test('isPreviewEnv is true only for VERCEL_ENV=preview', () => {
   assert.equal(isPreviewEnv(), true);
 });
 
+test('isNonProductionEnv is true for every VERCEL_ENV except production', () => {
+  assert.equal(isNonProductionEnv(), true); // unset
+  process.env.VERCEL_ENV = 'preview';
+  assert.equal(isNonProductionEnv(), true);
+  process.env.VERCEL_ENV = 'development';
+  assert.equal(isNonProductionEnv(), true);
+  process.env.VERCEL_ENV = 'staging';
+  assert.equal(isNonProductionEnv(), true);
+  process.env.VERCEL_ENV = 'production';
+  assert.equal(isNonProductionEnv(), false);
+});
+
 test('previewRedisIsolatedFlag accepts 1/true/yes (case-insensitive)', () => {
   assert.equal(previewRedisIsolatedFlag(), false);
   process.env.PREVIEW_REDIS_ISOLATED = '1';
@@ -92,21 +110,46 @@ test('previewRedisIsolatedFlag accepts 1/true/yes (case-insensitive)', () => {
 
 test('preview fail-closed: configured Preview without prefix or flag is denied', () => {
   process.env.VERCEL_ENV = 'preview';
-  process.env.KV_REST_API_URL = 'https://example.test';
-  process.env.KV_REST_API_TOKEN = 'token-long-enough';
+  withConfiguredRedis();
   assert.equal(previewStorageAllowed(), false);
-  assert.throws(() => assertPreviewStorageSafe(), /Preview storage isolation required/);
+  assert.throws(() => assertPreviewStorageSafe(), /Non-production storage isolation required/);
   const st = previewIsolationStatus();
+  assert.equal(st.nonProduction, true);
   assert.equal(st.required, true);
   assert.equal(st.ok, false);
   assert.equal(st.keyPrefixSet, false);
   assert.equal(st.separateDbFlag, false);
 });
 
+test('development fail-closed: configured Development without prefix or flag is denied', () => {
+  process.env.VERCEL_ENV = 'development';
+  withConfiguredRedis();
+  assert.equal(previewStorageAllowed(), false);
+  assert.throws(() => assertPreviewStorageSafe(), /Non-production storage isolation required/);
+  const st = previewIsolationStatus();
+  assert.equal(st.vercelEnv, 'development');
+  assert.equal(st.nonProduction, true);
+  assert.equal(st.required, true);
+  assert.equal(st.ok, false);
+});
+
+test('unknown/unset VERCEL_ENV fail-closed when Redis is configured', () => {
+  // VERCEL_ENV deliberately unset
+  withConfiguredRedis();
+  assert.equal(isNonProductionEnv(), true);
+  assert.equal(previewStorageAllowed(), false);
+  assert.throws(() => assertPreviewStorageSafe(), /Non-production storage isolation required/);
+  assert.equal(previewIsolationStatus().required, true);
+  assert.equal(previewIsolationStatus().ok, false);
+
+  process.env.VERCEL_ENV = 'custom-env';
+  assert.equal(previewStorageAllowed(), false);
+  assert.equal(previewIsolationStatus().nonProduction, true);
+});
+
 test('preview allowed when REDIS_KEY_PREFIX is set (defense-in-depth)', () => {
   process.env.VERCEL_ENV = 'preview';
-  process.env.KV_REST_API_URL = 'https://example.test';
-  process.env.KV_REST_API_TOKEN = 'token-long-enough';
+  withConfiguredRedis();
   process.env.REDIS_KEY_PREFIX = 'preview:';
   assert.equal(previewStorageAllowed(), true);
   assert.doesNotThrow(() => assertPreviewStorageSafe());
@@ -114,10 +157,19 @@ test('preview allowed when REDIS_KEY_PREFIX is set (defense-in-depth)', () => {
   assert.equal(previewIsolationStatus().keyPrefixSet, true);
 });
 
+test('isolated non-prod ok: development with PREVIEW_REDIS_ISOLATED attests a separate DB', () => {
+  process.env.VERCEL_ENV = 'development';
+  withConfiguredRedis();
+  process.env.PREVIEW_REDIS_ISOLATED = '1';
+  assert.equal(previewStorageAllowed(), true);
+  assert.doesNotThrow(() => assertPreviewStorageSafe());
+  assert.equal(previewIsolationStatus().separateDbFlag, true);
+  assert.equal(previewIsolationStatus().ok, true);
+});
+
 test('preview allowed when PREVIEW_REDIS_ISOLATED attests a separate Upstash DB', () => {
   process.env.VERCEL_ENV = 'preview';
-  process.env.KV_REST_API_URL = 'https://example.test';
-  process.env.KV_REST_API_TOKEN = 'token-long-enough';
+  withConfiguredRedis();
   process.env.PREVIEW_REDIS_ISOLATED = '1';
   assert.equal(previewStorageAllowed(), true);
   assert.doesNotThrow(() => assertPreviewStorageSafe());
@@ -134,16 +186,17 @@ test('preview with Redis unconfigured is allowed (API degrades; nothing to leak 
 
 test('production never requires isolation even with Redis configured', () => {
   process.env.VERCEL_ENV = 'production';
-  process.env.KV_REST_API_URL = 'https://example.test';
-  process.env.KV_REST_API_TOKEN = 'token-long-enough';
+  withConfiguredRedis();
+  assert.equal(isNonProductionEnv(), false);
   assert.equal(previewStorageAllowed(), true);
+  assert.equal(previewIsolationStatus().nonProduction, false);
   assert.equal(previewIsolationStatus().required, false);
+  assert.equal(previewIsolationStatus().ok, true);
 });
 
 test('redisCmd fails closed in Preview before fetch when isolation is missing', async () => {
   process.env.VERCEL_ENV = 'preview';
-  process.env.KV_REST_API_URL = 'https://example.test';
-  process.env.KV_REST_API_TOKEN = 'token-long-enough';
+  withConfiguredRedis();
   let fetched = false;
   const original = globalThis.fetch;
   globalThis.fetch = async () => {
@@ -151,7 +204,24 @@ test('redisCmd fails closed in Preview before fetch when isolation is missing', 
     return { ok: true, json: async () => ({ result: null }) };
   };
   try {
-    await assert.rejects(() => redisCmd(['GET', redisKey('habits:log')]), /Preview storage isolation/);
+    await assert.rejects(() => redisCmd(['GET', redisKey('habits:log')]), /Non-production storage isolation/);
+    assert.equal(fetched, false);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('redisCmd fails closed in Development before fetch when isolation is missing', async () => {
+  process.env.VERCEL_ENV = 'development';
+  withConfiguredRedis();
+  let fetched = false;
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    fetched = true;
+    return { ok: true, json: async () => ({ result: null }) };
+  };
+  try {
+    await assert.rejects(() => redisCmd(['GET', redisKey('habits:log')]), /Non-production storage isolation/);
     assert.equal(fetched, false);
   } finally {
     globalThis.fetch = original;
@@ -160,8 +230,7 @@ test('redisCmd fails closed in Preview before fetch when isolation is missing', 
 
 test('redisCmd issues prefixed keys when isolation is via REDIS_KEY_PREFIX', async () => {
   process.env.VERCEL_ENV = 'preview';
-  process.env.KV_REST_API_URL = 'https://example.test';
-  process.env.KV_REST_API_TOKEN = 'token-long-enough';
+  withConfiguredRedis();
   process.env.REDIS_KEY_PREFIX = 'preview:';
   let body;
   const original = globalThis.fetch;
