@@ -586,7 +586,7 @@ test('autonomy key paints MANUAL/idle; press cycles and POSTs /api/profile (#94)
     });
     assert.ok(logUrls.some((u) => u.startsWith('POST /api/profile')));
     assert.ok(!logUrls.some((u) => u.includes('/api/log')), 'never logs');
-    await until(() => autonomySvg(p).includes('>ASSIST<'), { label: 'ASSIST face' });
+    await until(() => autonomySvg(p).includes('>ASSISTED<'), { label: 'ASSISTED face' });
     assert.match(autonomySvg(p), /data-state-frame="idle"/);
 
     await p.press('ctx-autonomy', 'com.shaiss.habit-tracker.autonomy');

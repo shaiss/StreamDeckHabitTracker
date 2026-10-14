@@ -52,7 +52,7 @@
     {
       "UUID": "com.shaiss.habit-tracker.autonomy",
       "Name": "Autonomy",
-      "Tooltip": "Autonomy Toggle: shows MANUAL / ASSIST / AUTO (coach leash). Tap cycles; persists to profile. Never logs.",
+      "Tooltip": "Autonomy Toggle: shows MANUAL / ASSISTED / AUTO (coach leash). Tap cycles; persists to profile. Never logs.",
       "Icon": "images/autonomy_action",
       "SupportedInMultiActions": false,
       "States": [{ "Image": "images/autonomy_key" }]

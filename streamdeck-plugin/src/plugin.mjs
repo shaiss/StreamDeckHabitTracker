@@ -9,7 +9,7 @@
 //    is owed a decision, blocked-frame when something hard-stopped. Tap
 //    jumps to the Coach page (signpost only — never logs). (#53, needs #50)
 //  - …autonomy settings: { base, key? } — Autonomy Toggle sticky key (#94 /
-//    study §3.5): shows MANUAL / ASSIST / AUTO (coachNav off / nudge-only /
+//    study §3.5): shows MANUAL / ASSISTED / AUTO (coachNav off / nudge-only /
 //    may-navigate). Tap cycles; idle frame; persists via /api/profile.
 //
 // Generated keys also carry { page: N } so the appeared-key set derives which

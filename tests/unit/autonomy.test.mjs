@@ -32,12 +32,12 @@ test('cycle order is MANUAL → ASSISTED → AUTO → MANUAL (off → nudge-only
   assert.equal(c, 'off');
 });
 
-test('autonomyOf maps 1:1 onto consent — MANUAL / ASSIST / AUTO faces', () => {
+test('autonomyOf maps 1:1 onto consent — MANUAL / ASSISTED / AUTO faces', () => {
   assert.deepEqual(autonomyOf('off'), {
     consent: 'off', mode: 'MANUAL', label: 'MANUAL', glyph: AUTONOMY_GLYPH
   });
   assert.deepEqual(autonomyOf('nudge-only'), {
-    consent: 'nudge-only', mode: 'ASSISTED', label: 'ASSIST', glyph: AUTONOMY_GLYPH
+    consent: 'nudge-only', mode: 'ASSISTED', label: 'ASSISTED', glyph: AUTONOMY_GLYPH
   });
   assert.deepEqual(autonomyOf('may-navigate'), {
     consent: 'may-navigate', mode: 'AUTO', label: 'AUTO', glyph: AUTONOMY_GLYPH
@@ -58,15 +58,15 @@ test('face bytes for each mode: idle frame, violet ⚙, short label (#94)', () =
   const manual = at('off');
   const assist = at('nudge-only');
   const auto = at('may-navigate');
-  for (const [svg, label] of [[manual, 'MANUAL'], [assist, 'ASSIST'], [auto, 'AUTO']]) {
+  for (const [svg, label] of [[manual, 'MANUAL'], [assist, 'ASSISTED'], [auto, 'AUTO']]) {
     assert.match(svg, /data-state-frame="idle"/, label + ' stays calm/idle');
     assert.ok(svg.includes(AUTONOMY_GLYPH), label + ' shows the gear glyph');
     assert.match(svg, new RegExp('>' + label + '<'), label + ' short label');
   }
   // Only the label text differs between modes — interior recipe is shared.
   assert.equal(stripFrame(manual).replace(/>MANUAL</g, '>X<'),
-    stripFrame(assist).replace(/>ASSIST</g, '>X<'));
-  assert.equal(stripFrame(assist).replace(/>ASSIST</g, '>X<'),
+    stripFrame(assist).replace(/>ASSISTED</g, '>X<'));
+  assert.equal(stripFrame(assist).replace(/>ASSISTED</g, '>X<'),
     stripFrame(auto).replace(/>AUTO</g, '>X<'));
   const haloStop = (svg) => (svg.match(/<radialGradient[\s\S]*?stop-color="(#[0-9a-f]+)"/i) || [])[1];
   assert.equal(haloStop(manual), '#7f47e1', 'MANUAL interior is hue 262 violet');
@@ -237,7 +237,7 @@ test('acceptCoachNavSeq orders Autonomy writes; non-positive tokens refuse', () 
 });
 
 test('409 settle reconciles server coachNav + coachNavSeq; no auto-retry of intent', () => {
-  // Client never polled (seq 0); another client already owns seq 10 / ASSIST.
+  // Client never polled (seq 0); another client already owns seq 10 / ASSISTED.
   // Local tap optimistically paints AUTO and POSTs navSeq=1 → 409 with server truth.
   let consent = 'off';
   let confirmed = 'off';
@@ -253,7 +253,7 @@ test('409 settle reconciles server coachNav + coachNavSeq; no auto-retry of inte
   assert.equal(consent, 'nudge-only');
   assert.equal(writeSeq, 1);
 
-  // Server says ASSIST at seq 10 — reconcile, do not retry the rejected intent.
+  // Server says ASSISTED at seq 10 — reconcile, do not retry the rejected intent.
   const settled = settleConsentWrite({
     currentSeq: seq, writeSeq, ok: false,
     current: consent, prev,
@@ -341,7 +341,7 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
   for (const marker of [
     "const CONSENT_LEVELS = ['off', 'nudge-only', 'may-navigate']",
     "label: 'MANUAL'",
-    "label: 'ASSIST'",
+    "label: 'ASSISTED'",
     "label: 'AUTO'",
     'function cycleConsent(',
     'function autonomyOf(',

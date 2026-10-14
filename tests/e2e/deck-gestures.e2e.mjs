@@ -253,7 +253,7 @@ test('the Stats key still opens the dashboard on a plain tap', async () => {
   await p.close();
 });
 
-test('Autonomy Toggle: press cycles MANUAL → ASSIST → AUTO and posts profile (#94)', async () => {
+test('Autonomy Toggle: press cycles MANUAL → ASSISTED → AUTO and posts profile (#94)', async () => {
   profileScript = [];
   await open({ coachNav: 'off' });
   await page.waitForSelector('.k[data-autonomy]');
@@ -281,7 +281,7 @@ test('Autonomy Toggle: press cycles MANUAL → ASSIST → AUTO and posts profile
   assert.ok(!calls.some((c) => c.includes('/api/log')), 'never logs a habit');
   assert.equal(profileBodies.at(-1)?.coachNav, 'nudge-only');
   f = await faceOf();
-  assert.equal(f.label, 'ASSIST');
+  assert.equal(f.label, 'ASSISTED');
   assert.equal(f.consent, 'nudge-only');
   assert.equal(f.mode, 'ASSISTED');
   assert.match(f.frame, /frame-idle/, 'sticky key stays calm');
@@ -317,7 +317,7 @@ test('Autonomy Toggle: stale failed POST does not roll back a newer success (#94
 
   calls = [];
   profileBodies = [];
-  await page.locator('.k[data-autonomy]').click(); // → ASSIST (held)
+  await page.locator('.k[data-autonomy]').click(); // → ASSISTED (held)
   await page.waitForFunction(() =>
     document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only');
   await page.locator('.k[data-autonomy]').click(); // → AUTO (ok)
@@ -327,7 +327,7 @@ test('Autonomy Toggle: stale failed POST does not roll back a newer success (#94
   await new Promise((r) => setTimeout(r, 550));
   await settle();
   const f = await faceOf();
-  assert.equal(f.label, 'AUTO', 'stale failure must not restore MANUAL/ASSIST');
+  assert.equal(f.label, 'AUTO', 'stale failure must not restore MANUAL/ASSISTED');
   assert.equal(f.consent, 'may-navigate');
   assert.equal(f.mode, 'AUTO');
   assert.equal(mockCoachNav, 'may-navigate', 'server kept the newer success');

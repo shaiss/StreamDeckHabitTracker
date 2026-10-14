@@ -17862,7 +17862,7 @@ function normalizeConsent(v) {
 var AUTONOMY_GLYPH = "\u2699";
 var AUTONOMY_MODES = Object.freeze({
   off: { consent: "off", mode: "MANUAL", label: "MANUAL", glyph: AUTONOMY_GLYPH },
-  "nudge-only": { consent: "nudge-only", mode: "ASSISTED", label: "ASSIST", glyph: AUTONOMY_GLYPH },
+  "nudge-only": { consent: "nudge-only", mode: "ASSISTED", label: "ASSISTED", glyph: AUTONOMY_GLYPH },
   "may-navigate": { consent: "may-navigate", mode: "AUTO", label: "AUTO", glyph: AUTONOMY_GLYPH }
 });
 function autonomyOf(consent) {

@@ -298,7 +298,7 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   assert.ok(deck.includes('.autonomyface') || deck.includes('autonomyface'),
     'virtual deck must have an autonomy face class');
   assert.ok(deck.includes('data-autonomy'), 'virtual deck must place the page-0 autonomy key');
-  assert.ok(deck.includes("label: 'MANUAL'") && deck.includes("label: 'ASSIST'") && deck.includes("label: 'AUTO'"),
+  assert.ok(deck.includes("label: 'MANUAL'") && deck.includes("label: 'ASSISTED'") && deck.includes("label: 'AUTO'"),
     'virtual deck embeds the three short mode labels');
   assert.ok(plugin.includes("com.shaiss.habit-tracker.autonomy"),
     'plugin registers the autonomy action');

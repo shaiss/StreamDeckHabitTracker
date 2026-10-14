@@ -331,7 +331,7 @@ if (coachKeyCount) {
 }
 
 // Autonomy Toggle (#94 / study §3.5): page-0 sticky key after the beacon.
-// Face shows MANUAL / ASSIST / AUTO; tap cycles coachNav via /api/profile.
+// Face shows MANUAL / ASSISTED / AUTO; tap cycles coachNav via /api/profile.
 if (autonomyKeyCount) {
   place({
     ActionID: randomUUID().toUpperCase(),

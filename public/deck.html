@@ -352,7 +352,7 @@
       // Autonomy Toggle (#94 / §3.5): sticky mode dial. Tap cycles consent
       // through /api/profile; never logs. Does not steal the beacon key.
       const autonomy = keyEl({
-        title: 'Autonomy — tap to cycle MANUAL → ASSIST → AUTO',
+        title: 'Autonomy — tap to cycle MANUAL → ASSISTED → AUTO',
         onTap: (e2) => cycleAutonomy(e2)
       });
       autonomy.dataset.autonomy = '1';
@@ -540,7 +540,7 @@
     const AUTONOMY_GLYPH = '⚙';
     const AUTONOMY_MODES = {
       off: { consent: 'off', mode: 'MANUAL', label: 'MANUAL', glyph: AUTONOMY_GLYPH },
-      'nudge-only': { consent: 'nudge-only', mode: 'ASSISTED', label: 'ASSIST', glyph: AUTONOMY_GLYPH },
+      'nudge-only': { consent: 'nudge-only', mode: 'ASSISTED', label: 'ASSISTED', glyph: AUTONOMY_GLYPH },
       'may-navigate': { consent: 'may-navigate', mode: 'AUTO', label: 'AUTO', glyph: AUTONOMY_GLYPH }
     };
     function normalizeConsent(v) {

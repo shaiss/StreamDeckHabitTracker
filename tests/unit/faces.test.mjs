@@ -313,7 +313,7 @@ test('Autonomy Toggle: three modes share idle frame + violet ⚙; only the label
     }));
   };
   assert.equal(autonomyOf('off').label, 'MANUAL');
-  assert.equal(autonomyOf('nudge-only').label, 'ASSIST');
+  assert.equal(autonomyOf('nudge-only').label, 'ASSISTED');
   assert.equal(autonomyOf('may-navigate').label, 'AUTO');
   for (const c of ['off', 'nudge-only', 'may-navigate']) {
     const svg = at(c);
