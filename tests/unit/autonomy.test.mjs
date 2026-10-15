@@ -3,13 +3,20 @@
 // the pure helpers in lib/takeover.js.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   CONSENT_LEVELS, normalizeConsent, cycleConsent, autonomyOf,
   AUTONOMY_GLYPH, AUTONOMY_MODES,
   beginConsentWrite, settleConsentWrite, mergePolledConsent, acceptCoachNavSeq
 } from '../../lib/takeover.js';
 import { face } from '../../streamdeck-plugin/src/faces.mjs';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 
 const decode = (uri) => Buffer.from(uri.slice(uri.indexOf(',') + 1), 'base64').toString('utf8');
 const stripFrame = (svg) => svg.replace(/<g data-state-frame="[^"]*"[\s\S]*?<\/g>/, '');
@@ -388,4 +395,75 @@ test('plugin profiles reserve one Autonomy key regardless of pageCount', () => {
   assert.match(gen, /if \(autonomyKeyCount\)/);
   assert.match(gen, /PLUGIN_AUTONOMY/);
   assert.match(gen, /- autonomyKeyCount/);
+  // Explicit --slots must share the remaining-capacity ceiling (CodeRabbit #95).
+  assert.match(gen, /Math\.min\(4, wanted, remaining\)/,
+    'explicit --slots must cap by remaining page-0 capacity');
+});
+
+test('explicit --slots on mini+pages=2 does not drop Coach or Autonomy (#95)', async () => {
+  // CodeRabbit #95: `--plugin --model=mini --pages=2 --slots=4` with one habit
+  // used to fill page 0 before sticky keys; place() then dropped Coach + Autonomy.
+  // Cap explicit slots by the same remaining capacity as the automatic count.
+  // Async spawn (not spawnSync) so this process's fixture HTTP server can answer
+  // generate.mjs's /api/habits fetch without blocking the event loop.
+  const dir = mkdtempSync(join(tmpdir(), 'ht-slots-cap-'));
+  const outfile = join(dir, 'Repro.streamDeckProfile');
+  const server = createServer((req, res) => {
+    if (req.url?.startsWith('/api/habits')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ habits: [{ name: 'Eat', label: 'Eat', emoji: '🍽' }] }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const runGenerate = () => new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        join(ROOT, 'tools/generate.mjs'),
+        `http://127.0.0.1:${port}/api/log`,
+        '--plugin', '--model=mini', '--pages=2', '--slots=4',
+        '--static', `--outfile=${outfile}`, '--name=Repro'
+      ],
+      { cwd: ROOT }
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+  try {
+    const r = await runGenerate();
+    assert.equal(r.status, 0, `generate failed: ${r.stderr || r.stdout}`);
+    assert.match(r.stderr + r.stdout, /Habits\s+:\s+1\b/, 'fixture must serve exactly one habit');
+    assert.doesNotMatch(r.stderr + r.stdout, /dropped the Coach key/);
+    assert.doesNotMatch(r.stderr + r.stdout, /dropped the Autonomy key/);
+
+    const listing = spawnSync('unzip', ['-Z1', outfile], { encoding: 'utf8' });
+    assert.equal(listing.status, 0, listing.stderr);
+    const page0Path = listing.stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .find((n) => /\/Profiles\/[A-F0-9-]+\/manifest\.json$/i.test(n));
+    assert.ok(page0Path, 'page-0 manifest missing from profile zip');
+
+    const page0 = spawnSync('unzip', ['-p', outfile, page0Path], { encoding: 'utf8' });
+    assert.equal(page0.status, 0, page0.stderr);
+    const actions = JSON.parse(page0.stdout).Controllers[0].Actions || {};
+    const uuids = Object.values(actions).map((a) => a.UUID);
+    assert.ok(uuids.includes('com.shaiss.habit-tracker.coach'), 'Coach key must be placed');
+    assert.ok(uuids.includes('com.shaiss.habit-tracker.autonomy'), 'Autonomy key must be placed');
+    assert.ok(uuids.includes('com.elgato.streamdeck.page.next'), 'nav next key must remain');
+    // mini 3×2, 1 habit + Stats + Coach + Autonomy + nav ⇒ at most 1 AI slot
+    const aiSlots = Object.values(actions).filter((a) => a.UUID === 'com.shaiss.habit-tracker.slot');
+    assert.equal(aiSlots.length, 1, 'explicit --slots=4 must shrink to remaining capacity');
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

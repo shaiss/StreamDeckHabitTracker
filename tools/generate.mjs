@@ -144,9 +144,13 @@ const autonomyKeyCount = usePlugin ? 1 : 0;
 // Page 0 also loses its bottom-right cell to the built-in "next page" key on
 // multi-page layouts (reservedFor(0)) — that cell is not available to fills.
 const navKeyCount = pageCount > 1 ? 1 : 0;
-const slotCount = slotsOpt !== undefined
-  ? Math.max(0, Math.min(4, parseInt(slotsOpt, 10) || 0))
-  : Math.max(0, Math.min(4, capacity - habits.length - (dashboardUrl ? 1 : 0) - coachKeyCount - autonomyKeyCount - navKeyCount));
+// Remaining fill cells after habits + Stats + sticky page-0 keys. Explicit
+// `--slots=N` still respects this ceiling (and 0..4) so Coach / Autonomy /
+// nav are never displaced by an oversized override (CodeRabbit #95).
+const remaining =
+  capacity - habits.length - (dashboardUrl ? 1 : 0) - coachKeyCount - autonomyKeyCount - navKeyCount;
+const wanted = slotsOpt !== undefined ? (parseInt(slotsOpt, 10) || 0) : remaining;
+const slotCount = Math.max(0, Math.min(4, wanted, remaining));
 
 
 // ---- 1) urls.txt (guaranteed manual path) ---------------------------------
