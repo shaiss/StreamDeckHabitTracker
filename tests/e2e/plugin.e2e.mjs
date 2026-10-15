@@ -599,6 +599,13 @@ test('autonomy key paints MANUAL/idle; press cycles and POSTs /api/profile (#94)
     await until(() => profileBodies.filter((b) => b.coachNav === 'off').length >= 1 &&
       profileBodies.at(-1)?.coachNav === 'off', { label: 'profile wrote off again' });
     await until(() => autonomySvg(p).includes('>MANUAL<'), { label: 'back to MANUAL' });
+
+    const consentWrites = profileBodies.filter((b) => b.coachNav !== undefined);
+    assert.ok(consentWrites.length >= 3, 'at least three consent writes');
+    assert.ok(consentWrites.every((b) => Number.isInteger(b.navSeq)),
+      'every autonomy consent write carries an integer navSeq');
+    assert.ok(consentWrites.every((b, i) => i === 0 || b.navSeq > consentWrites[i - 1].navSeq),
+      'navSeq strictly increases across consent writes');
   } finally { p.done(); }
 });
 
