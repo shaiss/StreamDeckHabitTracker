@@ -5,7 +5,7 @@
 // jitter), decoded with pngjs, and assembled into a palette-quantized,
 // infinitely-looping GIF with gifenc. Output -> icons/animated/<name>.gif
 //
-//   npm i playwright-core pngjs gifenc --no-save   # one-time, if regenerating
+//   npm ci   # playwright-core / pngjs / gifenc pinned in package.json (#108)
 //   node tools/make-animations.mjs
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';

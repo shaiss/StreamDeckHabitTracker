@@ -15329,6 +15329,10 @@ var Version = class {
   }
 };
 
+// node_modules/@elgato/streamdeck/dist/plugin/logging/index.js
+import path3 from "node:path";
+import { cwd } from "node:process";
+
 // node_modules/@elgato/utils/dist/logging/console-target.js
 var ConsoleTarget = class {
   /**
@@ -15613,10 +15617,6 @@ var FileTarget = class {
     }
   }
 };
-
-// node_modules/@elgato/streamdeck/dist/plugin/logging/index.js
-import path3 from "node:path";
-import { cwd } from "node:process";
 
 // node_modules/@elgato/streamdeck/dist/plugin/common/utils.js
 import path2 from "node:path";

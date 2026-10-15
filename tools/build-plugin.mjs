@@ -2,7 +2,19 @@
 // Renders the plugin's manifest images and packages the .sdPlugin folder into
 // public/downloads/com.shaiss.habit-tracker.streamDeckPlugin (a zip).
 //
-//   npm i playwright-core --no-save   # one-time, if regenerating
+// Build pins live in package.json devDependencies (+ overrides.ws) so a clean
+// checkout reproduces bin/plugin.js (#108):
+//
+//   rm -rf node_modules && npm ci
+//   npm run build:plugin          # == node tools/build-plugin.mjs --no-images
+//
+// Verified sha256 of bin/plugin.js from that path on this tip (two clean
+// rebuilds byte-identical):
+//   1f5dbc8328a97ebb83f719ea86867c15a2dd60700954efeb464924ae95391cb2
+// (#95 at 7911a44 with autonomy changes used a different tree hash —
+// 75e9b190… — do not expect that here on base without those sources.)
+//
+// Full image regenerate (needs Chromium at CHROME_PATH or /opt/pw-browsers):
 //   node tools/build-plugin.mjs
 
 import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync } from 'node:fs';
