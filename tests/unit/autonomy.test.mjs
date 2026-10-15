@@ -241,6 +241,7 @@ test('acceptCoachNavSeq orders Autonomy writes; non-positive tokens refuse', () 
   assert.equal(acceptCoachNavSeq(0, -1), false);
   assert.equal(acceptCoachNavSeq(0, 1.5), false, 'non-integer refused');
   assert.equal(acceptCoachNavSeq(0, '2'), true, 'numeric string coerces');
+  assert.equal(acceptCoachNavSeq(0, 1e21), false, 'non-safe integer refused');
 });
 
 test('409 settle reconciles server coachNav + coachNavSeq; no auto-retry of intent', () => {

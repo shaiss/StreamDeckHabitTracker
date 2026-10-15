@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  buildProfileNext, applyProfileWrite, applyProfileWriteFrom, parseProfileRaw
+  buildProfileNext, applyProfileWrite, applyProfileWriteFrom, parseProfileRaw,
+  NAV_SEQ_MAX_AHEAD
 } from '../../lib/profile-write.js';
 
 test('coachNav without navSeq is rejected (400)', () => {
@@ -21,6 +22,59 @@ test('coachNav with non-positive / non-integer navSeq is rejected (400)', () => 
     assert.equal(r.ok, false, `navSeq=${navSeq}`);
     assert.equal(r.status, 400);
   }
+});
+
+test('navSeq must be a safe integer — huge / unsafe values are 400 (Cipher F1)', () => {
+  const prev = { coachNav: 'off', coachNavSeq: 10 };
+  // 1e21 is Number.isInteger(true) but not SafeInteger — would lock the key.
+  for (const navSeq of [1e21, Number.MAX_VALUE, Infinity, NaN, 9007199254740992]) {
+    const r = buildProfileNext(prev, { coachNav: 'may-navigate', navSeq });
+    assert.equal(r.ok, false, `navSeq=${navSeq}`);
+    assert.equal(r.status, 400, `navSeq=${navSeq} must be 400 not 409`);
+    assert.equal(r.coachNavSeq, undefined, '400 must not advertise coachNavSeq');
+    assert.equal(r.coachNav, undefined, '400 must not advertise coachNav');
+  }
+  // Negative stays 400 (not 409) — no watermark leak.
+  const neg = buildProfileNext(prev, { coachNav: 'off', navSeq: -5 });
+  assert.equal(neg.status, 400);
+  assert.equal(neg.coachNavSeq, undefined);
+
+  // Far ahead of stored: still 400 (not 409) so the live watermark stays opaque.
+  const far = buildProfileNext(prev, {
+    coachNav: 'may-navigate',
+    navSeq: prev.coachNavSeq + NAV_SEQ_MAX_AHEAD + 1
+  });
+  assert.equal(far.ok, false);
+  assert.equal(far.status, 400);
+  assert.equal(far.error, 'invalid navSeq');
+  assert.equal(far.coachNavSeq, undefined);
+  assert.equal(far.coachNav, undefined);
+
+  // Boundary: stored + MAX_AHEAD is accepted.
+  const edge = buildProfileNext(prev, {
+    coachNav: 'nudge-only',
+    navSeq: prev.coachNavSeq + NAV_SEQ_MAX_AHEAD
+  });
+  assert.equal(edge.ok, true);
+  assert.equal(edge.next.coachNavSeq, prev.coachNavSeq + NAV_SEQ_MAX_AHEAD);
+
+  // Legitimate stored+1 still wins.
+  const next = buildProfileNext(prev, { coachNav: 'may-navigate', navSeq: 11 });
+  assert.equal(next.ok, true);
+  assert.equal(next.next.coachNavSeq, 11);
+  assert.equal(next.next.coachNav, 'may-navigate');
+});
+
+test('stale navSeq 409 body still only exposes coachNav + coachNavSeq (Cipher F1)', () => {
+  const prev = { coachNav: 'off', coachNavSeq: 5, name: 'Ada', about: 'secret' };
+  const r = buildProfileNext(prev, { coachNav: 'may-navigate', navSeq: 5 });
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 409);
+  assert.equal(r.error, 'stale navSeq');
+  assert.equal(r.coachNav, 'off');
+  assert.equal(r.coachNavSeq, 5);
+  // Nothing new beyond the established 409 reconcile fields.
+  assert.deepEqual(Object.keys(r).sort(), ['coachNav', 'coachNavSeq', 'error', 'ok', 'status']);
 });
 
 test('navSeq without coachNav is rejected (400)', () => {
