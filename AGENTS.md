@@ -45,5 +45,5 @@ match:
 - **Default branch deploys production** — don't push broken code to it.
 - **Vercel project**: `stream-deck-habit-tracker` (team `shaiss-projects`),
   git-connected. Production at https://stream-deck-habit-tracker.vercel.app.
-- **Tool deps are NOT in `package.json`** (keeps Vercel's install lean):
-  `npm i playwright-core pngjs gifenc --no-save` once per machine.
+- **Plugin/tool build pins** are exact `devDependencies` (+ `overrides.ws`)
+  so `npm ci` + `npm run build:plugin` reproduces `bin/plugin.js` (#108).

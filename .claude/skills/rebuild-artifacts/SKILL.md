@@ -33,19 +33,22 @@ from the live API so the fallback is fresh:
 On a machine with normal egress (the owner's PC), no sync is needed — the tools
 fetch live directly (`--base=URL` / `HABITS_BASE` override the default origin).
 
-## One-time per machine
+## Install
 
-Tool deps are intentionally NOT in package.json (keeps Vercel's install lean —
-only runtime deps belong there). Install unsaved, all in one command so npm
-doesn't prune previously-unsaved ones:
+Plugin/tool build pins are exact `devDependencies` in `package.json`
+(`esbuild`, `@elgato/streamdeck`, `playwright-core`, `pngjs`, `gifenc`, plus
+`overrides.ws` → `8.22.0`) so a clean checkout reproduces `bin/plugin.js`
+(#108). Runtime deps stay in `dependencies`.
 
 ```bash
-npm i playwright-core pngjs gifenc --no-save
+npm ci
 ```
 
 Chromium is pre-installed at `/opt/pw-browsers/chromium` (`CHROME_PATH`
 overrides). Playwright's bundled ffmpeg lacks PNG decode and GIF encode — that
 is why GIFs go through pngjs+gifenc; don't "simplify" back to ffmpeg.
+
+Reproducible plugin rebuild (no image re-render): `npm run build:plugin`.
 
 ## Rebuild sequence
 
