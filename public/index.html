@@ -355,6 +355,13 @@
             loadedCoachNavSeq = Math.max(0, Number(j.coachNavSeq) || loadedCoachNavSeq + 1);
           }
           st.textContent = 'Saved — the coach will use this on its next pass.';
+        } else if (r.status === 409 && j.coachNavSeq !== undefined) {
+          // Autonomy key beat this Save — resync consent tokens so the next
+          // attempt can land. Leave name/tz/about inputs alone (still unsaved).
+          loadedCoachNav = j.coachNav || loadedCoachNav;
+          loadedCoachNavSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+          document.getElementById('setCoachNav').value = loadedCoachNav;
+          st.textContent = 'Consent changed on the deck — review Autonomy and save again.';
         } else {
           st.textContent = j.error || 'Save failed';
         }

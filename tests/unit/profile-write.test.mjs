@@ -65,6 +65,42 @@ test('sequenced MANUAL write then unsequenced name save leaves coachNav off', ()
   assert.equal(doc.name, 'Ada');
 });
 
+test('concurrent first-write: only one NX creator wins; loser cannot clobber', () => {
+  // Two writers both read a missing key (expectedRaw/staleRaw = null). The
+  // first SET NX lands; the second must lose — otherwise a stale name save
+  // can erase a sequenced MANUAL consent that raced in first.
+  const store = { raw: null };
+  const a = applyProfileWriteFrom(
+    store, null, { coachNav: 'off', navSeq: 1 }, { now: 1 }
+  );
+  assert.equal(a.ok, true);
+  assert.equal(parseProfileRaw(store.raw).coachNav, 'off');
+  assert.equal(parseProfileRaw(store.raw).coachNavSeq, 1);
+
+  const b = applyProfileWriteFrom(store, null, { name: 'Ada' }, { now: 2 });
+  assert.equal(b.ok, false);
+  assert.equal(b.status, 409);
+  assert.equal(parseProfileRaw(store.raw).coachNav, 'off', 'MANUAL survives');
+  assert.equal(parseProfileRaw(store.raw).name, undefined);
+});
+
+test('unsequenced first-write retry after NX loss preserves winner consent', () => {
+  // Writer A creates with MANUAL; writer B's null-snapshot name save loses NX
+  // then retries from the live snapshot (API CAS-with-retry path).
+  const store = { raw: null };
+  assert.equal(
+    applyProfileWrite(store, { coachNav: 'off', navSeq: 1 }, { now: 1 }).ok,
+    true
+  );
+  // Simulate B having already read null, then applyProfileWrite retries:
+  const retried = applyProfileWrite(store, { name: 'Ada' }, { now: 2 });
+  assert.equal(retried.ok, true);
+  const doc = parseProfileRaw(store.raw);
+  assert.equal(doc.coachNav, 'off');
+  assert.equal(doc.coachNavSeq, 1);
+  assert.equal(doc.name, 'Ada');
+});
+
 test('stale unsequenced merge from pre-MANUAL snapshot loses CAS (cannot clobber off)', () => {
   const store = {
     raw: JSON.stringify({ coachNav: 'may-navigate', coachNavSeq: 0, name: 'Old' })
@@ -133,13 +169,35 @@ test('dashboard Save omits coachNav unless the select changed (drift)', () => {
   );
 });
 
+test('dashboard Save 409 with coachNavSeq resyncs consent without clearing edits (drift)', () => {
+  const html = readFileSync(new URL('../../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /r\.status\s*===\s*409\s*&&\s*j\.coachNavSeq\s*!==\s*undefined/);
+  assert.match(html, /loadedCoachNav\s*=\s*j\.coachNav\s*\|\|\s*loadedCoachNav/);
+  assert.match(html, /loadedCoachNavSeq\s*=\s*Math\.max\(0,\s*Number\(j\.coachNavSeq\)/);
+  assert.match(html, /getElementById\('setCoachNav'\)\.value\s*=\s*loadedCoachNav/);
+  assert.match(html, /Consent changed on the deck/);
+  // Must not wipe name/tz/about on 409 — only status + consent select.
+  assert.doesNotMatch(
+    html,
+    /status\s*===\s*409[\s\S]{0,400}getElementById\('setName'\)\.value\s*=/
+  );
+});
+
 test('api/profile requires navSeq for coachNav and CAS-gates unsequenced writes (drift)', () => {
   const api = readFileSync(new URL('../../api/profile.js', import.meta.url), 'utf8');
   const rules = readFileSync(new URL('../../lib/profile-write.js', import.meta.url), 'utf8');
+  const store = readFileSync(new URL('../../lib/store.js', import.meta.url), 'utf8');
   assert.match(api, /buildProfileNext/);
   assert.match(api, /setProfileIfRaw/);
   assert.match(api, /setProfileIfNavSeq/);
   // Unconditional setProfile(next) is the clobber path CR flagged — gone.
   assert.doesNotMatch(api, /await setProfile\(next\)/);
   assert.match(rules, /coachNav requires navSeq/);
+  // First-write path must be SET NX (not bare SET) so two null-snapshot
+  // writers cannot both report success.
+  assert.match(
+    store,
+    /SET',\s*PROFILE_KEY,\s*nextRaw,\s*'NX'|SET",\s*PROFILE_KEY,\s*nextRaw,\s*"NX/
+  );
+  assert.match(store, /created\s*===\s*'OK'|return created === 'OK'/);
 });
