@@ -4,9 +4,19 @@
 // reads on every pass, and coachNav — the tri-state navigation consent
 // (off | nudge-only | may-navigate, issue #54; unknown values normalize to
 // off). HABIT_KEY (if set) gates writes via ?key=.
-import { getProfile, setProfile, isConfigured } from '../lib/store.js';
-import { isValidTz, HOME_TZ } from '../lib/tz.js';
+//
+// Autonomy clients (#94) send navSeq — a monotonic ordering token stored as
+// coachNavSeq. coachNav changes REQUIRE navSeq (400 without it) so a stale
+// dashboard Save cannot restore may-navigate after MANUAL. Stale tokens are
+// rejected (409) via atomic CAS. Non-consent edits (name/tz/about) omit
+// coachNav and write through CAS-with-retry so they cannot clobber a newer
+// sequenced consent either.
+import {
+  getProfile, getProfileRaw, setProfileIfNavSeq, setProfileIfRaw, isConfigured
+} from '../lib/store.js';
+import { HOME_TZ, isValidTz } from '../lib/tz.js';
 import { normalizeConsent } from '../lib/takeover.js';
+import { buildProfileNext, parseProfileRaw } from '../lib/profile-write.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -28,6 +38,7 @@ export default async function handler(req, res) {
         name: p.name || '',
         about: p.about || '',
         coachNav: normalizeConsent(p.coachNav),
+        coachNavSeq: Math.max(0, Number(p.coachNavSeq) || 0),
         updatedAt: p.updatedAt || 0
       });
       return;
@@ -40,24 +51,67 @@ export default async function handler(req, res) {
       return;
     }
 
-    const prev = (await getProfile()) || {};
-    const next = { ...prev, updatedAt: Date.now() };
-    if (body.tz !== undefined) {
-      const tz = String(body.tz).trim();
-      if (tz && !isValidTz(tz)) {
-        res.status(400).json({ error: `Unknown timezone: ${tz}. Use an IANA name like America/New_York.` });
+    const now = Date.now();
+    // Always merge from a raw snapshot so unsequenced writes can CAS.
+    let expectedRaw = await getProfileRaw();
+    let prev = parseProfileRaw(expectedRaw);
+    let built = buildProfileNext(prev, body, { now });
+    if (!built.ok) {
+      const payload = { error: built.error };
+      if (built.status === 409) {
+        payload.coachNav = built.coachNav;
+        payload.coachNavSeq = built.coachNavSeq;
+      }
+      res.status(built.status).json(payload);
+      return;
+    }
+
+    if (built.useNavSeq) {
+      const ok = await setProfileIfNavSeq(built.next, built.navSeq, expectedRaw);
+      if (!ok) {
+        const cur = (await getProfile()) || {};
+        res.status(409).json({
+          error: 'stale navSeq',
+          coachNav: normalizeConsent(cur.coachNav),
+          coachNavSeq: Math.max(0, Number(cur.coachNavSeq) || 0)
+        });
         return;
       }
-      next.tz = tz;
+    } else {
+      // Unsequenced name/tz/about: CAS + retry so a concurrent Autonomy
+      // MANUAL write is never overwritten by a stale full-record merge.
+      let ok = await setProfileIfRaw(built.next, expectedRaw);
+      for (let attempt = 0; !ok && attempt < 2; attempt++) {
+        expectedRaw = await getProfileRaw();
+        prev = parseProfileRaw(expectedRaw);
+        built = buildProfileNext(prev, body, { now });
+        if (!built.ok) {
+          res.status(built.status).json({ error: built.error });
+          return;
+        }
+        if (built.useNavSeq) {
+          // Body gained navSeq mid-retry only if the client sent it — still CAS.
+          ok = await setProfileIfNavSeq(built.next, built.navSeq, expectedRaw);
+          break;
+        }
+        ok = await setProfileIfRaw(built.next, expectedRaw);
+      }
+      if (!ok) {
+        const cur = (await getProfile()) || {};
+        res.status(409).json({
+          error: 'profile busy',
+          coachNav: normalizeConsent(cur.coachNav),
+          coachNavSeq: Math.max(0, Number(cur.coachNavSeq) || 0)
+        });
+        return;
+      }
     }
-    if (body.name !== undefined) next.name = String(body.name).slice(0, 60);
-    if (body.about !== undefined) next.about = String(body.about).slice(0, 1000);
-    // Navigation consent is a guardrail: anything unrecognized stores as off.
-    if (body.coachNav !== undefined) next.coachNav = normalizeConsent(String(body.coachNav));
-    await setProfile(next);
+
+    const next = built.next;
     res.status(200).json({
       ok: true, tz: next.tz || '', name: next.name || '', about: next.about || '',
-      coachNav: normalizeConsent(next.coachNav)
+      coachNav: normalizeConsent(next.coachNav),
+      coachNavSeq: Math.max(0, Number(next.coachNavSeq) || 0)
     });
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });

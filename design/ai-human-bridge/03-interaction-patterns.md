@@ -94,10 +94,10 @@ Gate for that task.
 level** of an agent.
 
 ```
-┌────────┐        MANUAL   → every action gated
-│  ⚙ AUTO│        ASSISTED → gates only risky actions
-│ ASSIST │        AUTO     → runs free, reports after
-└────────┘        (the glyph itself shows the current mode; press cycles)
+┌─────────┐        MANUAL   → every action gated
+│  ⚙ AUTO │        ASSISTED → gates only risky actions
+│ASSISTED │        AUTO     → runs free, reports after
+└─────────┘        (the glyph itself shows the current mode; press cycles)
 ```
 
 **Rationale:** autonomy is the master dial of supervision — it sets how often every

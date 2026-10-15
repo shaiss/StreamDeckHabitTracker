@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { face, hueFor, STATE_COLORS, FRAME_STATES, resolveFrame, frameStep, frameBright, FRAME_WAIT_MS, FRAME_BLOCKED_MS, FRAME_TICK_MS, FRAME_WAIT_PERIODS, waitPeriodMs, owedFrame, ACTION_DANGER, ARM_GLYPH, ARM_LABEL, glyphTintColor } from '../../streamdeck-plugin/src/faces.mjs';
+import { autonomyOf, AUTONOMY_GLYPH } from '../../lib/takeover.js';
 
 const decode = (uri) => {
   assert.match(uri, /^data:image\/svg\+xml;base64,/);
@@ -301,6 +302,25 @@ test('state frame does not disturb living-face interior (#32/#64)', () => {
   assert.equal(stripFrame(framed), plain, 'progress fill / dots / halo survive a wait frame');
   assert.ok(framed.includes('stroke-dasharray'), 'the #64 fill is still there');
   assert.ok(framed.includes('data-state-frame="wait"'), 'and the outer wait frame is too');
+});
+
+test('Autonomy Toggle: three modes share idle frame + violet ⚙; only the label changes (#94)', () => {
+  const svgOf = decode;
+  const at = (consent) => {
+    const snap = autonomyOf(consent);
+    return svgOf(face(snap.glyph, snap.label, 262, '', 72, {
+      frame: 'idle', grammar: true, mono: true, now: 0
+    }));
+  };
+  assert.equal(autonomyOf('off').label, 'MANUAL');
+  assert.equal(autonomyOf('nudge-only').label, 'ASSISTED');
+  assert.equal(autonomyOf('may-navigate').label, 'AUTO');
+  for (const c of ['off', 'nudge-only', 'may-navigate']) {
+    const svg = at(c);
+    assert.match(svg, /data-state-frame="idle"/);
+    assert.ok(svg.includes(AUTONOMY_GLYPH));
+    assert.match(svg, new RegExp('>' + autonomyOf(c).label + '<'));
+  }
 });
 
 test('Attention Beacon: interior stays violet coach across idle/wait/blocked (#75)', () => {

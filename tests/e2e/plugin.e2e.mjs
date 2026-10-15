@@ -44,6 +44,7 @@ const nudgeAt = (fraction) => {
 
 let http, httpPort;
 let slots, today, pollUrls, logUrls, hangPolls, logNotFound, pollExtra;
+let profileBodies, coachNav;
 const hung = [];
 
 before(async () => {
@@ -55,6 +56,7 @@ before(async () => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         configured: true, habits: HABITS, suggestedAt: 1, slots,
+        coachNav,
         ...(today ? { today } : {}),
         ...(pollExtra || {})
       }));
@@ -79,6 +81,21 @@ before(async () => {
       logUrls.push(req.method + ' ' + req.url);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ dismissed: true }));
+      return;
+    }
+    if (url === '/api/profile') {
+      // Autonomy Toggle (#94) persists coachNav through the settings path.
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        let parsed = {};
+        try { parsed = body ? JSON.parse(body) : {}; } catch { /* empty */ }
+        profileBodies.push(parsed);
+        if (parsed.coachNav !== undefined) coachNav = parsed.coachNav;
+        logUrls.push(req.method + ' ' + req.url);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, coachNav }));
+      });
       return;
     }
     res.writeHead(404); res.end();
@@ -111,6 +128,8 @@ async function boot({ entry = SRC } = {}) {
   hangPolls = 0;
   logNotFound = false;
   pollExtra = {};
+  profileBodies = [];
+  coachNav = 'off';
 
   const wss = new WebSocketServer({ port: 0 });
   const wsPort = wss.address().port;
@@ -531,6 +550,64 @@ const coachSvg = (p) => {
   const hits = p.images().filter((m) => m.context === 'ctx-coach');
   return hits.length ? svgOf(hits.at(-1)) : '';
 };
+
+// --- Autonomy Toggle (#94 / study §3.5) ---
+
+function appearAutonomy(p) {
+  p.emit({
+    event: 'willAppear', action: 'com.shaiss.habit-tracker.autonomy', context: 'ctx-autonomy',
+    device: 'dev-1',
+    payload: {
+      settings: { base: `http://127.0.0.1:${httpPort}`, page: 0 },
+      coordinates: { column: 3, row: 2 }, controller: 'Keypad', isInMultiAction: false
+    }
+  });
+}
+const autonomySvg = (p) => {
+  const hits = p.images().filter((m) => m.context === 'ctx-autonomy');
+  return hits.length ? svgOf(hits.at(-1)) : '';
+};
+
+test('autonomy key paints MANUAL/idle; press cycles and POSTs /api/profile (#94)', async () => {
+  const p = await boot();
+  try {
+    appearAutonomy(p);
+    await until(() => autonomySvg(p).includes('>MANUAL<'), { label: 'MANUAL face' });
+    let svg = autonomySvg(p);
+    assert.match(svg, /data-state-frame="idle"/);
+    assert.ok(svg.includes('⚙'));
+    assert.match(svg, />MANUAL</);
+
+    logUrls.length = 0;
+    profileBodies.length = 0;
+    await p.press('ctx-autonomy', 'com.shaiss.habit-tracker.autonomy');
+    await until(() => profileBodies.some((b) => b.coachNav === 'nudge-only'), {
+      label: 'profile wrote nudge-only'
+    });
+    assert.ok(logUrls.some((u) => u.startsWith('POST /api/profile')));
+    assert.ok(!logUrls.some((u) => u.includes('/api/log')), 'never logs');
+    await until(() => autonomySvg(p).includes('>ASSISTED<'), { label: 'ASSISTED face' });
+    assert.match(autonomySvg(p), /data-state-frame="idle"/);
+
+    await p.press('ctx-autonomy', 'com.shaiss.habit-tracker.autonomy');
+    await until(() => profileBodies.some((b) => b.coachNav === 'may-navigate'), {
+      label: 'profile wrote may-navigate'
+    });
+    await until(() => autonomySvg(p).includes('>AUTO<'), { label: 'AUTO face' });
+
+    await p.press('ctx-autonomy', 'com.shaiss.habit-tracker.autonomy');
+    await until(() => profileBodies.filter((b) => b.coachNav === 'off').length >= 1 &&
+      profileBodies.at(-1)?.coachNav === 'off', { label: 'profile wrote off again' });
+    await until(() => autonomySvg(p).includes('>MANUAL<'), { label: 'back to MANUAL' });
+
+    const consentWrites = profileBodies.filter((b) => b.coachNav !== undefined);
+    assert.ok(consentWrites.length >= 3, 'at least three consent writes');
+    assert.ok(consentWrites.every((b) => Number.isInteger(b.navSeq)),
+      'every autonomy consent write carries an integer navSeq');
+    assert.ok(consentWrites.every((b, i) => i === 0 || b.navSeq > consentWrites[i - 1].navSeq),
+      'navSeq strictly increases across consent writes');
+  } finally { p.done(); }
+});
 
 test('beacon is idle/violet when nothing is pending; wait+count on a live nudge', async () => {
   const p = await boot();

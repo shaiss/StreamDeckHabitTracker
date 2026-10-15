@@ -5,7 +5,7 @@
   "Name": "Habit Tracker AI",
   "Description": "Logs habit taps to your Habit Tracker endpoint. AI Slot keys repaint themselves automatically when the AI coach assigns new habits.",
   "URL": "https://github.com/shaiss/StreamDeckHabitTracker",
-    "Version": "2.5.10.0",
+    "Version": "2.5.11.0",
   "CodePath": "bin/plugin.js",
   "Profiles": [
     {
@@ -48,6 +48,14 @@
       "Icon": "images/coach_action",
       "SupportedInMultiActions": false,
       "States": [{ "Image": "images/coach_key" }]
+    },
+    {
+      "UUID": "com.shaiss.habit-tracker.autonomy",
+      "Name": "Autonomy",
+      "Tooltip": "Autonomy Toggle: shows MANUAL / ASSISTED / AUTO (coach leash). Tap cycles; persists to profile. Never logs.",
+      "Icon": "images/autonomy_action",
+      "SupportedInMultiActions": false,
+      "States": [{ "Image": "images/autonomy_key" }]
     }
   ]
 }

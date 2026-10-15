@@ -69,6 +69,7 @@ const usePlugin = args.includes('--plugin');
 const PLUGIN_HABIT = 'com.shaiss.habit-tracker.habit';
 const PLUGIN_SLOT = 'com.shaiss.habit-tracker.slot';
 const PLUGIN_COACH = 'com.shaiss.habit-tracker.coach';
+const PLUGIN_AUTONOMY = 'com.shaiss.habit-tracker.autonomy';
 const siteOrigin = (() => { try { return new URL(execBase).origin; } catch { return ''; } })();
 
 // AI slot keys: fill whatever key cells remain after habits + Stats, up to 4.
@@ -136,12 +137,20 @@ const buildSlotUrl = (n) => {
 // Multi-page plugin layouts get a Coach key on page 0 (#53): an ambient
 // attention face that consumes no slot, whose tap jumps to the Coach page.
 const coachKeyCount = usePlugin && pageCount > 1 ? 1 : 0;
+// Autonomy Toggle (#94 / §3.5): sticky mode dial on page 0 for EVERY plugin
+// profile (one-page defaults included) — never steals the Coach key. Shrinks
+// the front AI-slot fill when capacity is tight (same accounting as coachKeyCount).
+const autonomyKeyCount = usePlugin ? 1 : 0;
 // Page 0 also loses its bottom-right cell to the built-in "next page" key on
 // multi-page layouts (reservedFor(0)) — that cell is not available to fills.
 const navKeyCount = pageCount > 1 ? 1 : 0;
-const slotCount = slotsOpt !== undefined
-  ? Math.max(0, Math.min(4, parseInt(slotsOpt, 10) || 0))
-  : Math.max(0, Math.min(4, capacity - habits.length - (dashboardUrl ? 1 : 0) - coachKeyCount - navKeyCount));
+// Remaining fill cells after habits + Stats + sticky page-0 keys. Explicit
+// `--slots=N` still respects this ceiling (and 0..4) so Coach / Autonomy /
+// nav are never displaced by an oversized override (CodeRabbit #95).
+const remaining =
+  capacity - habits.length - (dashboardUrl ? 1 : 0) - coachKeyCount - autonomyKeyCount - navKeyCount;
+const wanted = slotsOpt !== undefined ? (parseInt(slotsOpt, 10) || 0) : remaining;
+const slotCount = Math.max(0, Math.min(4, wanted, remaining));
 
 
 // ---- 1) urls.txt (guaranteed manual path) ---------------------------------
@@ -323,6 +332,21 @@ if (coachKeyCount) {
     States: liveStates(),
     UUID: PLUGIN_COACH
   }, 0, 'the Coach key');
+}
+
+// Autonomy Toggle (#94 / study §3.5): page-0 sticky key after the beacon.
+// Face shows MANUAL / ASSISTED / AUTO; tap cycles coachNav via /api/profile.
+if (autonomyKeyCount) {
+  place({
+    ActionID: randomUUID().toUpperCase(),
+    LinkedTitle: true,
+    Name: 'Autonomy',
+    Settings: { base: siteOrigin, page: 0, ...(key ? { key } : {}) },
+    Resources: null,
+    State: 0,
+    States: liveStates(),
+    UUID: PLUGIN_AUTONOMY
+  }, 0, 'the Autonomy key');
 }
 
 // Coach pages (pages 1+): the wider slot range, numbered on from the front
