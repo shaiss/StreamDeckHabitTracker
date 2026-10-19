@@ -22,9 +22,10 @@ to this repo — **every push to the default branch deploys production**).
 ```bash
 # One-time per machine (tool deps are intentionally NOT in package.json —
 # runtime deps are kept lean on purpose so Vercel's build stays trivial, but
-# they are NOT just @vercel/functions: the coach runs on a Mastra agent, so
-# @vercel/functions, @mastra/core, @ai-sdk/openai-compatible, and zod are all
-# load-bearing runtime deps and belong in package.json; do not prune them.
+# they are NOT just @vercel/functions: the coach runs on the Vercel AI SDK
+# (generateText + tool()), so @vercel/functions, ai, @ai-sdk/openai-compatible,
+# and zod are all load-bearing runtime deps and belong in package.json; do not
+# prune them. (Mastra was dropped — decision #66 / PR #96.)
 # esbuild + @elgato/streamdeck are BUILD-time deps of the Stream Deck plugin —
 # the SDK is bundled into bin/plugin.js, never installed at runtime):
 npm i playwright-core pngjs gifenc esbuild @elgato/streamdeck --no-save
@@ -106,31 +107,38 @@ Vercel MCP `web_fetch_vercel_url` tool to probe the live site.
   model-level errors. Key from `ZAI_API_KEY` (also accepts
   `Z_AI_API_KEY`/`GLM_API_KEY`/`ZHIPU_API_KEY`). Also home to `extractJson`,
   the fenced/wrapped-JSON parser every coach pass runs its reply through.
-- `lib/agent.js` — the coach as a Mastra `Agent`. z.ai plugs in via the AI
-  SDK's OpenAI-compatible provider, but through a **custom `zaiFetch` that
-  injects `thinking:{type:'disabled'}`** into every `/chat/completions` body —
-  GLM-5.x are hybrid reasoning models and burn the whole token budget thinking
-  otherwise (PR #2). Never wire the agent up without that fetch; it is the only
-  guardrail. Hypothesis memory is a two-tool loop: `recall_hypotheses` (reads
-  prior notes at the start of a pass) and `update_hypotheses` (rewrites them
-  when the model's understanding changes). Both are Mastra-mediated; the bytes
-  persist in the `habits:coach:memory` Redis key via `lib/store.js` (survives
-  cold starts — Mastra's in-process memory would not, and we deliberately do
-  not add a full storage adapter).
-- `lib/coach.js` — the AI coach, **purely Mastra-routed** (no raw-z.ai
-  fallback). Seven entry points: `fullSuggest()` (manual refresh), `morningPass()`
-  (cron), `reactTo(entry)` (per-tap background pass via `waitUntil` from
-  `@vercel/functions`, 45s cooldown claimed in Redis *before* the model call to
-  prevent double-fire), `nudgePass()` (proactive single-slot repaint, driven by
-  the deck's `/api/slots` poll), `rosterPass()` (self-managing roster),
-  `coachPagePass()` (the AI-curated Coach page, `habits:coach:page`, slots
-  5..16 — run by the morning cron and `/api/coachpage`, reserves the fixed
-  habits + front-4, not dataset-captured like the roster pass), and
-  `dailyDigest()` (cron insight). A coach failure no longer silently rescues —
-  it surfaces as a clean error: `reactTo`/`nudgePass` no-op (already inside
-  `waitUntil(...catch)`), `fullSuggest`/`morningPass`/`dailyDigest` return null
-  → a 502 at the API, `rosterPass` queues nothing. All slot output is sanitized
-  hard (`sanitize()`) and replaces all 4 slots atomically.
+- `lib/agent.js` — the coach driven by AI SDK `generateText` + `tool()`. z.ai
+  plugs in via `@ai-sdk/openai-compatible`, but through a **custom `zaiFetch`
+  that injects `thinking:{type:'disabled'}`** into every `/chat/completions`
+  body — GLM-5.x are hybrid reasoning models and burn the whole token budget
+  thinking otherwise (PR #2 / `lib/zai-fetch.js`). Never wire the coach up
+  without that fetch; it is the only guardrail. Hypothesis memory is a
+  two-tool loop: `recall_hypotheses` (reads prior notes at the start of a
+  pass) and `update_hypotheses` (rewrites them when the model's understanding
+  changes). Both are AI SDK `tool()` wrappers over `lib/coach-memory.js`; the
+  bytes persist in the `habits:coach:memory` Redis key via `lib/store.js`
+  (survives cold starts — in-process memory would not).
+- `lib/coach.js` — the AI coach, **AI-SDK-routed** (no raw-z.ai fallback;
+  Mastra was dropped — decision #66). Seven entry points: `fullSuggest()`
+  (manual refresh), `morningPass()` (cron), `reactTo(entry)` (per-tap
+  background pass via `waitUntil` from `@vercel/functions`, 45s cooldown
+  claimed in Redis *before* the model call to prevent double-fire),
+  `nudgePass()` (proactive single-slot repaint, driven by the deck's
+  `/api/slots` poll), `rosterPass()` (self-managing roster), `coachPagePass()`
+  (the AI-curated Coach page, `habits:coach:page`, slots 5..16 — run by the
+  morning cron and `/api/coachpage`, reserves the fixed habits + front-4, not
+  dataset-captured like the roster pass), and `dailyDigest()` (cron insight).
+  A coach failure no longer silently rescues — it surfaces as a clean error:
+  `reactTo`/`nudgePass` no-op (already inside `waitUntil(...catch)`),
+  `fullSuggest`/`morningPass`/`dailyDigest` return null → a 502 at the API,
+  `rosterPass` queues nothing. All slot output is sanitized hard
+  (`sanitize()` in `lib/coach-shape.js`) and replaces all 4 slots atomically.
+  Prompt/sanitizer code stays in `coach-shape.js` so the zero-dep unit suite
+  never imports `lib/agent.js` / `ai`.
+- `lib/dataset.js` / `lib/quality.js` — hand-rolled capture + rule scores for
+  slots-producing passes (`habits:dataset`, cap 300). `/api/experiment`
+  replays captured contexts with `scoreOutput`; do not replace with framework
+  scorer/dataset packages (decision #66 / #99).
 - `lib/roster.js` — the **self-managing roster**: the coach proposes changes to
   the *fixed* habit list (`rosterPass()` in coach.js, run by the morning cron
   after the keys pass and never allowed to fail it). Proposals only ever queue;
