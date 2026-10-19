@@ -43,6 +43,16 @@ function walk(dir) {
   return out;
 }
 
+const LOCAL_ESC = /(?:const|let|var|function)\s+esc\b/;
+
+test('the local-escaper guard matches var as well as const, let, and function', () => {
+  assert.match('var esc = function (s) { return s; }', LOCAL_ESC);
+  assert.match('const esc = (s) => s', LOCAL_ESC);
+  assert.match('let esc = x', LOCAL_ESC);
+  assert.match('function esc(s) { return s; }', LOCAL_ESC);
+  assert.doesNotMatch('import { esc } from \'/escape.js\'', LOCAL_ESC);
+});
+
 test('every page script uses the shared escaper and defines no local one', () => {
   const pages = [
     'public/index.js',
@@ -54,11 +64,11 @@ test('every page script uses the shared escaper and defines no local one', () =>
   for (const f of pages) {
     const src = readFileSync(join(ROOT, f), 'utf8');
     assert.match(src, /import \{ esc \} from '\/escape\.js'/, f);
-    assert.doesNotMatch(src, /(?:const|let|function)\s+esc\b/, f + ' still defines its own esc');
+    assert.doesNotMatch(src, LOCAL_ESC, f + ' still defines its own esc');
   }
   for (const p of walk(join(ROOT, 'public'))) {
     if (extname(p) !== '.html') continue;
     const src = readFileSync(p, 'utf8');
-    assert.doesNotMatch(src, /(?:const|let|function)\s+esc\b/, p + ' still defines esc');
+    assert.doesNotMatch(src, LOCAL_ESC, p + ' still defines esc');
   }
 });

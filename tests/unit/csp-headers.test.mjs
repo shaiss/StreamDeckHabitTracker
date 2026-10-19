@@ -17,6 +17,10 @@ const vercel = JSON.parse(readFileSync(join(ROOT, 'vercel.json'), 'utf8'));
 // that is what keeps a style injection from reading sessionStorage.
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 
+// A trailing \b after a quoted "module" never matches: both the quote and
+// the following character are non-word. The boundary has to sit on `module`.
+const NOT_BLOCKING = /\b(?:defer|async)\b|\btype\s*=\s*["']?module\b/i;
+
 function walk(dir) {
   const out = [];
   for (const name of readdirSync(dir)) {
@@ -61,7 +65,7 @@ test('each page strips ?key= from a blocking head script before other subresourc
     const tags = [...html.matchAll(/<script\b([^>]*)>/gi)];
     assert.ok(tags.length > 0, rel + ' has no script');
     assert.match(tags[0][1], /src="\/strip-key\.js"/, rel + ' first script must be /strip-key.js');
-    assert.doesNotMatch(tags[0][1], /\b(?:defer|async|type\s*=\s*"module")\b/, rel + ' strip script must be blocking');
+    assert.doesNotMatch(tags[0][1], NOT_BLOCKING, rel + ' strip script must be blocking');
     const stripAt = html.indexOf('<script src="/strip-key.js">');
     const styleAt = html.indexOf('rel="stylesheet"');
     assert.ok(stripAt !== -1 && styleAt !== -1 && stripAt < styleAt, rel + ' stylesheet precedes the key strip');
@@ -70,4 +74,24 @@ test('each page strips ?key= from a blocking head script before other subresourc
     const inline = tags.filter((m) => !/\bsrc\s*=/.test(m[1]));
     assert.deepEqual(inline.map((m) => m[0]), [], rel + ' still has an inline script');
   }
+});
+
+test('strip-script guard rejects a module-typed script, including quoted type=module', () => {
+  const samples = [
+    ' type="module" src="/strip-key.js"',
+    ' src="/strip-key.js" type="module"',
+    " type='module' src='/strip-key.js'",
+    ' type=module src="/strip-key.js"',
+    ' type = "module"',
+    ' defer src="/strip-key.js"',
+    ' src="/strip-key.js" async',
+    ' ASYNC'
+  ];
+  for (const attrs of samples) assert.match(attrs, NOT_BLOCKING, attrs);
+  assert.doesNotMatch(' src="/strip-key.js"', NOT_BLOCKING);
+  // The old shape (\b after the closing quote) missed every one of these.
+  const old = /\b(?:defer|async|type\s*=\s*"module")\b/;
+  assert.doesNotMatch(' type="module" src="/strip-key.js"', old);
+  assert.doesNotMatch(' src="/strip-key.js" type="module"', old);
+  assert.match(' type="module" src="/strip-key.js"', NOT_BLOCKING);
 });

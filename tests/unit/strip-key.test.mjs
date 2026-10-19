@@ -26,7 +26,7 @@ function load(file, href) {
   };
   win.globalThis = win;
   vm.runInNewContext(read(file), win);
-  return { ss, replaced };
+  return { ss, replaced, win };
 }
 
 test('strip-key moves ?key= into sessionStorage and rewrites the URL', () => {
@@ -47,4 +47,43 @@ test('strip-key and habit-key.js rewrite the same URL', () => {
   const b = load('public/habit-key.js', href);
   assert.equal(a.ss.get('habitdeck.key'), b.ss.get('habitdeck.key'));
   assert.equal(a.replaced[0][1], b.replaced[0][1]);
+  assert.equal(a.win.__habitdeckPendingKey, undefined);
+});
+
+test('setItem throwing still strips the URL and habit-key.js keeps the key in memory', () => {
+  const href = 'https://h.test/deck.html?x=1&key=' + S + '#top';
+  const replaced = [];
+  const calls = [];
+  const win = {
+    location: { href },
+    history: {
+      state: { n: 1 },
+      replaceState: (state, _t, u) => replaced.push([state, u])
+    },
+    sessionStorage: {
+      getItem: () => { throw new Error('blocked'); },
+      setItem: () => { throw new Error('blocked'); },
+      removeItem: () => { throw new Error('blocked'); }
+    },
+    fetch: (url, init) => {
+      calls.push({ url, init });
+      return Promise.resolve({ status: 200, ok: true });
+    },
+    URL
+  };
+  win.globalThis = win;
+  vm.runInNewContext(read('public/strip-key.js'), win);
+  assert.equal(win.__habitdeckPendingKey, S);
+  assert.deepEqual(replaced, [[{ n: 1 }, '/deck.html?x=1#top']]);
+  assert.equal(replaced[0][1].includes('key='), false);
+  // The browser's location updates with replaceState. The harness does not,
+  // so point habit-key.js at the scrubbed URL the next script would see.
+  win.location.href = 'https://h.test' + replaced[0][1];
+  vm.runInNewContext(read('public/habit-key.js'), win);
+  assert.equal(Object.prototype.hasOwnProperty.call(win, '__habitdeckPendingKey'), false);
+  assert.equal(win.HabitKey.get(), S);
+  return win.HabitKey.fetch('/api/log?habit=Test', { method: 'POST' }).then(() => {
+    assert.equal(calls[0].init.headers['x-habit-key'], S);
+    assert.equal(String(calls[0].url).includes('key='), false);
+  });
 });
