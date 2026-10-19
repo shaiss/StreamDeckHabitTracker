@@ -29,6 +29,7 @@ import { nudgePass, summarize } from '../lib/coach.js';
 import { nudgeDue } from '../lib/nudge.js';
 import { SUPPRESS_MS } from '../lib/takeover.js';
 import { scoreNudges } from '../lib/scorer.js';
+import { keyOk } from '../lib/habit-key.js';
 
 const RUN_COOLDOWN_MS = 30_000;
 
@@ -36,6 +37,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-habit-key');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') {
     res.status(204).end();
@@ -51,8 +53,7 @@ export default async function handler(req, res) {
     // Dismissal is a write, so it honors HABIT_KEY like /api/log — otherwise
     // anyone could silence the coach on this human's behalf.
     if (q.dismiss === '1') {
-      const secret = process.env.HABIT_KEY;
-      if (secret && q.key !== secret) {
+      if (!keyOk(req)) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
@@ -82,8 +83,7 @@ export default async function handler(req, res) {
         res.status(405).json({ error: 'POST required.' });
         return;
       }
-      const secret = process.env.HABIT_KEY;
-      if (secret && q.key !== secret) {
+      if (!keyOk(req)) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
@@ -116,8 +116,7 @@ export default async function handler(req, res) {
 
     const running = req.method === 'POST' || q.run === '1';
     if (running) {
-      const secret = process.env.HABIT_KEY;
-      if (secret && q.key !== secret) {
+      if (!keyOk(req)) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }

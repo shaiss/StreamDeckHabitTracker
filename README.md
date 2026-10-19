@@ -115,7 +115,8 @@ Other deck models can be generated on demand — see [Regenerating artifacts](#r
 
 Open the [**virtual deck**](https://stream-deck-habit-tracker.vercel.app/deck.html). It's a
 browser twin of the 15-key hardware — same faces, same live AI slots, real logging into the
-same store. Append `?key=...` if `HABIT_KEY` is set on the deployment.
+same store. If `HABIT_KEY` is set on the deployment, the page asks for it once on the first
+save and keeps it in this tab only — see [docs/habit-key.md](docs/habit-key.md).
 
 ## How it works
 
@@ -226,11 +227,15 @@ node tools/generate.mjs "https://YOUR-APP.vercel.app/api/log" \
 node tools/build-plugin.mjs   # repackage the plugin with the fresh bundled profile
 ```
 
-Add `--model=mk2|neo|xl|mini|original` for a different device, `--key=SECRET` if you set
-`HABIT_KEY`, `--pages=N` for a multi-page layout, and `--slots=N` to change how many AI
+Add `--model=mk2|neo|xl|mini|original` for a different device, `--pages=N` for a multi-page layout, and `--slots=N` to change how many AI
 slots to reserve. If you plan to use the one-liner installer, also point `$base` in
 [`public/setup.ps1`](public/setup.ps1) at your deployment. Then commit the rebuilt
 artifacts — Vercel runs no build step, so `public/downloads/` is the published copy.
+
+**Never pass `--key` for these committed artifacts** — the repo is public. If you set
+`HABIT_KEY`, enter it once in the plugin's Property Inspector instead. A local-only keyed
+profile (`node tools/generate.mjs <prod>/api/log --plugin --key=<SECRET>`, written to the
+git-ignored `dist/`) is covered in [docs/habit-key.md](docs/habit-key.md).
 
 ### Configuration
 
@@ -244,7 +249,7 @@ Every variable is optional; the app degrades cleanly without each one.
 | `ZAI_API_KEY` | — | Enables the coach. `Z_AI_API_KEY`, `GLM_API_KEY`, and `ZHIPU_API_KEY` also work. |
 | `ZAI_MODEL` | `glm-5.2` | Coach model. Falls back to the free `glm-4.7-flash` if the preferred model rejects a call. |
 | `ZAI_BASE_URL` | `https://api.z.ai/api/paas/v4` | Point at a different OpenAI-compatible endpoint. |
-| `HABIT_KEY` | — | Shared secret. When set, every write needs `?key=…` — including the plugin's heartbeat, so nobody can forge "the hardware is live". Scope to **Production** only — see [docs/preview-isolation.md](docs/preview-isolation.md). |
+| `HABIT_KEY` | — | Shared secret. When set, every write needs it in the `x-habit-key` header (`?key=…` is still accepted during #112's transition) — including the plugin's heartbeat, so nobody can forge "the hardware is live". Scope to **Production** only — see [docs/preview-isolation.md](docs/preview-isolation.md). Setting it on each caller: [docs/habit-key.md](docs/habit-key.md). |
 | `HOME_TZ` | `America/New_York` | Default timezone for coach passes. The timezone in ⚙️ Settings overrides it. |
 | `CRON_SECRET` | — | Locks the two cron routes. |
 
@@ -390,7 +395,7 @@ The generators read the **live** habit list from `/api/habits`, falling back lou
 | Symptom | Fix |
 |---|---|
 | `503 Storage not connected yet` | Connect Upstash or KV in Vercel, then redeploy. |
-| A key does nothing | Open its URL in a browser. `Logged: …` = working. `Unauthorized` = the URL is missing `&key=…` while `HABIT_KEY` is set. `Missing habit` = the `?habit=` part got dropped. |
+| A key does nothing | Open its URL in a browser. `Logged: …` = working. `Unauthorized` = `HABIT_KEY` is set but this caller has no key: enter it in the plugin's Property Inspector ([docs/habit-key.md](docs/habit-key.md)). `Missing habit` = the `?habit=` part got dropped. |
 | Physical faces look stale | Check `GET /api/health` → `deck`. `null` means the plugin has never connected — that's a plugin problem, not a backend one. |
 | Profile won't import | Stream Deck's profile format varies by version. Use the plain URLs in `dist/urls.txt` from the generator and paste them into keys manually — same result. |
 | Days roll over at the wrong time | They don't: the dashboard groups by *your browser's* local day. Set the coach's timezone in ⚙️ Settings. |

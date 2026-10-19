@@ -9,11 +9,13 @@
 import { isConfigured, getCoachPage } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { coachPagePass, COACHPAGE_COOLDOWN_MS } from '../lib/coach.js';
+import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-habit-key');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') {
     res.status(204).end();
@@ -31,8 +33,7 @@ export default async function handler(req, res) {
       res.status(200).json(current);
       return;
     }
-    const secret = process.env.HABIT_KEY;
-    if (secret && q.key !== secret) {
+    if (!keyOk(req)) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }

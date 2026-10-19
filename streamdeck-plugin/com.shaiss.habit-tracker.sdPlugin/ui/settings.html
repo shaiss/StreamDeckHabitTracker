@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <!-- Habit Tracker AI — Property Inspector (#112 prep).
+       Sets the ONE shared HabitDeck key for every key of this plugin. It is
+       saved with Stream Deck's global settings on this machine only; nothing
+       here is ever shipped in git, the profile, or the plugin zip. -->
+  <style>
+    body { font: 12px -apple-system, "Segoe UI", sans-serif; color: #d8d8d8; background: #2d2d2d; margin: 0; padding: 8px 12px; }
+    label { display: block; margin: 6px 0 4px; color: #969696; }
+    input { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #3d3d3d; color: #d8d8d8; border: 1px solid #555; border-radius: 3px; }
+    .row { display: flex; gap: 6px; margin-top: 6px; }
+    button { padding: 3px 10px; background: #3d3d3d; color: #d8d8d8; border: 1px solid #555; border-radius: 3px; }
+    .hint { color: #969696; margin-top: 8px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <label for="habitKey">HabitDeck key (HABIT_KEY)</label>
+  <input id="habitKey" type="password" autocomplete="off" placeholder="paste your key">
+  <div class="row">
+    <button id="save" type="button">Save</button>
+    <button id="clear" type="button">Clear</button>
+  </div>
+  <div class="hint" id="status">Shared by every Habit Tracker key. Stored on this computer only.</div>
+  <script>
+    // Stream Deck calls this global when the inspector opens (SDK v2 PI API).
+    let ws = null, ctx = null;
+    const input = document.getElementById('habitKey');
+    const status = document.getElementById('status');
+    function send(event, payload) {
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify(payload === undefined ? { event, context: ctx } : { event, context: ctx, payload }));
+    }
+    function save(v) {
+      send('setGlobalSettings', { habitKey: v });
+      status.textContent = v ? 'Key saved on this computer.' : 'Key cleared.';
+    }
+    window.connectElgatoStreamDeckSocket = function (port, uuid, registerEvent) {
+      ctx = uuid;
+      ws = new WebSocket('ws://127.0.0.1:' + port);
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ event: registerEvent, uuid }));
+        send('getGlobalSettings');
+      };
+      ws.onmessage = (m) => {
+        let j; try { j = JSON.parse(m.data); } catch { return; }
+        if (j.event === 'didReceiveGlobalSettings') {
+          const has = !!(j.payload && j.payload.settings && j.payload.settings.habitKey);
+          // Never echo the stored key back into the page; just say whether one is set.
+          input.value = '';
+          input.placeholder = has ? 'key is set (enter a new one to replace)' : 'paste your key';
+        }
+      };
+    };
+    document.getElementById('save').addEventListener('click', () => { const v = input.value.trim(); if (v) { save(v); input.value = ''; } });
+    document.getElementById('clear').addEventListener('click', () => { input.value = ''; save(''); });
+  </script>
+</body>
+</html>

@@ -270,10 +270,13 @@
 
   <div class="hint" id="hint">Loading keys…</div>
 
+  <script src="/habit-key.js"></script>
   <script type="module">
     import { questionPaint, isDetailsKey } from '/glyphs.js';
-    const KEY = new URLSearchParams(location.search).get('key') || '';
-    const withKey = (u) => KEY ? u + '&key=' + encodeURIComponent(KEY) : u;
+    // Writes carry the key as an x-habit-key header via /habit-key.js —
+    // never in the URL. A legacy ?key= link is moved to sessionStorage and
+    // stripped from the address bar on load.
+    const keyed = (url, init) => window.HabitKey.fetch(url, init);
     const face = document.getElementById('face');
     const hint = document.getElementById('hint');
     let slots = [null, null, null, null];
@@ -701,7 +704,7 @@
     function tap(el, url) {
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
-      fetch(withKey(url))
+      keyed(url)
         .then((r) => {
           flash(el, r.ok);
           if (r.ok) {
@@ -720,7 +723,7 @@
     function undo(el, url) {
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
-      fetch(withKey(url), { method: 'DELETE' })
+      keyed(url, { method: 'DELETE' })
         .then((r) => {
           flash(el, r.ok);
           if (r.ok) refresh();
@@ -735,7 +738,7 @@
     function dismiss(el, url, msg) {
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
-      fetch(withKey(url), { method: 'POST' })
+      keyed(url, { method: 'POST' })
         .then((r) => {
           flash(el, r.ok);
           if (r.ok) refresh();

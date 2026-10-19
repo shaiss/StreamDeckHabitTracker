@@ -5,7 +5,7 @@
 //
 // Usage:
 //   node tools/generate.mjs "https://script.google.com/macros/s/XXXX/exec"
-//   node tools/generate.mjs "https://.../exec" --key=k9x2q      # if you set a SECRET
+//   node tools/generate.mjs "https://.../exec" --key=<SECRET>   # if you set a SECRET (output stays in dist/, never commit it)
 //   node tools/generate.mjs "https://.../exec" --model=xl       # deck model (see below)
 //   node tools/generate.mjs "https://.../exec" --pages=2        # multi-page profile (#51)
 //
@@ -13,7 +13,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { zip } from './lib-zip.mjs';
 import { loadHabits } from './lib-habits.mjs';
@@ -414,6 +414,20 @@ const files = [
   }
 ];
 const profilePath = outFile || join(ROOT, 'dist/Habit Tracker.streamDeckProfile');
+// A keyed profile is a SECRET (the repo is public): it may only land in the
+// git-ignored dist/ or outside this checkout — never in streamdeck-plugin/ or
+// public/downloads/, which get committed and shipped. Prefer leaving --key off
+// and entering the key once in the plugin's Property Inspector instead.
+if (key) {
+  const abs = resolve(profilePath);
+  const inRepo = abs.startsWith(resolve(ROOT) + sep);
+  const inDist = abs.startsWith(resolve(ROOT, 'dist') + sep);
+  if (inRepo && !inDist) {
+    console.error('Refusing to write a --key profile inside the repo outside dist/: ' + profilePath +
+      '\nKeyed profiles must never be committed. Drop --outfile (defaults to dist/) or write outside the checkout.');
+    process.exit(1);
+  }
+}
 writeFileSync(profilePath, zip(files));
 
 // ---- report ---------------------------------------------------------------

@@ -98,6 +98,7 @@
     </div>
   </div>
 
+  <script src="/habit-key.js"></script>
   <script>
     const rowsEl = document.getElementById('rows');
     const statusEl = document.getElementById('status');
@@ -197,11 +198,9 @@
     function decide(payload) {
       document.querySelectorAll('.decide, .restore').forEach(b => { b.disabled = true; });
       statusEl.className = 'status'; statusEl.textContent = 'Working…';
-      return fetch('/api/roster', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      }).then(r=>r.json()).then(j =>
+      // HabitKey.postJson sends x-habit-key (asks once on 401). #93's
+      // /api/targets decide() should use the same call.
+      return HabitKey.postJson('/api/roster', payload).then(r=>r.json()).then(j =>
         // Re-read first, then report: the status line must never announce a
         // change the lists above it haven't caught up to yet.
         load(true).then(() => {
@@ -290,11 +289,7 @@
         seen.add(k);
       }
       statusEl.className = 'status'; statusEl.textContent = 'Saving…';
-      fetch('/api/habits', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ habits })
-      }).then(r=>r.json()).then(j => {
+      HabitKey.postJson('/api/habits', { habits }).then(r=>r.json()).then(j => {
         if (j.ok) {
           statusEl.textContent = 'Saved — dashboard, coach, and virtual deck are updated.';
           load(); // re-render both sections so promoted habits leave the coach list
