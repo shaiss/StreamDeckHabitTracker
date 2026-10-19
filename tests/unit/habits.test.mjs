@@ -124,6 +124,8 @@ test('getHabits migrates persisted previous seed to the Code catalog once', asyn
     throw new Error(`unexpected redis ${args[0]}`);
   };
   try {
+    // Redis-backed path under production (gate is non-prod only — #106).
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     const list = await getHabits();
@@ -135,6 +137,7 @@ test('getHabits migrates persisted previous seed to the Code catalog once', asyn
     assert.deepEqual(JSON.parse(redisValue), seedHabits());
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -156,6 +159,7 @@ test('getHabits leaves an intentionally custom catalog unchanged', async () => {
     };
   };
   try {
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     const list = await getHabits();
@@ -164,6 +168,7 @@ test('getHabits leaves an intentionally custom catalog unchanged', async () => {
     assert.equal(calls[0][0], 'GET');
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -201,6 +206,7 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
     throw new Error(`unexpected redis ${args[0]}`);
   };
   try {
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     const list = await getHabits();
@@ -212,6 +218,7 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
     assert.equal(redisValue, customRaw);
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }

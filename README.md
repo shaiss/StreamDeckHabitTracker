@@ -239,15 +239,18 @@ Every variable is optional; the app degrades cleanly without each one.
 | Variable | Default | What it does |
 |---|---|---|
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | — | Redis over REST. `UPSTASH_REDIS_REST_*`, `REDIS_REST_*`, and `STORAGE_REST_API_*` are all detected too — connecting either Vercel integration is enough. |
+| `REDIS_KEY_PREFIX` | _(empty)_ | Optional namespace prepended to every Redis key. Non-production should use e.g. `preview:`; leave unset in Production. Alias: `PREVIEW_REDIS_PREFIX`. |
+| `PREVIEW_REDIS_ISOLATED` | — | Set to `1` on Preview/Development after wiring a **separate** Upstash DB (ops attestation). With Redis configured, any `VERCEL_ENV` other than `production` fails closed unless this flag or a non-empty key prefix is set (#106). |
 | `ZAI_API_KEY` | — | Enables the coach. `Z_AI_API_KEY`, `GLM_API_KEY`, and `ZHIPU_API_KEY` also work. |
 | `ZAI_MODEL` | `glm-5.2` | Coach model. Falls back to the free `glm-4.7-flash` if the preferred model rejects a call. |
 | `ZAI_BASE_URL` | `https://api.z.ai/api/paas/v4` | Point at a different OpenAI-compatible endpoint. |
-| `HABIT_KEY` | — | Shared secret. When set, every write needs `?key=…` — including the plugin's heartbeat, so nobody can forge "the hardware is live". |
+| `HABIT_KEY` | — | Shared secret. When set, every write needs `?key=…` — including the plugin's heartbeat, so nobody can forge "the hardware is live". Scope to **Production** only — see [docs/preview-isolation.md](docs/preview-isolation.md). |
 | `HOME_TZ` | `America/New_York` | Default timezone for coach passes. The timezone in ⚙️ Settings overrides it. |
 | `CRON_SECRET` | — | Locks the two cron routes. |
 
 > Environment variables bind at deploy time. After adding one in Vercel, redeploy (any push)
-> before the functions can see it.
+> before the functions can see it. Preview vs Production Redis/`HABIT_KEY` scoping is
+> documented in [docs/preview-isolation.md](docs/preview-isolation.md) (issues #104 / #106).
 
 ## API
 
