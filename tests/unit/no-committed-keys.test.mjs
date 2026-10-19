@@ -4,10 +4,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scanText, scanFile } from '../../tools/lib-secret-scan.mjs';
+import { readIfPresent, scanText, scanFile, valueNeedles } from '../../tools/lib-secret-scan.mjs';
+import { keyedOutputAllowed } from '../../tools/lib-keyed-output.mjs';
 import { zip } from '../../tools/lib-zip.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -88,6 +90,22 @@ test('fail-closed: non-text archive entries and stray binaries are flagged', () 
   assert.ok(scanFile('a.png', pngWithText).length > 0, 'key in image metadata');
 });
 
+test('fail-closed: unknown binary without a NUL byte is not scanned as text', () => {
+  const noNul = Buffer.from([0x01, 0x02, 0xff, 0xfe, 0x80, 0x7f]);
+  assert.equal(noNul.includes(0), false);
+  const hit = scanFile('blob.bin', noNul);
+  assert.ok(hit.some((h) => h.rule === 'unscannable binary file'), 'extensionless-of-binary');
+  assert.ok(scanFile('font.woff', Buffer.from('OTTO not a real font')).some((h) => h.rule === 'unscannable binary file'));
+  // Supported text and recognized images still pass when they are clean.
+  assert.deepEqual(scanFile('note.txt', Buffer.from('hello\n')), []);
+  assert.deepEqual(scanFile('LICENSE', Buffer.from('MIT\n')), []);
+  const gif = Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0, 0, 0, 0]);
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]);
+  assert.deepEqual(scanFile('a.gif', gif), []);
+  assert.deepEqual(scanFile('a.jpg', jpeg), []);
+  assert.deepEqual(scanFile('a.jpeg', jpeg), []);
+});
+
 test('bare key-like constants are caught outside profiles', () => {
   const bad = [
     "const HABIT_" + K.toUpperCase() + " = '" + FAKE + "';",
@@ -115,11 +133,76 @@ test('value scan finds a committed value without printing it', () => {
   assert.match(clean, /Value scan clean/);
 });
 
+test('value needles cover form encoding of spaces and reserved characters', () => {
+  const secret = 'p q!r(s)*t\'u';
+  const needles = valueNeedles(secret).map((b) => b.toString('utf8'));
+  const uri = encodeURIComponent(secret);
+  const form = new URLSearchParams();
+  form.set('k', secret);
+  const formEnc = form.toString().slice(2);
+  assert.notEqual(formEnc, uri, 'fixture must differ from encodeURIComponent');
+  assert.match(formEnc, /\+/);
+  assert.match(formEnc, /%21/);
+  for (const n of [secret, uri, formEnc, uri.replace(/%20/g, '+')]) {
+    assert.ok(needles.includes(n), 'missing needle ' + n);
+    const only = Buffer.from('prefix?key=' + n + '&x=1');
+    assert.ok(valueNeedles(secret).some((b) => only.includes(b)), 'buffer with only ' + n);
+  }
+  // A profile URL that carries just the form encoding must not depend on the
+  // raw value or encodeURIComponent being present.
+  const shipped = Buffer.from('https://example.test/api/log?' + form.toString());
+  assert.equal(shipped.includes(Buffer.from(secret)), false);
+  assert.equal(shipped.includes(Buffer.from(uri)), false);
+  assert.ok(valueNeedles(secret).some((b) => shipped.includes(b)));
+});
+
+test('readIfPresent skips a missing file and rethrows other errors', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ht-read-'));
+  try {
+    assert.equal(readIfPresent(join(dir, 'gone.txt')), null);
+    const present = join(dir, 'here.txt');
+    writeFileSync(present, 'ok');
+    assert.equal(readIfPresent(present).toString(), 'ok');
+    assert.throws(() => readIfPresent(join(present, 'not-a-directory')), (e) => e && e.code !== 'ENOENT');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('keyed --key output follows symlinks and stays inside dist/', () => {
+  assert.match(readFileSync(join(ROOT, 'tools/generate.mjs'), 'utf8'), /keyedOutputAllowed\(profilePath, ROOT\)/);
+  const root = mkdtempSync(join(tmpdir(), 'ht-key-'));
+  try {
+    mkdirSync(join(root, 'public/downloads'), { recursive: true });
+    mkdirSync(join(root, 'dist'));
+    assert.equal(keyedOutputAllowed(join(root, 'dist', 'Habit Tracker.streamDeckProfile'), root), true);
+    assert.equal(keyedOutputAllowed(join(root, 'public/downloads/x.streamDeckProfile'), root), false);
+    assert.equal(keyedOutputAllowed(join(root, 'dist', '..', 'public', 'downloads', 'x.streamDeckProfile'), root), false);
+    assert.equal(keyedOutputAllowed(join(tmpdir(), 'outside-' + Date.now() + '.streamDeckProfile'), root), true);
+    rmSync(join(root, 'dist'), { recursive: true });
+    symlinkSync(join(root, 'public/downloads'), join(root, 'dist'), 'dir');
+    assert.equal(keyedOutputAllowed(join(root, 'dist', 'Habit Tracker.streamDeckProfile'), root), false, 'symlinked dist/');
+    rmSync(join(root, 'dist'));
+    mkdirSync(join(root, 'dist'));
+    symlinkSync(join(root, 'public/downloads'), join(root, 'dist', 'via'), 'dir');
+    assert.equal(keyedOutputAllowed(join(root, 'dist', 'via', 'p.streamDeckProfile'), root), false, 'symlinked child of dist/');
+    writeFileSync(join(root, 'public/downloads/leaked.streamDeckProfile'), 'x');
+    symlinkSync(join(root, 'public/downloads/leaked.streamDeckProfile'), join(root, 'dist', 'link.streamDeckProfile'));
+    assert.equal(keyedOutputAllowed(join(root, 'dist', 'link.streamDeckProfile'), root), false, 'symlinked outfile');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('no docs or UI hand out URL-key links', () => {
   const files = execFileSync('git', ['ls-files', '*.md', 'public/*.html', 'public/*.js'], { cwd: ROOT })
     .toString().split('\n').filter((f) => f && !f.startsWith('docs/superpowers/'));
+  // A link: a URL, an .html page, or a rooted path whose query sets key.
+  // Bare mentions of the legacy parameter (`?key=` in migration notes, and
+  // code that only reads or builds it) have no path in front and stay allowed.
+  const link = /(?:https?:\/\/[^\s"'`)>]*|[A-Za-z0-9_./~-]*\.html|\/)[?&]key=/;
   for (const f of files) {
     const s = readFileSync(join(ROOT, f), 'utf8');
-    assert.doesNotMatch(s, /deck\.html\?key=|\[&key=/, f + ' suggests a ?key= link');
+    assert.doesNotMatch(s, link, f + ' suggests a ?key= link');
   }
 });

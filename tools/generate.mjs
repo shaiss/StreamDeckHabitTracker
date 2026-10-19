@@ -13,9 +13,10 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { zip } from './lib-zip.mjs';
+import { keyedOutputAllowed } from './lib-keyed-output.mjs';
 import { loadHabits } from './lib-habits.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -418,15 +419,11 @@ const profilePath = outFile || join(ROOT, 'dist/Habit Tracker.streamDeckProfile'
 // git-ignored dist/ or outside this checkout — never in streamdeck-plugin/ or
 // public/downloads/, which get committed and shipped. Prefer leaving --key off
 // and entering the key once in the plugin's Property Inspector instead.
-if (key) {
-  const abs = resolve(profilePath);
-  const inRepo = abs.startsWith(resolve(ROOT) + sep);
-  const inDist = abs.startsWith(resolve(ROOT, 'dist') + sep);
-  if (inRepo && !inDist) {
-    console.error('Refusing to write a --key profile inside the repo outside dist/: ' + profilePath +
-      '\nKeyed profiles must never be committed. Drop --outfile (defaults to dist/) or write outside the checkout.');
-    process.exit(1);
-  }
+if (key && !keyedOutputAllowed(profilePath, ROOT)) {
+  console.error('Refusing to write a --key profile inside the repo outside dist/: ' + profilePath +
+    '\nKeyed profiles must never be committed. Drop --outfile (defaults to dist/) or write outside the checkout.' +
+    '\n(A symlinked dist/ or outfile that resolves outside dist/ is refused too.)');
+  process.exit(1);
 }
 writeFileSync(profilePath, zip(files));
 

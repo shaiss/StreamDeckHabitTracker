@@ -134,6 +134,50 @@ test('plugin manifest wires the Property Inspector on every action', () => {
   assert.match(pi, /type="password"/);
 });
 
+test('PI reports a save only after the socket accepts it', () => {
+  const html = read('streamdeck-plugin/com.shaiss.habit-tracker.sdPlugin/ui/settings.html');
+  const script = html.match(/<script>([\s\S]*)<\/script>/)[1];
+  const els = {};
+  function el(id) {
+    if (!els[id]) {
+      els[id] = {
+        id, value: '', placeholder: '', textContent: '', disabled: false, listeners: {},
+        addEventListener(type, fn) { this.listeners[type] = fn; }
+      };
+    }
+    return els[id];
+  }
+  const sent = [];
+  let socket;
+  class WS {
+    constructor() { this.readyState = 0; socket = this; }
+    send(data) {
+      if (this.readyState !== 1) throw new Error('send before open');
+      sent.push(JSON.parse(data));
+    }
+  }
+  const sandbox = { WebSocket: WS, document: { getElementById: el } };
+  sandbox.window = sandbox;
+  vm.runInNewContext(script, sandbox);
+  assert.equal(els.save.disabled, true);
+  assert.equal(els.clear.disabled, true);
+  els.habitKey.value = 'sekret';
+  els.save.listeners.click();
+  assert.equal(sent.length, 0);
+  assert.equal(els.status.textContent, 'Waiting for Stream Deck…');
+  assert.doesNotMatch(els.status.textContent, /saved|cleared/i);
+  sandbox.connectElgatoStreamDeckSocket(1234, 'ctx', 'registerPlugin');
+  socket.readyState = 1;
+  socket.onopen();
+  assert.equal(els.save.disabled, false);
+  assert.equal(els.clear.disabled, false);
+  assert.ok(sent.some((m) => m.event === 'setGlobalSettings' && m.payload.habitKey === 'sekret'));
+  assert.equal(els.status.textContent, 'Key saved on this computer.');
+  els.clear.listeners.click();
+  assert.equal(els.status.textContent, 'Key cleared.');
+  assert.equal(sent.at(-1).payload.habitKey, '');
+});
+
 // ---- web helper -----------------------------------------------------------
 function loadHelper({ href = 'https://h.test/deck.html', session = true, responses = [] } = {}) {
   const ss = new Map();

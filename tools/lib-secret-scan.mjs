@@ -10,6 +10,7 @@
 //   HABIT_KEY/habitKey/SECRET = '<value>'   a bare constant, anywhere
 // and, inside .streamDeckProfile / .streamDeckPlugin zips (inflated):
 //   any action Settings carrying a non-empty "key" or "habitKey".
+import { readFileSync } from 'node:fs';
 import { inflateRawSync } from 'node:zlib';
 
 // Values that are obviously documentation, not secrets.
@@ -149,6 +150,32 @@ export function scanFile(name, buf) {
   if (ZIPPED.test(name)) return scanArchive(buf, name);
   const img = scanImage(name, buf);
   if (img) return img;
-  if (buf.includes(0)) return [{ file: name, line: 0, rule: 'unscannable binary file' }];
+  // Unknown binaries are not text just because they lack a NUL. Only the
+  // extensions this repo actually commits are scanned as text; everything
+  // else (and any NUL) fails closed. PNG/GIF/JPEG are handled above.
+  if (!TEXTY.test(name) || buf.includes(0)) {
+    return [{ file: name, line: 0, rule: 'unscannable binary file' }];
+  }
   return scanText(buf.toString('utf8'), name);
+}
+
+// Missing working-tree files (deleted, not yet committed) are skipped.
+// Any other read error propagates — a scan that cannot read is a failure.
+export function readIfPresent(path) {
+  try { return readFileSync(path); } catch (e) {
+    if (e && e.code === 'ENOENT') return null;
+    throw e;
+  }
+}
+
+// Byte needles for a secret value: raw, encodeURIComponent, URLSearchParams
+// form encoding (plus-for-space and its percent escapes), and the
+// encodeURIComponent form with spaces turned into '+'.
+export function valueNeedles(value) {
+  const form = new URLSearchParams();
+  form.set('k', value);
+  const formEnc = form.toString().slice(2);
+  const uri = encodeURIComponent(value);
+  const plusSpace = uri.replace(/%20/g, '+');
+  return [...new Set([value, uri, formEnc, plusSpace])].map((v) => Buffer.from(v, 'utf8'));
 }

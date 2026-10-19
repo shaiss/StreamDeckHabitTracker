@@ -233,9 +233,13 @@ slots to reserve. If you plan to use the one-liner installer, also point `$base`
 artifacts — Vercel runs no build step, so `public/downloads/` is the published copy.
 
 **Never pass `--key` for these committed artifacts** — the repo is public. If you set
-`HABIT_KEY`, enter it once in the plugin's Property Inspector instead. A local-only keyed
-profile (`node tools/generate.mjs <prod>/api/log --plugin --key=<SECRET>`, written to the
-git-ignored `dist/`) is covered in [docs/habit-key.md](docs/habit-key.md).
+`HABIT_KEY`, enter it once in the plugin's Property Inspector instead. The plugin attaches
+that key only to the origins in `KEY_ORIGINS` (`streamdeck-plugin/src/habit-key.mjs`:
+`stream-deck-habit-tracker.vercel.app` and `habitdeck.fyi`). A self-hosted origin receives
+the key only after you rebuild the plugin with that origin added to `KEY_ORIGINS`. A
+local-only keyed profile (`node tools/generate.mjs <prod>/api/log --plugin --key=<SECRET>`,
+written to the git-ignored `dist/`) is covered in [docs/habit-key.md](docs/habit-key.md);
+the same origin pin applies to a per-key `settings.key`.
 
 ### Configuration
 
