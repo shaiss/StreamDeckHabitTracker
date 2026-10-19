@@ -63,7 +63,7 @@ test('blocked outranks wait; interior callers still see the pending count', () =
 });
 
 test('the virtual deck embeds the identical pending-count rules (drift guard)', () => {
-  const src = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../../public/deck.js', import.meta.url), 'utf8');
   assert.match(src, /function beaconOf\(/, 'deck.html must carry the beacon helper');
   for (const marker of [
     'if (s.nudge) pending += 1',

@@ -7,10 +7,15 @@
 //  - The key is NEVER baked into a page and NEVER written to localStorage.
 //    It lives in sessionStorage (this tab only) or, if that is unavailable,
 //    in memory for the life of the page.
-//  - Safety net only — never hand out URL-key links: if a page is opened with
-//    a key in its query string, it is read ONCE, moved to sessionStorage, and
-//    stripped with history.replaceState. (The first load has already leaked
-//    it via Referer/request logs; tracked in the CSP follow-up issue.)
+//  - Safety net only — never hand out URL-key links. strip-key.js is the
+//    first blocking script in <head> and does the ?key= → sessionStorage
+//    move + history.replaceState before other page scripts run. If that
+//    write fails, strip-key.js leaves a one-shot __habitdeckPendingKey;
+//    this file copies it into the memory fallback and deletes it. This
+//    file also repeats the URL move so a page that forgot the head script
+//    still scrubs the URL before it writes. The document GET can still
+//    show up in server logs; rejecting ?key= there is issue #115, not
+//    this file.
 //  - Writes send it as the x-habit-key header only — never in the URL. The
 //    server still accepts ?key= during #112's transition for older callers.
 //  - The human is asked once, in-page, and only when the server says 401 —
@@ -40,6 +45,17 @@
     return k;
   }
   function clear() { set(''); }
+
+  // strip-key.js sets this only when sessionStorage did not take the key.
+  // Copy it into the page-lifetime memory fallback, then drop the handoff
+  // so the key does not stay on the global.
+  function consumeHandoff() {
+    var raw = '';
+    try { raw = root.__habitdeckPendingKey; } catch (e) { raw = ''; }
+    try { delete root.__habitdeckPendingKey; } catch (e) { /* undeletable */ }
+    var k = (raw == null ? '' : String(raw)).trim();
+    if (k) set(k);
+  }
 
   // Legacy ?key= → sessionStorage, then scrub the URL.
   function migrateFromUrl() {
@@ -131,6 +147,7 @@
     });
   }
 
+  consumeHandoff();
   migrateFromUrl();
   root.HabitKey = { get: get, set: set, clear: clear, ask: ask, fetch: keyedFetch, postJson: postJson,
     withHeader: withHeader, HEADER: HEADER, _migrateFromUrl: migrateFromUrl };
