@@ -85,6 +85,8 @@ export default async function handler(req, res) {
     // caller could forge "the hardware is live" (the plugin sends ?key= too when
     // the env var is set). `plugin` is still attacker-shaped when HABIT_KEY is
     // unset — it's stripped of markup here and escaped again at render.
+    // keyOk is false in production when HABIT_KEY is unset (#112), so the
+    // heartbeat write is skipped there; the read below is unaffected.
     if (q.deck && keyOk(req)) {
       waitUntil(
         setDeckState({

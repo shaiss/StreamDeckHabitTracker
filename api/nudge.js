@@ -29,7 +29,7 @@ import { nudgePass, summarize } from '../lib/coach.js';
 import { nudgeDue } from '../lib/nudge.js';
 import { SUPPRESS_MS } from '../lib/takeover.js';
 import { scoreNudges } from '../lib/scorer.js';
-import { keyOk } from '../lib/habit-key.js';
+import { keyDenied } from '../lib/habit-key.js';
 
 const RUN_COOLDOWN_MS = 30_000;
 
@@ -53,10 +53,7 @@ export default async function handler(req, res) {
     // Dismissal is a write, so it honors HABIT_KEY like /api/log — otherwise
     // anyone could silence the coach on this human's behalf.
     if (q.dismiss === '1') {
-      if (!keyOk(req)) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+      if (keyDenied(req, res)) return;
       const doc = await getSlots();
       const n = parseInt(q.slot, 10);
       const def = n >= 1 && n <= 4 ? doc.slots[n - 1] : null;
@@ -83,10 +80,7 @@ export default async function handler(req, res) {
         res.status(405).json({ error: 'POST required.' });
         return;
       }
-      if (!keyOk(req)) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+      if (keyDenied(req, res)) return;
       const state = (await getNudgeState()) || {};
       const now = Date.now();
       if (q.suppress === '1') {
@@ -116,10 +110,7 @@ export default async function handler(req, res) {
 
     const running = req.method === 'POST' || q.run === '1';
     if (running) {
-      if (!keyOk(req)) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+      if (keyDenied(req, res)) return;
       if (!zaiKey()) {
         res.status(503).json({ error: 'No AI key set.' });
         return;

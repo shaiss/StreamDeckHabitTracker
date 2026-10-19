@@ -30,7 +30,7 @@ test('keyOk: wrong or missing key is refused when a secret is set', () => {
   assert.equal(keyOk({ headers: {}, query: {} }, undefined, S), false);
 });
 
-test('keyOk: unset secret stays fail-open (fail-closed is #112, not here)', () => {
+test('keyOk: unset secret stays open outside production (prod fails closed, see fail-closed.test.mjs)', () => {
   assert.ok(keyOk({ headers: {}, query: {} }, null, ''));
   assert.ok(keyOk({ headers: {}, query: {} }, null, undefined));
 });
@@ -55,7 +55,12 @@ test('every gated route uses keyOk — no raw ?key= compares left', () => {
     const src = read(f);
     assert.doesNotMatch(src, /\.key\s*[!=]==?\s*(secret|habitKey)/, f + ' still compares the key by hand');
   }
-  for (const f of gated) assert.match(read(f), /keyOk\(req/, f + ' must gate with keyOk');
+  for (const f of gated) {
+    assert.match(read(f), /keyOk\(req|keyDenied\(req|keyStatus\(req/, f + ' must gate through lib/habit-key.js');
+  }
+  // #112 acceptance: no route keeps a hand-rolled `if (secret &&` check.
+  for (const f of [...files, 'api/cron/daily.js']) assert.doesNotMatch(read(f), /if \(secret &&/, f);
+  assert.match(read('api/cron/daily.js'), /cronDenied\(req, res\)/);
 });
 
 test('CORS preflight allows the x-habit-key header where OPTIONS is answered', () => {
