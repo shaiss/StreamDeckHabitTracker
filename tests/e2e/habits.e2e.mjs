@@ -12,6 +12,12 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { sanitizeProposals, applyDecision, restoreFromArchive, normalizeRoster } from '../../lib/roster.js';
+import {
+  sanitizeTargetChanges,
+  applyTargetDecision,
+  normalizeTargets,
+  applyAutoChanges
+} from '../../lib/target.js';
 
 // fileURLToPath, not .pathname: on Windows the latter yields "/C:/..." and
 // every existsSync below silently 404s.
@@ -21,7 +27,11 @@ const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript
 let server, browser, page, port;
 const posted = [];
 
-let habits = [{ name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' }];
+let habits = [
+  { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+  { name: 'Caffeine', emoji: '☕', label: 'Caffeine', origin: 'human', goal: 5 },
+  { name: 'Exercise', emoji: '🏃', label: 'Exercise', origin: 'human', goal: 1 }
+];
 const COACH_INVENTIONS = [{ habit: 'Awake', emoji: '☀️', label: 'Awake', active: true, offered: 4, landed: 1, taps: 1 }];
 let roster = normalizeRoster({
   proposals: sanitizeProposals(
@@ -33,6 +43,15 @@ let roster = normalizeRoster({
     { habits }
   )
 });
+// Seed one queued ramp-up (Exercise 1→2). Auto-downs are applied server-side
+// on the coach pass — the manager only decides ups.
+let targets = (() => {
+  const { queue } = sanitizeTargetChanges(
+    [{ name: 'Exercise', to: 2, reason: 'you hit 2 six of the last ten days' }],
+    { habits, now: 1000 }
+  );
+  return normalizeTargets({ proposals: queue });
+})();
 
 const json = (res, code, body) => {
   res.writeHead(code, { 'Content-Type': 'application/json' });
@@ -75,6 +94,35 @@ before(async () => {
     }
     if (url === '/api/roster') {
       json(res, 200, rosterView());
+      return;
+    }
+    if (url === '/api/targets' && req.method === 'POST') {
+      readBody(req, (body) => {
+        const r = applyTargetDecision({
+          habits,
+          targets,
+          id: String(body.id || ''),
+          decision: String(body.decision || '')
+        });
+        if (r.error) return json(res, 400, { error: r.error });
+        habits = r.habits;
+        targets = r.targets;
+        json(res, 200, {
+          ok: true,
+          applied: r.applied,
+          habits,
+          proposals: targets.proposals,
+          history: targets.history
+        });
+      });
+      return;
+    }
+    if (url === '/api/targets') {
+      json(res, 200, {
+        proposals: targets.proposals,
+        history: targets.history,
+        lastRunAt: targets.lastRunAt
+      });
       return;
     }
     const p = join(ROOT, url === '/' ? 'index.html' : url);
@@ -129,7 +177,8 @@ test('a hand-added duplicate is blocked client-side before POST', async () => {
 test('the coach’s roster proposals render with their reason and both choices', async () => {
   await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
   assert.equal(await page.$eval('#propSect', (s) => s.hidden), false);
-  assert.equal((await page.$$('.prow')).length, 3);
+  // Scope to #propRows — target raise cards also use .prow (in #targetPropRows).
+  assert.equal((await page.$$('#propRows .prow')).length, 3);
   const retire = await page.$eval('.decide[data-name="Pee"][data-decision="approve"]', (b) => b.textContent);
   assert.match(retire, /Retire it/, 'a retirement must not read like an add');
   assert.match(await page.$eval('.prow .why', (e) => e.textContent), /six hours/);
@@ -211,4 +260,94 @@ test('removing a habit row takes two deliberate presses (#78)', async () => {
   assert.match(await del.textContent(), /CONFIRM\?/);
   await del.click();
   assert.equal((await names()).includes(before[0]), false);
+});
+
+test('target ramp-up proposals render with reason and both choices (#70)', async () => {
+  // Re-seed a pending raise after earlier tests may have decided it.
+  const { queue } = sanitizeTargetChanges(
+    [{ name: 'Exercise', to: 2, reason: 'you hit 2 six of the last ten days' }],
+    { habits, now: Date.now() }
+  );
+  // If Exercise was retired/removed, put it back for this surface test.
+  if (!habits.some((h) => h.name === 'Exercise')) {
+    habits = [...habits, { name: 'Exercise', emoji: '🏃', label: 'Exercise', origin: 'human', goal: 1 }];
+  } else {
+    const idx = habits.findIndex((h) => h.name === 'Exercise');
+    habits[idx] = { ...habits[idx], goal: 1 };
+  }
+  targets = normalizeTargets({ proposals: queue });
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  assert.equal(await page.$eval('#targetPropSect', (s) => s.hidden), false);
+  assert.equal((await page.$$('.tprow')).length, 1);
+  assert.match(await page.$eval('.tprow .why', (e) => e.textContent), /six of the last ten/);
+  assert.match(
+    await page.$eval('.tdecide[data-decision="approve"]', (b) => b.textContent),
+    /Raise it/
+  );
+});
+
+test('approving a target raise updates the habit goal with coach setBy (#70)', async () => {
+  await page.click('.tdecide[data-name="Exercise"][data-decision="approve"]');
+  await settled('Raised Exercise');
+  const ex = habits.find((h) => h.name === 'Exercise');
+  assert.ok(ex);
+  assert.equal(typeof ex.goal, 'object');
+  assert.equal(ex.goal.target, 2);
+  assert.equal(ex.goal.setBy, 'coach');
+  assert.equal((await page.$$('.tdecide[data-name="Exercise"]')).length, 0);
+  // Reason surfaces on the habit row.
+  assert.match(
+    await page.$eval('.hrow[data-goal-setby="coach"] .goal-meta', (e) => e.textContent),
+    /coach/
+  );
+});
+
+test('dismissing a target raise remembers the refusal without changing the goal (#70)', async () => {
+  // Queue a fresh raise for Caffeine (or re-add the habit if earlier deletes removed it).
+  if (!habits.some((h) => h.name === 'Caffeine')) {
+    habits = [...habits, { name: 'Caffeine', emoji: '☕', label: 'Caffeine', origin: 'human', goal: 5 }];
+  }
+  const caf = habits.find((h) => h.name === 'Caffeine');
+  caf.goal = 5;
+  const { queue } = sanitizeTargetChanges(
+    [{ name: 'Caffeine', to: 6, reason: 'ramping gently' }],
+    { habits, now: Date.now() }
+  );
+  targets = normalizeTargets({ proposals: queue, rejected: targets.rejected });
+  const beforeGoal = habits.find((h) => h.name === 'Caffeine').goal;
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.tdecide[data-name="Caffeine"][data-decision="dismiss"]');
+  await settled('won’t ask to raise Caffeine');
+  assert.equal(habits.find((h) => h.name === 'Caffeine').goal, beforeGoal);
+  assert.ok(targets.rejected.includes('caffeine:6'));
+  // A re-sanitize with the same raise must not re-queue.
+  const again = sanitizeTargetChanges(
+    [{ name: 'Caffeine', to: 6, reason: 'ramping gently' }],
+    { habits, rejected: targets.rejected, now: Date.now() + 1 }
+  );
+  assert.equal(again.queue.length, 0);
+});
+
+test('auto-down applies with reason and never touches the tap log shape (#70)', () => {
+  // Pure wiring check (no browser): the same helpers the API uses auto-apply
+  // a down without requiring a human click, and leave other fields alone.
+  const before = [
+    { name: 'Caffeine', emoji: '☕', label: 'Caffeine', goal: 5 },
+    { name: 'Exercise', emoji: '🏃', label: 'Exercise', goal: 1 }
+  ];
+  const { auto } = sanitizeTargetChanges(
+    [{ name: 'Caffeine', to: 3, reason: 'well over target all week' }],
+    { habits: before, now: 42 }
+  );
+  const { habits: after, applied } = applyAutoChanges({
+    habits: before,
+    targets: null,
+    changes: auto,
+    now: 42
+  });
+  assert.equal(applied.length, 1);
+  assert.equal(after[0].goal.target, 4); // step-clamped from 5
+  assert.equal(after[0].goal.setBy, 'coach');
+  assert.match(after[0].goal.reason, /well over/);
+  assert.equal(after[1].goal, 1);
 });
