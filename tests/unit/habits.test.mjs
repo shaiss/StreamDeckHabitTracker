@@ -152,6 +152,8 @@ test('getHabits migrates persisted previous seed to the Code catalog once', asyn
     throw new Error(`unexpected redis ${args[0]}`);
   };
   try {
+    // Redis-backed path under production (gate is non-prod only — #106).
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     const list = await getHabits();
@@ -163,6 +165,7 @@ test('getHabits migrates persisted previous seed to the Code catalog once', asyn
     assert.deepEqual(JSON.parse(redisValue), seedHabits());
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -184,6 +187,7 @@ test('getHabits leaves an intentionally custom catalog unchanged', async () => {
     };
   };
   try {
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     const list = await getHabits();
@@ -192,6 +196,7 @@ test('getHabits leaves an intentionally custom catalog unchanged', async () => {
     assert.equal(calls[0][0], 'GET');
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -201,6 +206,7 @@ test('getHabitsStrict throws on store read failure; getHabits still soft-falls-b
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => 'down' });
   try {
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     await assert.rejects(() => getHabitsStrict(), /store 503/);
@@ -208,6 +214,7 @@ test('getHabitsStrict throws on store read failure; getHabits still soft-falls-b
     assert.deepEqual(await getHabits(), seedHabits());
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -221,11 +228,13 @@ test('getHabitsStrict returns seed only for a missing/empty key (not on error)',
     return { ok: true, json: async () => ({ result: null }) };
   };
   try {
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     assert.deepEqual(await getHabitsStrict(), seedHabits());
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -263,6 +272,7 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
     throw new Error(`unexpected redis ${args[0]}`);
   };
   try {
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     const list = await getHabits();
@@ -274,6 +284,7 @@ test('getHabits migration CAS aborts when a concurrent saveHabits wins', async (
     assert.equal(redisValue, customRaw);
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -295,11 +306,13 @@ test('getHabitsStrict: migration CAS store failure throws (does not serve seed)'
     throw new Error(`unexpected redis ${args[0]}`);
   };
   try {
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     await assert.rejects(() => getHabitsStrict(), /store 503/);
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -327,11 +340,13 @@ test('getHabitsStrict: CAS miss + unreadable key throws (does not serve seed)', 
     throw new Error(`unexpected redis ${args[0]}`);
   };
   try {
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     await assert.rejects(() => getHabitsStrict(), /unreadable after CAS miss/);
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }

@@ -153,6 +153,7 @@ test('withTargetsLock contention surfaces TARGETS_BUSY (handler → 409)', async
     }
     throw new Error(`unexpected redis ${JSON.stringify(args)}`);
   };
+  process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
   try {
@@ -175,6 +176,7 @@ test('withTargetsLock contention surfaces TARGETS_BUSY (handler → 409)', async
     assert.equal(mapped.status, 409);
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }

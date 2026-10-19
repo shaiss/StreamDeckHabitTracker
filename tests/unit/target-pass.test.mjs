@@ -63,12 +63,14 @@ function installRedisMock(state, { failAtomic = false } = {}) {
     }
     throw new Error(`unexpected redis ${op}`);
   };
+  process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
   return {
     calls,
     restore() {
       globalThis.fetch = originalFetch;
+      delete process.env.VERCEL_ENV;
       delete process.env.KV_REST_API_URL;
       delete process.env.KV_REST_API_TOKEN;
     }
@@ -136,6 +138,7 @@ test('readTargetsForPass: store read failure aborts (does not empty-normalize)',
     }
     throw new Error(`unexpected redis ${args[0]}`);
   };
+  process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
   try {
@@ -143,6 +146,7 @@ test('readTargetsForPass: store read failure aborts (does not empty-normalize)',
     assert.equal(setTargetsCalled, false);
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -184,6 +188,7 @@ test('commitTargetPass: getTargets failure under lock never writes (preserves st
     }
     throw new Error(`unexpected redis ${JSON.stringify(args)}`);
   };
+  process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
   try {
@@ -202,6 +207,7 @@ test('commitTargetPass: getTargets failure under lock never writes (preserves st
     assert.equal(state[LOCK_KEY], undefined, 'lock released in finally');
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -253,6 +259,7 @@ test('commitTargetPass: getHabitsStrict failure under lock never writes (no wipe
     }
     throw new Error(`unexpected redis ${JSON.stringify(args)}`);
   };
+  process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
   try {
@@ -276,6 +283,7 @@ test('commitTargetPass: getHabitsStrict failure under lock never writes (no wipe
     assert.equal(state[LOCK_KEY], undefined, 'lock released in finally');
   } finally {
     globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
   }
@@ -410,6 +418,7 @@ test('commitTargetPass: malformed habits:targets never writes (fail closed)', as
       }
       throw new Error(`unexpected redis ${JSON.stringify(args)}`);
     };
+    process.env.VERCEL_ENV = 'production';
     process.env.KV_REST_API_URL = 'https://example.test';
     process.env.KV_REST_API_TOKEN = 'test';
     try {
@@ -431,6 +440,7 @@ test('commitTargetPass: malformed habits:targets never writes (fail closed)', as
       assert.equal(state[LOCK_KEY], undefined, 'lock released in finally');
     } finally {
       globalThis.fetch = originalFetch;
+      delete process.env.VERCEL_ENV;
       delete process.env.KV_REST_API_URL;
       delete process.env.KV_REST_API_TOKEN;
     }
