@@ -13,7 +13,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # Unit tests are zero-dependency by design — no npm install needed.
+      # Unit tests are zero-dependency by design — no npm install.
+      # Prompt/sanitizer/shape tests import lib/coach-shape.js only (not
+      # lib/agent.js / ai). Do not add framework packages (e.g. @mastra/*) here.
       - run: npm test
       - name: Syntax-check all source
         run: |

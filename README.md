@@ -123,7 +123,7 @@ same store. Append `?key=...` if `HABIT_KEY` is set on the deployment.
 flowchart LR
     K["🎛 Stream Deck key<br/>(or virtual deck)"] -->|"GET /api/log?habit=…<br/>or ?slot=N"| L["api/log.js"]
     L -->|"RPUSH"| R[("Redis<br/>Upstash / Vercel KV")]
-    L -.->|"background pass<br/>45 s cooldown"| C["lib/coach.js<br/>Mastra agent → GLM"]
+    L -.->|"background pass<br/>45 s cooldown"| C["lib/coach.js<br/>AI SDK generateText → GLM"]
     C -->|"writes 4 slot assignments"| R
     R --> S["api/slots.js"]
     S -->|"poll every 15 s"| P["Habit Tracker AI plugin<br/>repaints key faces"]
@@ -145,13 +145,16 @@ flowchart LR
 
 ### The AI coach
 
-The coach is a [Mastra](https://mastra.ai) agent backed by z.ai's GLM models. It has six entry
+The coach is driven by the [Vercel AI SDK](https://sdk.vercel.ai)
+(`generateText` + `tool()`) backed by z.ai's GLM models. It has six entry
 points, and a two-tool memory loop (`recall_hypotheses` / `update_hypotheses`) whose bytes
-persist in Redis so they survive serverless cold starts.
+persist in Redis so they survive serverless cold starts. (Mastra was dropped —
+decision [#66](https://github.com/shaiss/StreamDeckHabitTracker/issues/66) /
+PR [#96](https://github.com/shaiss/StreamDeckHabitTracker/pull/96).)
 
-> 📘 **[How we use Mastra](docs/MASTRA.md)** — the agent wiring, why memory is tools over
-> Redis instead of Mastra's own memory, the `thinking: disabled` guardrail that GLM-5.x
-> requires, the trust boundary around model output, and how to add a seventh pass.
+> 📘 **[Mastra decision record](docs/MASTRA.md)** — historical notes on the prior
+> Mastra wiring and the #66 cutover (rewritten in #96). For current coach wiring,
+> see `lib/agent.js` / `lib/zai-fetch.js` / `lib/coach-memory.js`.
 
 | Pass | Trigger | What it does |
 |---|---|---|
@@ -329,7 +332,7 @@ first frame, drag the `.gif` from `icons/animated/` onto the key — the app pla
 
 ```
 api/          Vercel Node functions (log, slots, suggest, nudge, roster, mind, …)
-lib/          coach, Mastra agent, store, roster rules, scorer, quality scoring
+lib/          coach, AI SDK agent, store, roster rules, scorer, quality scoring
 public/       dashboard, virtual deck, habit manager, mind page, setup.ps1, downloads
 streamdeck-plugin/   plugin source (src/) + the .sdPlugin package
 tools/        icon, animation, profile, and plugin-package generators
@@ -343,7 +346,7 @@ docs/         deep dives (see below) + README screenshots
 
 | Doc | What's in it |
 |---|---|
-| [How we use Mastra](docs/MASTRA.md) | Agent wiring, the memory-as-tools decision, the GLM `thinking: disabled` guardrail, the model-output trust boundary, datasets and experiments, how to add a pass |
+| [Mastra decision record](docs/MASTRA.md) | Historical Mastra-era notes and the #66 cutover (rewritten in #96); current stack is AI SDK `generateText` + tools |
 | [Nocturne Ritual](design/PHILOSOPHY.md) | The design philosophy every surface follows |
 
 ```bash
