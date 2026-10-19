@@ -224,8 +224,8 @@ Source is `src/` (plain ESM, no TypeScript, no property inspector):
 
 Taps push a **chain** of rechecks (2/5/9/15/25s) because the reactive coach pass
 runs in the background after `/api/log` answers — one recheck often lands before
-the swap exists. The poll tags itself `?deck=<version>&keys=N` (plus `?key=` when
-`HABIT_KEY` is set); `api/slots.js` records that as `habits:deck` so
+the swap exists. The poll tags itself `?deck=<version>&keys=N` (plus the
+`x-habit-key` header when `HABIT_KEY` is set — never in the URL); `api/slots.js` records that as `habits:deck` so
 `/api/health` and the dashboard can say whether a *physical* deck is live (the
 only way to tell a dead plugin from a dead backend). That heartbeat is the **one
 write on an otherwise read-only, open-CORS endpoint**, so it honors the same
@@ -290,7 +290,9 @@ gitignored scratch, `public/downloads/` is the published copy).
   the *viewer's* timezone by design.
 - Env vars bind at deploy time — after adding one in Vercel, a redeploy (any
   push) is required before functions see it.
-- The optional `HABIT_KEY` env var gates writes (`?key=`); regenerate profiles
-  with `--key=...` if it's ever set.
+- The optional `HABIT_KEY` env var gates writes via the `x-habit-key` header
+  (`lib/habit-key.js`). Callers: web prompt → sessionStorage; plugin → Property
+  Inspector global settings. Never commit a key or hand out `?key=` links — see
+  `docs/habit-key.md`.
 - Model replies are parsed with `extractJson` (first `{`…last `}`) — GLM often
   wraps JSON in fences; never assume clean JSON.

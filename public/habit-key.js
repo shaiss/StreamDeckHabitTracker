@@ -7,9 +7,10 @@
 //  - The key is NEVER baked into a page and NEVER written to localStorage.
 //    It lives in sessionStorage (this tab only) or, if that is unavailable,
 //    in memory for the life of the page.
-//  - A legacy ?key= link is read ONCE, moved to sessionStorage, and stripped
-//    from the address bar with history.replaceState so it does not linger in
-//    history, bookmarks, screenshots, or Referer headers.
+//  - Safety net only — never hand out URL-key links: if a page is opened with
+//    a key in its query string, it is read ONCE, moved to sessionStorage, and
+//    stripped with history.replaceState. (The first load has already leaked
+//    it via Referer/request logs; tracked in the CSP follow-up issue.)
 //  - Writes send it as the x-habit-key header only — never in the URL. The
 //    server still accepts ?key= during #112's transition for older callers.
 //  - The human is asked once, in-page, and only when the server says 401 —

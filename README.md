@@ -264,7 +264,7 @@ complication, or anything else that can make a request.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/log?habit=NAME[&note=…][&key=…]` | Log a tap. Returns plain text, so it's testable in a browser. |
+| `GET /api/log?habit=NAME[&note=…]` (+ `x-habit-key` header when `HABIT_KEY` is set) | Log a tap. Returns plain text, so it's testable in a browser. |
 | `GET /api/log?slot=N` | Log whatever the coach currently has in slot *N* — one integer namespace: 1–4 are the front-page keys, 5–16 the Coach page. |
 | `GET /api/slots[?tz=…][&track=1]` | Current assignments (front slots + the Coach-page array), navigation consent, today's per-habit progress, and optionally the behavioral scorecard. Read by the plugin and the dashboard. |
 | `GET /api/data` | Every tap, as JSON. Feeds the dashboard. |

@@ -274,8 +274,8 @@
   <script type="module">
     import { questionPaint, isDetailsKey } from '/glyphs.js';
     // Writes carry the key as an x-habit-key header via /habit-key.js —
-    // never in the URL. A legacy ?key= link is moved to sessionStorage and
-    // stripped from the address bar on load.
+    // never in the URL. (Safety net only: a stray URL key is moved to
+    // sessionStorage and stripped on load — never hand out such links.)
     const keyed = (url, init) => window.HabitKey.fetch(url, init);
     const face = document.getElementById('face');
     const hint = document.getElementById('hint');

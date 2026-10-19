@@ -21,9 +21,11 @@ removes it.
 | Stream Deck plugin | The Property Inspector of any Habit Tracker key | Stream Deck's **global settings** for the plugin, on this computer only |
 | Vercel | Project → Settings → Environment Variables | `HABIT_KEY`, **Production only** |
 
-An old `/deck.html?key=…` link still works once: the page moves the key into
-`sessionStorage` and strips it from the address bar with
-`history.replaceState`.
+**Do not share or bookmark links that carry the key in the URL.** A URL key
+leaks through browser history, the `Referer` header, and request logs on its
+first load. Use the in-page prompt instead. As a safety net only, if such a
+link is ever opened, the page moves the key into `sessionStorage` and strips it
+from the address bar with `history.replaceState`.
 
 ## Plugin install + key (Shai)
 
