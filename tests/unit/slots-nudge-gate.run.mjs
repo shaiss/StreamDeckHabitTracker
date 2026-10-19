@@ -7,7 +7,7 @@ import { io, resetIo } from './slots-nudge-stubs/io-log.mjs';
 
 register('./slots-nudge-gate.hooks.mjs', import.meta.url);
 
-const SECRET = 'unit-test-habit-key';
+const SECRET = 'CHANGE_ME';
 
 for (const k of Object.keys(process.env)) {
   if (/(HABIT_KEY|ZAI|GLM|ZHIPU|API_KEY|TOKEN|SECRET|REDIS|UPSTASH|^KV_)/i.test(k)) {
@@ -59,7 +59,7 @@ async function once(label, headers, secretSet) {
 
 const results = [
   await once('unkeyed', {}, true),
-  await once('wrong-key', { 'x-habit-key': 'wrong-unit-test-habit-key' }, true),
+  await once('wrong-key', { 'x-habit-key': 'YOUR_KEY' }, true),
   await once('keyed', { 'x-habit-key': SECRET }, true),
   await once('unset-secret', {}, false)
 ];
