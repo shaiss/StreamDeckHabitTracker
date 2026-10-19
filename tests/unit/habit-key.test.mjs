@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { keyOk, presentedKeys, redactKey, KEY_HEADER } from '../../lib/habit-key.js';
-import { resolveKey, keyedInit } from '../../streamdeck-plugin/src/habit-key.mjs';
+import { resolveKey, keyedInit, keyAllowedFor, KEY_ORIGINS } from '../../streamdeck-plugin/src/habit-key.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
@@ -65,11 +65,49 @@ test('CORS preflight allows the x-habit-key header where OPTIONS is answered', (
 });
 
 // ---- plugin ---------------------------------------------------------------
+const PROD = 'https://stream-deck-habit-tracker.vercel.app';
+
 test('plugin: global settings win, per-key settings.key is the fallback', () => {
-  assert.equal(resolveKey({ habitKey: 'g' }, { key: 's' }), 'g');
-  assert.equal(resolveKey({}, { key: 's' }), 's');
-  assert.equal(resolveKey(null, null), '');
-  assert.equal(resolveKey({ habitKey: '  ' }, {}), '');
+  assert.equal(resolveKey({ habitKey: 'g' }, { key: 's' }, PROD), 'g');
+  assert.equal(resolveKey({}, { key: 's' }, PROD), 's');
+  assert.equal(resolveKey(null, null, PROD), '');
+  assert.equal(resolveKey({ habitKey: '  ' }, {}, PROD), '');
+});
+
+// Cipher M1: the key only ever goes to a pinned https origin.
+test('plugin M1: allowlisted https bases get the key', () => {
+  assert.deepEqual([...KEY_ORIGINS], [PROD, 'https://habitdeck.fyi']);
+  for (const b of [PROD, PROD + '/', 'https://habitdeck.fyi', 'https://HabitDeck.fyi/', 'https://habitdeck.fyi:443']) {
+    assert.ok(keyAllowedFor(b), b);
+    assert.equal(resolveKey({ habitKey: 'g' }, {}, b), 'g', b);
+  }
+});
+
+test('plugin M1: a non-https base gets no key', () => {
+  for (const b of ['http://habitdeck.fyi', 'http://stream-deck-habit-tracker.vercel.app', 'ws://habitdeck.fyi', 'ftp://habitdeck.fyi']) {
+    assert.equal(keyAllowedFor(b), false, b);
+    assert.equal(resolveKey({ habitKey: 'g' }, { key: 's' }, b), '', b);
+  }
+});
+
+test('plugin M1: lookalike hosts get no key', () => {
+  for (const b of ['https://habitdeck.fyi.evil.com', 'https://evilhabitdeck.fyi', 'https://habitdeck.fyi@evil.com',
+    'https://user:pw@habitdeck.fyi', 'https://stream-deck-habit-tracker.vercel.app.evil.com',
+    'https://www.habitdeck.fyi', 'https://x.stream-deck-habit-tracker.vercel.app']) {
+    assert.equal(keyAllowedFor(b), false, b);
+    assert.equal(resolveKey({ habitKey: 'g' }, { key: 's' }, b), '', b);
+  }
+});
+
+test('plugin M1: a different origin (port, host, junk) gets no key', () => {
+  for (const b of ['https://habitdeck.fyi:8443', 'https://example.com', 'https://my-fork.vercel.app', 'not a url', '', null, undefined]) {
+    assert.equal(keyAllowedFor(b), false, String(b));
+    assert.equal(resolveKey({ habitKey: 'g' }, { key: 's' }, b), '', String(b));
+  }
+});
+
+test('plugin M1: plugin.mjs passes the request base into resolveKey', () => {
+  assert.match(read('streamdeck-plugin/src/plugin.mjs'), /resolveKey\(globalSettings, s, baseOf\(s\)\)/);
 });
 
 test('plugin: keyedInit adds the header and keeps other init fields', () => {

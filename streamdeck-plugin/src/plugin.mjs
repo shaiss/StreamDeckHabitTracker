@@ -95,7 +95,8 @@ let coachCache = null;    // latest coach-page array (#52) — slots 5..16 rende
 let habitCache = null;    // latest habit list from the server (live-editable)
 let todayCache = null;    // { habitName: {count, goal, doneToday, streak, ringFill} } (#32)
 let globalSettings = {};  // { habitKey } from the Property Inspector — on-device only
-const keyOf = (s) => resolveKey(globalSettings, s);
+// Pinned to KEY_ORIGINS (habit-key.mjs): any other base gets no key (Cipher M1).
+const keyOf = (s) => resolveKey(globalSettings, s, baseOf(s));
 
 // Takeover state (#54). The pure gate is lib/takeover.js; these are its
 // plugin-side inputs. Budget and kill switch are ALSO held server-side

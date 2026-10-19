@@ -17943,7 +17943,23 @@ function redactKey(s) {
 
 // streamdeck-plugin/src/habit-key.mjs
 var KEY_HEADER = "x-habit-key";
-function resolveKey(globalSettings2, settings2) {
+var KEY_ORIGINS = Object.freeze([
+  "https://stream-deck-habit-tracker.vercel.app",
+  "https://habitdeck.fyi"
+]);
+function keyAllowedFor(base) {
+  if (typeof base !== "string" || !base) return false;
+  let u;
+  try {
+    u = new URL(base);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:" || u.username || u.password) return false;
+  return KEY_ORIGINS.includes(u.origin);
+}
+function resolveKey(globalSettings2, settings2, base) {
+  if (!keyAllowedFor(base)) return "";
   const g = globalSettings2 && typeof globalSettings2.habitKey === "string" ? globalSettings2.habitKey.trim() : "";
   if (g) return g;
   const s = settings2 && typeof settings2.key === "string" ? settings2.key.trim() : "";
@@ -17978,7 +17994,7 @@ var coachCache = null;
 var habitCache = null;
 var todayCache = null;
 var globalSettings = {};
-var keyOf = (s) => resolveKey(globalSettings, s);
+var keyOf = (s) => resolveKey(globalSettings, s, baseOf(s));
 var rosterPendingCache = 0;
 var blockedCache = false;
 var consentCache = "off";
