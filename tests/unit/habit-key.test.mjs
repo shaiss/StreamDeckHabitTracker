@@ -17,13 +17,13 @@ const S = 'test-' + 'placeholder-value';   // not a real key
 // ---- server ---------------------------------------------------------------
 test('keyOk: header, ?key=, and body.key are each accepted', () => {
   assert.equal(KEY_HEADER, 'x-habit-key');
-  assert.ok(keyOk({ headers: { 'x-habit-key': S }, query: {} }, null, S));
+  assert.ok(keyOk({ headers: { [KEY_HEADER]: S }, query: {} }, null, S));
   assert.ok(keyOk({ headers: {}, query: { key: S } }, null, S));
   assert.ok(keyOk({ headers: {}, query: {} }, { key: S }, S));
 });
 
 test('keyOk: wrong or missing key is refused when a secret is set', () => {
-  assert.equal(keyOk({ headers: { 'x-habit-key': 'nope' }, query: {} }, null, S), false);
+  assert.equal(keyOk({ headers: { [KEY_HEADER]: 'wrong-' + S }, query: {} }, null, S), false);
   assert.equal(keyOk({ headers: {}, query: {} }, null, S), false);
   assert.equal(keyOk({}, null, S), false);
   // body.key only counts on routes that pass the body
@@ -77,7 +77,7 @@ test('plugin: keyedInit adds the header and keeps other init fields', () => {
   const i = keyedInit('k', { method: 'POST', signal: ctrl.signal, headers: { a: '1' } });
   assert.equal(i.method, 'POST');
   assert.equal(i.signal, ctrl.signal);
-  assert.deepEqual(i.headers, { a: '1', 'x-habit-key': 'k' });
+  assert.deepEqual(i.headers, { a: '1', [KEY_HEADER]: 'k' });
   assert.deepEqual(keyedInit('', {}).headers, {});
 });
 

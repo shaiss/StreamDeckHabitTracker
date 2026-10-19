@@ -32,7 +32,7 @@ export function scanText(text, file = '') {
       let v = m[1].replace(/[,.;:]+$/, '');
       if (isPlaceholder(v)) continue;
       // Code, not data: `?key=' + x`, template `${k}`, `=$KEY`.
-      if (/^[+$({]/.test(v)) continue;
+      if (/^[+$({\\[]/.test(v)) continue;   // also regex source like \s*(…)
       const line = text.slice(0, m.index).split('\n').length;
       hits.push({ file, line, rule: name });
     }
