@@ -96,11 +96,13 @@ export default async function handler(req, res) {
     }
 
     // The deck's own heartbeat drives proactivity: the plugin polls this
-    // endpoint every ~15s (dashboard every 20s), so a throttled background
-    // nudge check rides on it — no cron, and a deck that's off nudges no one.
-    // nudgePass gates itself in Redis (one read on almost every poll) before
-    // doing anything expensive; the response above is already gone.
-    if (base.aiReady) {
+    // endpoint every ~15s, so a throttled background nudge check rides on it
+    // — no cron, and a deck that's off nudges no one. nudgePass writes Redis
+    // and can call the model, so it runs only when keyOk() accepts the
+    // request (issue #110). An unkeyed or wrong-key GET stays a pure read.
+    // When HABIT_KEY is unset, keyOk() is still fail-open; failing closed is
+    // a separate change. The response above is already gone.
+    if (base.aiReady && keyOk(req)) {
       waitUntil(nudgePass().catch(() => {}));
     }
   } catch (err) {
