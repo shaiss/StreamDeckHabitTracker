@@ -12,6 +12,7 @@ import { PROMPTS } from '../lib/coach.js';
 import { scoreOutput } from '../lib/quality.js';
 import { listItems, storeExperiment, getExperiment } from '../lib/dataset.js';
 import { getHabits } from '../lib/habits.js';
+import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -24,8 +25,7 @@ export default async function handler(req, res) {
       res.status(200).json(latest || { note: 'No experiment yet. GET ?run=1 to run one.' });
       return;
     }
-    const secret = process.env.HABIT_KEY;
-    if (secret && q.key !== secret) {
+    if (!keyOk(req)) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }

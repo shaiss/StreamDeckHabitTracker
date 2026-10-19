@@ -4,6 +4,7 @@
 import { getSlots, isConfigured } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { fullSuggest } from '../lib/coach.js';
+import { keyOk } from '../lib/habit-key.js';
 
 const COOLDOWN_MS = 30_000;
 
@@ -16,8 +17,7 @@ export default async function handler(req, res) {
       res.status(405).json({ error: 'POST here (or GET with ?run=1) to refresh AI suggestions.' });
       return;
     }
-    const secret = process.env.HABIT_KEY;
-    if (secret && q.key !== secret) {
+    if (!keyOk(req)) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }

@@ -3,3 +3,9 @@ dist/
 node_modules/
 .clasp.json
 .DS_Store
+# HABIT_KEY never lives in git (public repo). Keyed profiles from
+# `generate.mjs --key=<SECRET>` belong in dist/ (above) — and these names too.
+*.keyed.streamDeckProfile
+*.local.streamDeckProfile
+.env
+.env.*

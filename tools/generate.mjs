@@ -5,7 +5,7 @@
 //
 // Usage:
 //   node tools/generate.mjs "https://script.google.com/macros/s/XXXX/exec"
-//   node tools/generate.mjs "https://.../exec" --key=k9x2q      # if you set a SECRET
+//   node tools/generate.mjs "https://.../exec" --key=<SECRET>   # if you set a SECRET (output stays in dist/, never commit it)
 //   node tools/generate.mjs "https://.../exec" --model=xl       # deck model (see below)
 //   node tools/generate.mjs "https://.../exec" --pages=2        # multi-page profile (#51)
 //
@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { zip } from './lib-zip.mjs';
+import { keyedOutputAllowed, writeKeyedOutput } from './lib-keyed-output.mjs';
 import { loadHabits } from './lib-habits.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -414,7 +415,31 @@ const files = [
   }
 ];
 const profilePath = outFile || join(ROOT, 'dist/Habit Tracker.streamDeckProfile');
-writeFileSync(profilePath, zip(files));
+// A keyed profile is a SECRET (the repo is public): it may only land in the
+// git-ignored dist/ or outside this checkout — never in streamdeck-plugin/ or
+// public/downloads/, which get committed and shipped. Prefer leaving --key off
+// and entering the key once in the plugin's Property Inspector instead.
+const profileBytes = zip(files);
+if (key) {
+  // Check and write are one operation: writeKeyedOutput rejects dangling
+  // symlinks and publishes through a no-follow directory fd, so a symlink
+  // swapped in after the check cannot receive the secret.
+  if (!keyedOutputAllowed(profilePath, ROOT)) {
+    console.error('Refusing to write a --key profile inside the repo outside dist/: ' + profilePath +
+      '\nKeyed profiles must never be committed. Drop --outfile (defaults to dist/) or write outside the checkout.' +
+      '\n(A symlinked dist/, a symlinked outfile, or a dangling symlink is refused.)');
+    process.exit(1);
+  }
+  try {
+    writeKeyedOutput(profilePath, ROOT, profileBytes);
+  } catch (e) {
+    console.error('Refusing to write a --key profile; the destination could not be pinned: ' + profilePath);
+    console.error(e && e.message ? e.message : e);
+    process.exit(1);
+  }
+} else {
+  writeFileSync(profilePath, profileBytes);
+}
 
 // ---- report ---------------------------------------------------------------
 console.log(`\nWrote ${profilePath}`);
