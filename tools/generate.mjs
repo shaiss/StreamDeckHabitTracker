@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { zip } from './lib-zip.mjs';
-import { keyedOutputAllowed } from './lib-keyed-output.mjs';
+import { keyedOutputAllowed, writeKeyedOutput } from './lib-keyed-output.mjs';
 import { loadHabits } from './lib-habits.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -419,13 +419,27 @@ const profilePath = outFile || join(ROOT, 'dist/Habit Tracker.streamDeckProfile'
 // git-ignored dist/ or outside this checkout — never in streamdeck-plugin/ or
 // public/downloads/, which get committed and shipped. Prefer leaving --key off
 // and entering the key once in the plugin's Property Inspector instead.
-if (key && !keyedOutputAllowed(profilePath, ROOT)) {
-  console.error('Refusing to write a --key profile inside the repo outside dist/: ' + profilePath +
-    '\nKeyed profiles must never be committed. Drop --outfile (defaults to dist/) or write outside the checkout.' +
-    '\n(A symlinked dist/ or outfile that resolves outside dist/ is refused too.)');
-  process.exit(1);
+const profileBytes = zip(files);
+if (key) {
+  // Check and write are one operation: writeKeyedOutput rejects dangling
+  // symlinks and publishes through a no-follow directory fd, so a symlink
+  // swapped in after the check cannot receive the secret.
+  if (!keyedOutputAllowed(profilePath, ROOT)) {
+    console.error('Refusing to write a --key profile inside the repo outside dist/: ' + profilePath +
+      '\nKeyed profiles must never be committed. Drop --outfile (defaults to dist/) or write outside the checkout.' +
+      '\n(A symlinked dist/, a symlinked outfile, or a dangling symlink is refused.)');
+    process.exit(1);
+  }
+  try {
+    writeKeyedOutput(profilePath, ROOT, profileBytes);
+  } catch (e) {
+    console.error('Refusing to write a --key profile; the destination could not be pinned: ' + profilePath);
+    console.error(e && e.message ? e.message : e);
+    process.exit(1);
+  }
+} else {
+  writeFileSync(profilePath, profileBytes);
 }
-writeFileSync(profilePath, zip(files));
 
 // ---- report ---------------------------------------------------------------
 console.log(`\nWrote ${profilePath}`);

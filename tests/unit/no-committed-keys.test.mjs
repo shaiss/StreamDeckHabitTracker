@@ -4,12 +4,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, linkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readIfPresent, scanText, scanFile, valueNeedles } from '../../tools/lib-secret-scan.mjs';
-import { keyedOutputAllowed } from '../../tools/lib-keyed-output.mjs';
+import { keyedOutputAllowed, writeKeyedOutput } from '../../tools/lib-keyed-output.mjs';
 import { zip } from '../../tools/lib-zip.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -170,7 +170,9 @@ test('readIfPresent skips a missing file and rethrows other errors', () => {
 });
 
 test('keyed --key output follows symlinks and stays inside dist/', () => {
-  assert.match(readFileSync(join(ROOT, 'tools/generate.mjs'), 'utf8'), /keyedOutputAllowed\(profilePath, ROOT\)/);
+  const generateSrc = readFileSync(join(ROOT, 'tools/generate.mjs'), 'utf8');
+  assert.match(generateSrc, /keyedOutputAllowed\(profilePath, ROOT\)/);
+  assert.match(generateSrc, /writeKeyedOutput\(profilePath, ROOT, profileBytes\)/);
   const root = mkdtempSync(join(tmpdir(), 'ht-key-'));
   try {
     mkdirSync(join(root, 'public/downloads'), { recursive: true });
@@ -189,6 +191,101 @@ test('keyed --key output follows symlinks and stays inside dist/', () => {
     writeFileSync(join(root, 'public/downloads/leaked.streamDeckProfile'), 'x');
     symlinkSync(join(root, 'public/downloads/leaked.streamDeckProfile'), join(root, 'dist', 'link.streamDeckProfile'));
     assert.equal(keyedOutputAllowed(join(root, 'dist', 'link.streamDeckProfile'), root), false, 'symlinked outfile');
+    // A dangling final symlink is not a missing file: its lexical path is
+    // inside dist/, and writeFileSync would create the not-yet-existing target.
+    const danglingTarget = join(root, 'public/downloads/not-yet.streamDeckProfile');
+    symlinkSync(danglingTarget, join(root, 'dist', 'dangling.streamDeckProfile'));
+    assert.equal(keyedOutputAllowed(join(root, 'dist', 'dangling.streamDeckProfile'), root), false, 'dangling outfile symlink');
+    symlinkSync(join(root, 'public/downloads/missing-dir'), join(root, 'dist', 'dangling-dir'));
+    assert.equal(keyedOutputAllowed(join(root, 'dist', 'dangling-dir', 'p.streamDeckProfile'), root), false, 'dangling parent symlink');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('keyed write rejects dangling symlinks and does not follow them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ht-keyw-'));
+  try {
+    mkdirSync(join(root, 'public/downloads'), { recursive: true });
+    mkdirSync(join(root, 'dist'));
+    const secret = Buffer.from('keyed-profile-bytes');
+    const danglingTarget = join(root, 'public/downloads/not-yet.streamDeckProfile');
+    const link = join(root, 'dist', 'dangling.streamDeckProfile');
+    symlinkSync(danglingTarget, link);
+    assert.throws(() => writeKeyedOutput(link, root, secret), (e) => e && e.code === 'EPERM');
+    assert.equal(existsSync(danglingTarget), false, 'dangling target was created');
+    assert.equal(lstatSync(link).isSymbolicLink(), true, 'dangling link must stay unfollowed');
+
+    const liveTarget = join(root, 'public/downloads/live.streamDeckProfile');
+    writeFileSync(liveTarget, 'keep');
+    const liveLink = join(root, 'dist', 'live.streamDeckProfile');
+    symlinkSync(liveTarget, liveLink);
+    assert.throws(() => writeKeyedOutput(liveLink, root, secret), (e) => e && e.code === 'EPERM');
+    assert.equal(readFileSync(liveTarget, 'utf8'), 'keep');
+
+    symlinkSync(join(root, 'public/downloads/missing-dir'), join(root, 'dist', 'dangling-dir'));
+    assert.throws(
+      () => writeKeyedOutput(join(root, 'dist', 'dangling-dir', 'p.streamDeckProfile'), root, secret),
+      (e) => e && e.code === 'EPERM'
+    );
+    assert.equal(existsSync(join(root, 'public/downloads/missing-dir')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('keyed write publishes through a pinned directory and not through a hardlink', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ht-keypin-'));
+  try {
+    mkdirSync(join(root, 'public/downloads'), { recursive: true });
+    mkdirSync(join(root, 'dist/nested'), { recursive: true });
+    const secret = Buffer.from('pinned-secret');
+    const out = join(root, 'dist', 'Habit Tracker.streamDeckProfile');
+    writeKeyedOutput(out, root, secret);
+    assert.equal(readFileSync(out).equals(secret), true);
+    const st = lstatSync(out);
+    assert.equal(st.isSymbolicLink(), false);
+    assert.equal(st.isFile(), true);
+    assert.equal(st.nlink, 1);
+
+    const nested = join(root, 'dist/nested/p.streamDeckProfile');
+    writeKeyedOutput(nested, root, secret);
+    assert.equal(readFileSync(nested).equals(secret), true);
+
+    // A symlink whose target is also inside dist/ still passes the allow
+    // check (the real path is inside dist/). writeFileSync would follow it
+    // and overwrite the target; the pinned publish must replace the link.
+    const inner = join(root, 'dist', 'inner.streamDeckProfile');
+    writeFileSync(inner, 'inner');
+    const alias = join(root, 'dist', 'alias.streamDeckProfile');
+    symlinkSync(inner, alias);
+    assert.equal(keyedOutputAllowed(alias, root), true);
+    writeKeyedOutput(alias, root, secret);
+    assert.equal(readFileSync(inner, 'utf8'), 'inner');
+    assert.equal(lstatSync(alias).isSymbolicLink(), false);
+    assert.equal(readFileSync(alias).equals(secret), true);
+
+    const shipped = join(root, 'public/downloads/shared.streamDeckProfile');
+    writeFileSync(shipped, 'shipped');
+    const linked = join(root, 'dist', 'shared.streamDeckProfile');
+    linkSync(shipped, linked);
+    writeKeyedOutput(linked, root, secret);
+    assert.equal(readFileSync(shipped, 'utf8'), 'shipped', 'hardlink target must not receive the secret');
+    assert.equal(readFileSync(linked).equals(secret), true);
+    assert.equal(lstatSync(linked).nlink, 1);
+
+    const outside = join(tmpdir(), 'outside-' + Date.now() + '.streamDeckProfile');
+    try {
+      writeKeyedOutput(outside, root, secret);
+      assert.equal(readFileSync(outside).equals(secret), true);
+    } finally {
+      rmSync(outside, { force: true });
+    }
+
+    assert.throws(
+      () => writeKeyedOutput(join(root, 'public/downloads/x.streamDeckProfile'), root, secret),
+      (e) => e && e.code === 'EPERM'
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
