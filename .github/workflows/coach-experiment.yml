@@ -27,12 +27,11 @@ jobs:
           BASE: https://stream-deck-habit-tracker.vercel.app
           MODELS: ${{ github.event.inputs.models || 'glm-5.2,glm-4.7-flash' }}
           N: ${{ github.event.inputs.n || '3' }}
-          HABIT_KEY: ${{ secrets.HABIT_KEY }}
         run: |
           URL="$BASE/api/experiment?run=1&models=$MODELS&n=$N"
-          if [ -n "$HABIT_KEY" ]; then URL="$URL&key=$HABIT_KEY"; fi
           echo "Running: $BASE/api/experiment (models=$MODELS n=$N)"
-          RESP=$(curl -sS --max-time 120 "$URL")
+          # The key rides in the x-habit-key header, never the URL (Cipher M2).
+          RESP=$(curl -sS --max-time 120 -H "x-habit-key: ${{ secrets.HABIT_KEY }}" "$URL")
           echo "$RESP" | jq .models
           echo "$RESP" | jq -e '.models' > /dev/null || { echo "::error::Experiment failed: $RESP"; exit 1; }
 
