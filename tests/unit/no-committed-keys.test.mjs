@@ -16,16 +16,17 @@ const K = 'key';
 const FAKE = 'Zq' + '7rT' + '9wLp';
 
 test('tracked tree carries no HABIT_KEY material', () => {
-  let files;
-  try {
-    files = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT }).toString().split('\0').filter(Boolean);
-  } catch {
-    return; // not a git checkout (e.g. a tarball) — nothing to scan
-  }
+  // Fail closed (Cipher L1): no git, no file list, or an unreadable file is a
+  // failure — never a silent pass.
+  const files = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT }).toString().split('\0').filter(Boolean);
+  assert.ok(files.length > 50, 'git ls-files returned too few files: ' + files.length);
   const hits = [];
   for (const f of files) {
     let buf;
-    try { buf = readFileSync(join(ROOT, f)); } catch { continue; }
+    try { buf = readFileSync(join(ROOT, f)); } catch (e) {
+      if (e && e.code === 'ENOENT') continue;   // deleted in the working tree, not yet committed
+      throw e;
+    }
     hits.push(...scanFile(f, buf));
   }
   assert.deepEqual(hits, [], 'key-like values committed:\n' +
@@ -63,4 +64,62 @@ test('scanner looks inside profiles/zips for keyed Settings', () => {
   assert.ok(scanFile('x.streamDeckPlugin', plugin).length > 0, 'nested profile inside plugin zip');
   const clean = zip([{ name: 'P.sdProfile/manifest.json', data: Buffer.from(JSON.stringify({ Settings: { base: 'https://x' } })) }]);
   assert.deepEqual(scanFile('x.streamDeckProfile', clean), []);
+});
+
+test('fail-closed: corrupt, truncated, or odd archives are flagged', () => {
+  const good = zip([{ name: 'P/manifest.json', data: Buffer.from('{}') }]);
+  assert.deepEqual(scanFile('x.streamDeckProfile', good), []);
+  assert.ok(scanFile('x.streamDeckProfile', Buffer.from('not a zip')).length > 0, 'garbage');
+  assert.ok(scanFile('x.streamDeckProfile', good.slice(0, good.length - 30)).length > 0, 'truncated');
+  const corrupt = Buffer.from(good);
+  corrupt[40] ^= 0xff; corrupt[41] ^= 0xff;            // inside the deflate stream
+  assert.ok(scanFile('x.streamDeckProfile', corrupt).length > 0, 'corrupt deflate');
+});
+
+test('fail-closed: non-text archive entries and stray binaries are flagged', () => {
+  const blob = zip([{ name: 'P/blob.bin', data: Buffer.from([0, 1, 2, 3]) }]);
+  assert.ok(scanFile('x.streamDeckPlugin', blob).length > 0, 'unknown binary entry');
+  const fakePng = zip([{ name: 'P/a.png', data: Buffer.from('plain text pretending') }]);
+  assert.ok(scanFile('x.streamDeckPlugin', fakePng).length > 0, 'png without magic');
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(8)]);
+  assert.deepEqual(scanFile('a.png', png), []);
+  assert.ok(scanFile('a.bin', Buffer.from([0, 0, 1])).length > 0, 'unknown binary file');
+  const pngWithText = Buffer.concat([png, Buffer.from('tEXt HABIT_' + K.toUpperCase() + '=' + FAKE)]);
+  assert.ok(scanFile('a.png', pngWithText).length > 0, 'key in image metadata');
+});
+
+test('bare key-like constants are caught outside profiles', () => {
+  const bad = [
+    "const HABIT_" + K.toUpperCase() + " = '" + FAKE + "';",
+    'habit' + 'Key: "' + FAKE + '"',
+    '{ "habit' + 'Key": "' + FAKE + '" }',
+    "const SEC" + "RET = '" + FAKE + "';"
+  ];
+  for (const s of bad) assert.ok(scanText(s).length > 0, 'missed: ' + s);
+  const ok = ["const SEC" + "RET = 'CHANGE_ME';", 'habit' + "Key: '<SECRET>'"];
+  for (const s of ok) assert.deepEqual(scanText(s), [], 'false positive: ' + s);
+});
+
+test('value scan finds a committed value without printing it', () => {
+  // A string that IS in the tree stands in for a leaked key.
+  const stand = 'stream-deck-habit-tracker' + '.vercel.app';
+  let out = '', code = 0;
+  try {
+    out = execFileSync(process.execPath, [join(ROOT, 'tools/scan-value.mjs')],
+      { cwd: ROOT, env: { ...process.env, HABIT_KEY: stand }, stdio: 'pipe' }).toString();
+  } catch (e) { code = e.status; out = String(e.stdout) + String(e.stderr); }
+  assert.equal(code, 1);
+  assert.ok(!out.includes(stand), 'must never echo the value');
+  const clean = execFileSync(process.execPath, [join(ROOT, 'tools/scan-value.mjs')],
+    { cwd: ROOT, env: { ...process.env, HABIT_KEY: 'zz-' + Date.now() + '-not-in-tree' } }).toString();
+  assert.match(clean, /Value scan clean/);
+});
+
+test('no docs or UI hand out URL-key links', () => {
+  const files = execFileSync('git', ['ls-files', '*.md', 'public/*.html', 'public/*.js'], { cwd: ROOT })
+    .toString().split('\n').filter((f) => f && !f.startsWith('docs/superpowers/'));
+  for (const f of files) {
+    const s = readFileSync(join(ROOT, f), 'utf8');
+    assert.doesNotMatch(s, /deck\.html\?key=|\[&key=/, f + ' suggests a ?key= link');
+  }
 });

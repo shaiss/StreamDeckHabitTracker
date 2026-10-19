@@ -17,6 +17,18 @@ jobs:
       # Prompt/sanitizer/shape tests import lib/coach-shape.js only (not
       # lib/agent.js / ai). Do not add framework packages (e.g. @mastra/*) here.
       - run: npm test
+      # Value-based leak check (Cipher L1): the real key must not be anywhere in
+      # the tree. Skips when the secret is unavailable (e.g. fork PRs); the value
+      # is passed via env/stdin only and never echoed.
+      - name: HABIT_KEY value scan
+        env:
+          HABIT_KEY: ${{ secrets.HABIT_KEY }}
+        run: |
+          if [ -z "$HABIT_KEY" ]; then echo "HABIT_KEY secret not available; value scan skipped."; exit 0; fi
+          if printf '%s\n' "$HABIT_KEY" | git grep -q -F -f - -- . ; then
+            echo "::error::The HABIT_KEY value is committed in the tree (git grep)."; exit 1
+          fi
+          node tools/scan-value.mjs
       - name: Syntax-check all source
         run: |
           set -e

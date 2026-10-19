@@ -7,12 +7,13 @@
 //   [?&]key=<value>         literal URL keys (code that concatenates is fine)
 //   x-habit-key: <value>    a hardcoded header value (JSON/JS or curl style)
 //   HABIT_KEY=<value>       an env assignment with a literal value
+//   HABIT_KEY/habitKey/SECRET = '<value>'   a bare constant, anywhere
 // and, inside .streamDeckProfile / .streamDeckPlugin zips (inflated):
 //   any action Settings carrying a non-empty "key" or "habitKey".
 import { inflateRawSync } from 'node:zlib';
 
 // Values that are obviously documentation, not secrets.
-const PLACEHOLDER = /^(?:<[^>]*>|\.\.\.|…|SECRET|YOUR[_-]?KEY|\$\{?[A-Za-z_][\w]*\}?|%[A-Za-z_]+%|\$env:[A-Za-z_]+|xxx+|\[redacted\])$/i;
+const PLACEHOLDER = /^(?:<[^>]*>|\.\.\.|…|SECRET|CHANGE[_-]?ME|YOUR[_-]?KEY|\$\{?[A-Za-z_][\w]*\}?|%[A-Za-z_]+%|\$env:[A-Za-z_]+|xxx+|\[redacted\])$/i;
 const isPlaceholder = (v) => !v || PLACEHOLDER.test(v);
 
 const RULES = [
@@ -20,7 +21,12 @@ const RULES = [
   { name: '?key=', re: /[?&]key=([A-Za-z0-9_\-.~%]{6,})/g },
   { name: 'x-habit-key value', re: /["']?x-habit-key["']?\s*[:=]\s*["'`]([^"'`\s]+)["'`]/gi },
   { name: 'x-habit-key header', re: /x-habit-key:\s*([^\s"'`]+)/gi },
-  { name: 'HABIT_KEY=', re: /\bHABIT_KEY\s*=\s*["']?([^\s"'`;]+)/g }
+  { name: 'HABIT_KEY=', re: /\bHABIT_KEY\s*=\s*["']?([^\s"'`;]+)/g },
+  // Bare constants anywhere in text, not just inside profiles (Cipher L1):
+  // const HABIT_KEY = '…', habitKey: "…", { "habitKey": "…" }, SECRET = '…'.
+  // Value must look like a token (≥6 chars, no spaces) — prose and regex
+  // source are not keys.
+  { name: 'key constant', re: /\b(?:HABIT_KEY|habitKey|habit_key|HABITKEY|SECRET)["']?\s*[:=]\s*["'`]([A-Za-z0-9_\-.~+/=]{6,})["'`]/g }
 ];
 
 export function scanText(text, file = '') {
@@ -41,23 +47,41 @@ export function scanText(text, file = '') {
 }
 
 // Minimal ZIP reader (local headers; DEFLATE or stored) — enough for the
-// archives tools/lib-zip.mjs writes.
+// archives tools/lib-zip.mjs writes. FAIL-CLOSED (Cipher L1): anything it
+// cannot fully read throws, and the caller reports it as a hit.
 export function unzipEntries(buf) {
   const out = [];
   let i = 0;
-  while (i + 30 <= buf.length && buf.readUInt32LE(i) === 0x04034b50) {
+  while (i + 4 <= buf.length && buf.readUInt32LE(i) === 0x04034b50) {
+    if (i + 30 > buf.length) throw new Error('truncated local header');
+    const flags = buf.readUInt16LE(i + 6);
     const method = buf.readUInt16LE(i + 8);
     const csize = buf.readUInt32LE(i + 18);
+    const usize = buf.readUInt32LE(i + 22);
     const nlen = buf.readUInt16LE(i + 26);
     const xlen = buf.readUInt16LE(i + 28);
+    if (flags & 0x08) throw new Error('data-descriptor entries are not supported');
+    if (flags & 0x01) throw new Error('encrypted entry');
     const name = buf.slice(i + 30, i + 30 + nlen).toString('utf8');
     const start = i + 30 + nlen + xlen;
+    if (start + csize > buf.length) throw new Error('truncated entry ' + name);
     const raw = buf.slice(start, start + csize);
     let data;
-    try { data = method === 8 ? inflateRawSync(raw) : raw; } catch { data = Buffer.alloc(0); }
+    if (method === 8) data = inflateRawSync(raw);       // throws on corrupt data
+    else if (method === 0) data = raw;
+    else throw new Error('unsupported compression method ' + method + ' for ' + name);
+    if (data.length !== usize) throw new Error('size mismatch for ' + name);
     out.push({ name, data });
     i = start + csize;
   }
+  // Whatever follows the last entry must be the central directory, closed by
+  // an end-of-central-directory record that counts exactly these entries.
+  if (i + 4 > buf.length || buf.readUInt32LE(i) !== 0x02014b50) {
+    throw new Error(out.length ? 'unexpected bytes after entries' : 'not a zip archive');
+  }
+  const eocd = buf.length - 22;
+  if (eocd < i || buf.readUInt32LE(eocd) !== 0x06054b50) throw new Error('missing end-of-central-directory');
+  if (buf.readUInt16LE(eocd + 10) !== out.length) throw new Error('entry count mismatch');
   return out;
 }
 
@@ -78,18 +102,44 @@ function settingsHits(json, file) {
 }
 
 const ZIPPED = /\.(streamDeckProfile|streamDeckPlugin)$/;
-const TEXTY = /\.(json|txt|js|mjs|html|md|ps1|sh|yml|yaml)$/i;
+const TEXTY = /\.(json|txt|js|mjs|cjs|html|css|md|ps1|sh|yml|yaml|gs|svg|gitignore)$|(^|\/)(LICENSE|\.gitignore)$/i;
+// Binary formats we accept, each only with the right magic bytes.
+const IMAGES = [
+  { re: /\.png$/i, magic: [0x89, 0x50, 0x4e, 0x47] },
+  { re: /\.gif$/i, magic: [0x47, 0x49, 0x46, 0x38] },
+  { re: /\.jpe?g$/i, magic: [0xff, 0xd8, 0xff] }
+];
+
+function scanImage(name, buf) {
+  const kind = IMAGES.find((k) => k.re.test(name));
+  if (!kind) return null;
+  if (!kind.magic.every((b, j) => buf[j] === b)) return [{ file: name, line: 0, rule: 'image with wrong magic bytes' }];
+  // Metadata chunks (PNG tEXt, GIF comments) are text too.
+  return scanText(buf.toString('latin1'), name).map((h) => ({ ...h, line: 0 }));
+}
 
 export function scanArchive(buf, file) {
+  let entries;
+  try { entries = unzipEntries(buf); } catch (e) {
+    return [{ file, line: 0, rule: 'unreadable archive: ' + e.message }];
+  }
   const hits = [];
-  for (const e of unzipEntries(buf)) {
+  for (const e of entries) {
     const name = file + '!' + e.name;
+    if (e.name.endsWith('/') && e.data.length === 0) continue;   // directory entry
     if (ZIPPED.test(e.name)) { hits.push(...scanArchive(e.data, name)); continue; }
-    if (!TEXTY.test(e.name)) continue;
+    const img = scanImage(e.name, e.data);
+    if (img) { hits.push(...img); continue; }
+    if (!TEXTY.test(e.name) || e.data.includes(0)) {
+      hits.push({ file: name, line: 0, rule: 'unscannable (non-text) archive entry' });
+      continue;
+    }
     const text = e.data.toString('utf8');
     hits.push(...scanText(text, name));
     if (/\.json$/i.test(e.name)) {
-      try { hits.push(...settingsHits(JSON.parse(text), name)); } catch { /* not JSON */ }
+      try { hits.push(...settingsHits(JSON.parse(text), name)); } catch {
+        hits.push({ file: name, line: 0, rule: 'unparseable JSON in archive' });
+      }
     }
   }
   return hits;
@@ -97,6 +147,8 @@ export function scanArchive(buf, file) {
 
 export function scanFile(name, buf) {
   if (ZIPPED.test(name)) return scanArchive(buf, name);
-  if (buf.includes(0)) return [];   // binary (png, gif)
+  const img = scanImage(name, buf);
+  if (img) return img;
+  if (buf.includes(0)) return [{ file: name, line: 0, rule: 'unscannable binary file' }];
   return scanText(buf.toString('utf8'), name);
 }
