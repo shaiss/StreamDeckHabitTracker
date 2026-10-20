@@ -18,6 +18,11 @@ on:
   schedule:
     - cron: "0 12 * * 1" # Mondays 12:00 UTC
 
+# Least privilege (#115): this job never checks out the repo, never writes
+# packages/PRs/issues, and only curls the live deployment with HABIT_KEY from
+# env. An empty grant means GITHUB_TOKEN is useless if it ever leaks into logs.
+permissions: {}
+
 jobs:
   experiment:
     runs-on: ubuntu-latest
@@ -27,6 +32,7 @@ jobs:
           BASE: https://stream-deck-habit-tracker.vercel.app
           MODELS: ${{ github.event.inputs.models || 'glm-5.2,glm-4.7-flash' }}
           N: ${{ github.event.inputs.n || '3' }}
+          # Secret enters only via env (never ${{ secrets.* }} inside run:).
           HABIT_KEY: ${{ secrets.HABIT_KEY }}
         run: |
           URL="$BASE/api/experiment?run=1&models=$MODELS&n=$N"

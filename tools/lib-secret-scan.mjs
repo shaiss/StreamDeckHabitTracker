@@ -179,3 +179,51 @@ export function valueNeedles(value) {
   const plusSpace = uri.replace(/%20/g, '+');
   return [...new Set([value, uri, formEnc, plusSpace])].map((v) => Buffer.from(v, 'utf8'));
 }
+
+// Docs/UI handoff detector (#115): flag text that hands a caller a keyed URL.
+// Bare mentions of the legacy parameter (`?key=` in migration notes) with no
+// path/URL in front stay allowed. Does not flag hkey=/keys=/keyboard/etc.
+//
+// Catches: ?key= and &key= on URLs/paths, URL-encoded forms (%3Fkey%3D /
+// %26key%3D and mixed), and string/template construction that builds them.
+const KEY_LINK_PREFIX =
+  '(?:https?:\\/\\/[^\\s"\'`)\\]>]*|[A-Za-z0-9_./~-]*\\.html|\\/(?:api\\/)?[A-Za-z0-9_./~-]*)';
+
+const KEY_LINK_RULES = [
+  // path?key= / path?other=…&key= and URL-encoded ?/%3F and &/%26 with =/%3D
+  {
+    name: 'keyed url',
+    re: new RegExp(
+      KEY_LINK_PREFIX +
+        '(?:' +
+        '(?:\\?|%3[Ff])key(?:%3[Dd]|=)' + // ?key= immediately
+        '|' +
+        '(?:\\?|%3[Ff])[^\\s"\'`)\\]>]*?(?:&|%26)key(?:%3[Dd]|=)' + // ?…&key=
+        '|' +
+        '(?:&|%26)key(?:%3[Dd]|=)' + // &key= abutting the path
+        ')',
+      'gi'
+    )
+  },
+  // '?key=' +  /  "&key=" +  /  `?key=` +
+  { name: 'concat ?key=', re: /(['"`])\?key=\1\s*\+/g },
+  { name: 'concat &key=', re: /(['"`])&key=\1\s*\+/g },
+  // `...?key=${` / `...&key=${`
+  { name: 'template ?key=', re: /`[^`\n]*\?key=\$\{/g },
+  { name: 'template &key=', re: /`[^`\n]*&key=\$\{/g },
+  // '?' + 'key=' / "&" + "key=" (same or mixed quotes)
+  { name: 'split concat key=', re: /(['"`])([?&])\1\s*\+\s*(['"`])key=\3/g }
+];
+
+export function findKeyLinkHandoffs(text) {
+  const hits = [];
+  for (const { name, re } of KEY_LINK_RULES) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      const line = text.slice(0, m.index).split('\n').length;
+      hits.push({ line, rule: name, match: m[0].slice(0, 96) });
+    }
+  }
+  return hits;
+}
