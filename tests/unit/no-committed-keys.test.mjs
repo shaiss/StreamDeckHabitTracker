@@ -355,7 +355,14 @@ test('generate --key keeps ?key= out of urls.txt and stdout', () => {
   const src = readFileSync(join(ROOT, 'tools/generate.mjs'), 'utf8');
   assert.match(src, /withKey\s*=\s*false/);
   assert.match(src, /buildUrl\(h,\s*\{\s*withKey:\s*true\s*\}\)/);
-  assert.match(src, /buildSlotUrl\(n,\s*\{\s*withKey:\s*true\s*\}\)/);
+  // Front-page slots AND coach-page (page 2+) slots must both opt in — #119
+  // left the coach-page fill on bare buildSlotUrl(n).
+  assert.equal(
+    [...src.matchAll(/buildSlotUrl\(n,\s*\{\s*withKey:\s*true\s*\}\)/g)].length,
+    2,
+    'expected withKey:true on front-page and coach-page buildSlotUrl Settings'
+  );
+  assert.doesNotMatch(src, /Settings:\s*\{\s*url:\s*buildSlotUrl\(n\)\s*,/);
   // reportRows / urls.txt use the unkeyed form (no second arg).
   assert.match(src, /buildUrl\(h\)\}/);
   assert.match(src, /buildSlotUrl\(i \+ 1\)\}/);
@@ -376,8 +383,36 @@ test('generate --key runtime keeps key out of urls.txt and stdout', () => {
   const fakeKey = 'Zq' + '7rT' + '9wLp';
   const urlsPath = join(ROOT, 'dist/urls.txt');
   const profilePath = join(ROOT, 'dist/Habit Tracker.streamDeckProfile');
+  const multiPath = join(ROOT, 'dist/Habit Tracker multipage.streamDeckProfile');
   const prevUrls = existsSync(urlsPath) ? readFileSync(urlsPath) : null;
   const prevProfile = existsSync(profilePath) ? readFileSync(profilePath) : null;
+  const prevMulti = existsSync(multiPath) ? readFileSync(multiPath) : null;
+  const webRequestUrls = (profileBytes) => {
+    const httpUrls = [];
+    const walk = (o) => {
+      if (!o || typeof o !== 'object') return;
+      if (o.UUID === 'gg.datagram.web-requests.http' &&
+          o.Settings && typeof o.Settings.url === 'string') {
+        httpUrls.push(o.Settings.url);
+      }
+      for (const v of Object.values(o)) walk(v);
+    };
+    for (const e of unzipEntries(profileBytes)) {
+      if (!e.name.endsWith('manifest.json')) continue;
+      walk(JSON.parse(e.data.toString('utf8')));
+    }
+    return httpUrls;
+  };
+  const assertEveryUrlKeyed = (httpUrls, label) => {
+    assert.ok(httpUrls.length > 0,
+      'no gg.datagram.web-requests.http Settings.url in ' + label);
+    for (const url of httpUrls) {
+      let param;
+      try { param = new URL(url).searchParams.get(K); } catch { param = null; }
+      assert.equal(param, fakeKey,
+        label + ' Settings.url missing --key value: ' + url);
+    }
+  };
   try {
     const stdout = execFileSync(process.execPath, [
       join(ROOT, 'tools/generate.mjs'),
@@ -398,35 +433,42 @@ test('generate --key runtime keeps key out of urls.txt and stdout', () => {
     // Profile must still embed --key into every Web Requests Settings.url (the
     // only path that opts into withKey:true). Without this, a regression that
     // drops the key from some/all zip actions would pass the stdout/urls.txt
-    // checks above. Front-page habit + slot actions all use withKey:true; this
-    // test stays on --pages=1 so coach-page actions are not in the zip.
+    // checks above.
     assert.ok(existsSync(profilePath), 'keyed profile was not written');
-    const entries = unzipEntries(readFileSync(profilePath));
-    const httpUrls = [];
-    const walk = (o) => {
-      if (!o || typeof o !== 'object') return;
-      if (o.UUID === 'gg.datagram.web-requests.http' &&
-          o.Settings && typeof o.Settings.url === 'string') {
-        httpUrls.push(o.Settings.url);
-      }
-      for (const v of Object.values(o)) walk(v);
-    };
-    for (const e of entries) {
-      if (!e.name.endsWith('manifest.json')) continue;
-      walk(JSON.parse(e.data.toString('utf8')));
-    }
-    assert.ok(httpUrls.length > 0,
-      'no gg.datagram.web-requests.http Settings.url in keyed profile');
-    for (const url of httpUrls) {
-      let param;
-      try { param = new URL(url).searchParams.get(K); } catch { param = null; }
-      assert.equal(param, fakeKey,
-        'gg.datagram.web-requests.http Settings.url missing --key value: ' + url);
-    }
+    assertEveryUrlKeyed(webRequestUrls(readFileSync(profilePath)), 'single-page keyed profile');
+
+    // Multi-page (#119 follow-up): coach-page (page 2+) slot actions must also
+    // carry ?key= — front-page habit/slot paths already used withKey:true, but
+    // the coach-page fill historically called buildSlotUrl(n) bare.
+    const multiStdout = execFileSync(process.execPath, [
+      join(ROOT, 'tools/generate.mjs'),
+      'http://127.0.0.1:9/api/log',
+      '--' + K + '=' + fakeKey,
+      '--static',
+      '--slots=1',
+      '--no-dashboard',
+      '--model=mini',
+      '--pages=2',
+      '--outfile=' + multiPath
+    ], { cwd: ROOT, encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.ok(!multiStdout.includes(fakeKey), 'multi-page stdout leaks --key value');
+    assert.ok(existsSync(multiPath), 'multi-page keyed profile was not written');
+    const multiUrls = webRequestUrls(readFileSync(multiPath));
+    assertEveryUrlKeyed(multiUrls, 'multi-page keyed profile');
+    // Prove coach-page slots (5+) are present — otherwise a pages=1-shaped zip
+    // would still satisfy "every url keyed" without covering the bug.
+    assert.ok(
+      multiUrls.some((u) => {
+        try { return Number(new URL(u).searchParams.get('slot')) >= 5; } catch { return false; }
+      }),
+      'multi-page keyed profile has no coach-page slot>=5 web-requests action'
+    );
   } finally {
     if (prevUrls) writeFileSync(urlsPath, prevUrls);
     else if (existsSync(urlsPath)) rmSync(urlsPath);
     if (prevProfile) writeFileSync(profilePath, prevProfile);
     else if (existsSync(profilePath)) rmSync(profilePath);
+    if (prevMulti) writeFileSync(multiPath, prevMulti);
+    else if (existsSync(multiPath)) rmSync(multiPath);
   }
 });

@@ -360,7 +360,7 @@ for (let p = 1; p < pageCount; p++) {
           ActionID: randomUUID().toUpperCase(),
           LinkedTitle: true,
           Name: 'HTTP Request',
-          Settings: { url: buildSlotUrl(n), method: 'GET', contentType: '', headers: '', body: '' },
+          Settings: { url: buildSlotUrl(n, { withKey: true }), method: 'GET', contentType: '', headers: '', body: '' },
           Resources: null,
           State: 0,
           States: states(null, `✨ AI ${n}`),
