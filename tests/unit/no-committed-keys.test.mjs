@@ -8,7 +8,7 @@ import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, sy
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readIfPresent, scanText, scanFile, valueNeedles, findKeyLinkHandoffs } from '../../tools/lib-secret-scan.mjs';
+import { readIfPresent, scanText, scanFile, valueNeedles, findKeyLinkHandoffs, unzipEntries } from '../../tools/lib-secret-scan.mjs';
 import { keyedOutputAllowed, writeKeyedOutput } from '../../tools/lib-keyed-output.mjs';
 import { zip } from '../../tools/lib-zip.mjs';
 
@@ -395,6 +395,27 @@ test('generate --key runtime keeps key out of urls.txt and stdout', () => {
     assert.ok(!urls.includes(QK), 'urls.txt contains ' + QK);
     assert.ok(!urls.includes(AK), 'urls.txt contains ' + AK);
     assert.ok(!urls.includes(fakeKey), 'urls.txt leaks --key value');
+    // Profile must still embed --key into Web Requests Settings.url (the only
+    // path that opts into withKey:true). Without this, a regression that drops
+    // the key from the zip would pass the stdout/urls.txt checks above.
+    assert.ok(existsSync(profilePath), 'keyed profile was not written');
+    const entries = unzipEntries(readFileSync(profilePath));
+    let keyedHttp = 0;
+    const walk = (o) => {
+      if (!o || typeof o !== 'object') return;
+      if (o.UUID === 'gg.datagram.web-requests.http' &&
+          o.Settings && typeof o.Settings.url === 'string' &&
+          o.Settings.url.includes(fakeKey)) {
+        keyedHttp++;
+      }
+      for (const v of Object.values(o)) walk(v);
+    };
+    for (const e of entries) {
+      if (!e.name.endsWith('manifest.json')) continue;
+      walk(JSON.parse(e.data.toString('utf8')));
+    }
+    assert.ok(keyedHttp > 0,
+      'no gg.datagram.web-requests.http Settings.url carries the --key value');
   } finally {
     if (prevUrls) writeFileSync(urlsPath, prevUrls);
     else if (existsSync(urlsPath)) rmSync(urlsPath);
