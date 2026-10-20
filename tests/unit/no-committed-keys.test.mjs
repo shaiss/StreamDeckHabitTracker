@@ -367,3 +367,38 @@ test('generate --key keeps ?key= out of urls.txt and stdout', () => {
   assert.doesNotMatch(report, /withKey:\s*true/);
   assert.doesNotMatch(report, /\.set\(\s*['"]key['"]/);
 });
+
+test('generate --key runtime keeps key out of urls.txt and stdout', () => {
+  // Runtime companion to the source-level guard above: a future edit could keep
+  // the regexes green while still appending --key onto printed/manual URLs.
+  // Dummy value only — never env, never a real secret. generate.mjs always
+  // writes dist/urls.txt (+ a keyed profile under dist/); restore afterward.
+  const fakeKey = 'Zq' + '7rT' + '9wLp';
+  const urlsPath = join(ROOT, 'dist/urls.txt');
+  const profilePath = join(ROOT, 'dist/Habit Tracker.streamDeckProfile');
+  const prevUrls = existsSync(urlsPath) ? readFileSync(urlsPath) : null;
+  const prevProfile = existsSync(profilePath) ? readFileSync(profilePath) : null;
+  try {
+    const stdout = execFileSync(process.execPath, [
+      join(ROOT, 'tools/generate.mjs'),
+      'http://127.0.0.1:9/api/log',
+      '--' + K + '=' + fakeKey,
+      '--static',
+      '--slots=1',
+      '--no-dashboard',
+      '--model=mini'
+    ], { cwd: ROOT, encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.ok(!stdout.includes(QK), 'stdout contains ' + QK);
+    assert.ok(!stdout.includes(AK), 'stdout contains ' + AK);
+    assert.ok(!stdout.includes(fakeKey), 'stdout leaks --key value');
+    const urls = readFileSync(urlsPath, 'utf8');
+    assert.ok(!urls.includes(QK), 'urls.txt contains ' + QK);
+    assert.ok(!urls.includes(AK), 'urls.txt contains ' + AK);
+    assert.ok(!urls.includes(fakeKey), 'urls.txt leaks --key value');
+  } finally {
+    if (prevUrls) writeFileSync(urlsPath, prevUrls);
+    else if (existsSync(urlsPath)) rmSync(urlsPath);
+    if (prevProfile) writeFileSync(profilePath, prevProfile);
+    else if (existsSync(profilePath)) rmSync(profilePath);
+  }
+});
