@@ -215,6 +215,7 @@ const KEY_LINK_RULES = [
   { name: 'split concat key=', re: /(['"`])([?&])\1\s*\+\s*(['"`])key=\3/g }
 ];
 
+/** Flag docs/UI text that hands callers a keyed URL (?key= / &key= forms). */
 export function findKeyLinkHandoffs(text) {
   const hits = [];
   for (const { name, re } of KEY_LINK_RULES) {

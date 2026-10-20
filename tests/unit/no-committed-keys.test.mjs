@@ -361,7 +361,9 @@ test('generate --key keeps ?key= out of urls.txt and stdout', () => {
   assert.match(src, /buildSlotUrl\(i \+ 1\)\}/);
   // Stdout report must use the same unkeyed builders (reportRows / buildSlotUrl
   // without withKey), never a raw q.set('key') beside the console.log loop.
-  const report = src.slice(src.indexOf('// ---- report'));
+  const reportAt = src.indexOf('// ---- report');
+  assert.ok(reportAt >= 0, 'report marker missing in tools/generate.mjs');
+  const report = src.slice(reportAt);
   assert.doesNotMatch(report, /withKey:\s*true/);
   assert.doesNotMatch(report, /\.set\(\s*['"]key['"]/);
 });

@@ -127,11 +127,13 @@ const { habits, source: habitsSource } = await loadHabits(siteOrigin, ROOT);
 // header; a URL key would land in dist/urls.txt (plain writeFileSync) and in
 // stdout. Web Requests profile Settings still embed the key in the URL when
 // --key is set — that path goes through writeKeyedOutput and is never printed.
+/** Build a habit log URL; withKey embeds ?key= only for Web Requests Settings. */
 const buildUrl = (h, { withKey = false } = {}) => {
   const q = new URLSearchParams({ habit: h.name });
   if (withKey && key) q.set('key', key);
   return `${execBase}?${q.toString()}`;
 };
+/** Build a slot log URL; withKey embeds ?key= only for Web Requests Settings. */
 const buildSlotUrl = (n, { withKey = false } = {}) => {
   const q = new URLSearchParams({ slot: String(n) });
   if (withKey && key) q.set('key', key);
