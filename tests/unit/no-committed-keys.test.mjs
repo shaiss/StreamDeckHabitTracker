@@ -8,7 +8,7 @@ import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, sy
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readIfPresent, scanText, scanFile, valueNeedles } from '../../tools/lib-secret-scan.mjs';
+import { readIfPresent, scanText, scanFile, valueNeedles, findKeyLinkHandoffs, unzipEntries } from '../../tools/lib-secret-scan.mjs';
 import { keyedOutputAllowed, writeKeyedOutput } from '../../tools/lib-keyed-output.mjs';
 import { zip } from '../../tools/lib-zip.mjs';
 
@@ -16,6 +16,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 // Fixtures are assembled at runtime so this file never matches itself.
 const K = 'key';
 const FAKE = 'Zq' + '7rT' + '9wLp';
+const QK = '?' + K + '=';
+const AK = '&' + K + '=';
 
 test('tracked tree carries no HABIT_KEY material', () => {
   // Fail closed (Cipher L1): no git, no file list, or an unreadable file is a
@@ -291,15 +293,140 @@ test('keyed write publishes through a pinned directory and not through a hardlin
   }
 });
 
+test('findKeyLinkHandoffs flags URL, encoded, concat, and template forms', () => {
+  const bad = [
+    'see https://example.test/api/log' + QK + 'SECRET',
+    'open deck.html' + QK + 'x',
+    'paste /api/log?habit=Water' + AK + 'x',
+    // URL-encoded ?key= / &key=
+    'https://example.test/api/log%3F' + K + '%3D' + FAKE,
+    'https://example.test/x%3f' + K + '%3d' + FAKE,
+    '/api/log%26' + K + '%3D' + FAKE,
+    "const u = base + '" + QK + "' + secret",
+    'const u = base + "' + AK + '" + secret',
+    'const u = base + `' + QK + '` + secret',
+    'const u = `/api/log' + QK + '${secret}`',
+    'const u = `https://x/api/log?habit=Water' + AK + '${k}`',
+    "const u = base + '?' + '" + K + "=' + secret",
+    'const u = base + "&" + "' + K + '=" + secret',
+    "const u = base + '?' + \"" + K + "=\" + secret"
+  ];
+  for (const s of bad) {
+    assert.ok(findKeyLinkHandoffs(s).length > 0, 'missed handoff: ' + s);
+  }
+});
+
+test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {
+  const ok = [
+    'The server still accepts ' + QK + ' during the transition.',
+    'rejecting ' + QK + ' there is issue #115',
+    'append ' + QK + '... when HABIT_KEY is set',
+    'keyboard shortcuts and hotkey=1 stay fine',
+    'passkey= or monkey= must not trip this',
+    '/api/slots?deck=1&keys=15',
+    '/api/log?hkey=1&intensity=high',
+    "params.get('" + K + "')",
+    'searchParams.get("' + K + '")',
+    "headers['x-habit-" + K + "'] = secret",
+    'Do not put HABIT_KEY in these URLs — send x-habit-key as a header'
+  ];
+  for (const s of ok) {
+    assert.deepEqual(findKeyLinkHandoffs(s), [], 'false positive: ' + s);
+  }
+});
+
 test('no docs or UI hand out URL-key links', () => {
-  const files = execFileSync('git', ['ls-files', '*.md', 'public/*.html', 'public/*.js'], { cwd: ROOT })
+  const files = execFileSync('git', ['ls-files', '*.md', 'public/*.html', 'public/*.js', 'public/*.ps1'], { cwd: ROOT })
     .toString().split('\n').filter((f) => f && !f.startsWith('docs/superpowers/'));
-  // A link: a URL, an .html page, or a rooted path whose query sets key.
-  // Bare mentions of the legacy parameter (`?key=` in migration notes, and
-  // code that only reads or builds it) have no path in front and stay allowed.
-  const link = /(?:https?:\/\/[^\s"'`)>]*|[A-Za-z0-9_./~-]*\.html|\/)[?&]key=/;
+  // Bare mentions of the legacy parameter (`?key=` in migration notes) have
+  // no path in front and stay allowed; construction and encoded forms do not.
   for (const f of files) {
     const s = readFileSync(join(ROOT, f), 'utf8');
-    assert.doesNotMatch(s, link, f + ' suggests a ?key= link');
+    const hits = findKeyLinkHandoffs(s);
+    assert.deepEqual(hits, [], f + ' hands out a keyed URL:\n' +
+      hits.map((h) => `  ${h.line}: ${h.rule} ${JSON.stringify(h.match)}`).join('\n'));
+  }
+});
+
+test('generate --key keeps ?key= out of urls.txt and stdout', () => {
+  // Source-level guard: public/manual URL builders default to withKey:false,
+  // and only Web Requests profile Settings opt into withKey:true (those bytes
+  // go through writeKeyedOutput; they are never printed).
+  const src = readFileSync(join(ROOT, 'tools/generate.mjs'), 'utf8');
+  assert.match(src, /withKey\s*=\s*false/);
+  assert.match(src, /buildUrl\(h,\s*\{\s*withKey:\s*true\s*\}\)/);
+  assert.match(src, /buildSlotUrl\(n,\s*\{\s*withKey:\s*true\s*\}\)/);
+  // reportRows / urls.txt use the unkeyed form (no second arg).
+  assert.match(src, /buildUrl\(h\)\}/);
+  assert.match(src, /buildSlotUrl\(i \+ 1\)\}/);
+  // Stdout report must use the same unkeyed builders (reportRows / buildSlotUrl
+  // without withKey), never a raw q.set('key') beside the console.log loop.
+  const reportAt = src.indexOf('// ---- report');
+  assert.ok(reportAt >= 0, 'report marker missing in tools/generate.mjs');
+  const report = src.slice(reportAt);
+  assert.doesNotMatch(report, /withKey:\s*true/);
+  assert.doesNotMatch(report, /\.set\(\s*['"]key['"]/);
+});
+
+test('generate --key runtime keeps key out of urls.txt and stdout', () => {
+  // Runtime companion to the source-level guard above: a future edit could keep
+  // the regexes green while still appending --key onto printed/manual URLs.
+  // Dummy value only — never env, never a real secret. generate.mjs always
+  // writes dist/urls.txt (+ a keyed profile under dist/); restore afterward.
+  const fakeKey = 'Zq' + '7rT' + '9wLp';
+  const urlsPath = join(ROOT, 'dist/urls.txt');
+  const profilePath = join(ROOT, 'dist/Habit Tracker.streamDeckProfile');
+  const prevUrls = existsSync(urlsPath) ? readFileSync(urlsPath) : null;
+  const prevProfile = existsSync(profilePath) ? readFileSync(profilePath) : null;
+  try {
+    const stdout = execFileSync(process.execPath, [
+      join(ROOT, 'tools/generate.mjs'),
+      'http://127.0.0.1:9/api/log',
+      '--' + K + '=' + fakeKey,
+      '--static',
+      '--slots=1',
+      '--no-dashboard',
+      '--model=mini'
+    ], { cwd: ROOT, encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.ok(!stdout.includes(QK), 'stdout contains ' + QK);
+    assert.ok(!stdout.includes(AK), 'stdout contains ' + AK);
+    assert.ok(!stdout.includes(fakeKey), 'stdout leaks --key value');
+    const urls = readFileSync(urlsPath, 'utf8');
+    assert.ok(!urls.includes(QK), 'urls.txt contains ' + QK);
+    assert.ok(!urls.includes(AK), 'urls.txt contains ' + AK);
+    assert.ok(!urls.includes(fakeKey), 'urls.txt leaks --key value');
+    // Profile must still embed --key into every Web Requests Settings.url (the
+    // only path that opts into withKey:true). Without this, a regression that
+    // drops the key from some/all zip actions would pass the stdout/urls.txt
+    // checks above. Front-page habit + slot actions all use withKey:true; this
+    // test stays on --pages=1 so coach-page actions are not in the zip.
+    assert.ok(existsSync(profilePath), 'keyed profile was not written');
+    const entries = unzipEntries(readFileSync(profilePath));
+    const httpUrls = [];
+    const walk = (o) => {
+      if (!o || typeof o !== 'object') return;
+      if (o.UUID === 'gg.datagram.web-requests.http' &&
+          o.Settings && typeof o.Settings.url === 'string') {
+        httpUrls.push(o.Settings.url);
+      }
+      for (const v of Object.values(o)) walk(v);
+    };
+    for (const e of entries) {
+      if (!e.name.endsWith('manifest.json')) continue;
+      walk(JSON.parse(e.data.toString('utf8')));
+    }
+    assert.ok(httpUrls.length > 0,
+      'no gg.datagram.web-requests.http Settings.url in keyed profile');
+    for (const url of httpUrls) {
+      let param;
+      try { param = new URL(url).searchParams.get(K); } catch { param = null; }
+      assert.equal(param, fakeKey,
+        'gg.datagram.web-requests.http Settings.url missing --key value: ' + url);
+    }
+  } finally {
+    if (prevUrls) writeFileSync(urlsPath, prevUrls);
+    else if (existsSync(urlsPath)) rmSync(urlsPath);
+    if (prevProfile) writeFileSync(profilePath, prevProfile);
+    else if (existsSync(profilePath)) rmSync(profilePath);
   }
 });
