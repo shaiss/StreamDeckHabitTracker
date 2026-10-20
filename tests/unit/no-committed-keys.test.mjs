@@ -395,18 +395,19 @@ test('generate --key runtime keeps key out of urls.txt and stdout', () => {
     assert.ok(!urls.includes(QK), 'urls.txt contains ' + QK);
     assert.ok(!urls.includes(AK), 'urls.txt contains ' + AK);
     assert.ok(!urls.includes(fakeKey), 'urls.txt leaks --key value');
-    // Profile must still embed --key into Web Requests Settings.url (the only
-    // path that opts into withKey:true). Without this, a regression that drops
-    // the key from the zip would pass the stdout/urls.txt checks above.
+    // Profile must still embed --key into every Web Requests Settings.url (the
+    // only path that opts into withKey:true). Without this, a regression that
+    // drops the key from some/all zip actions would pass the stdout/urls.txt
+    // checks above. Front-page habit + slot actions all use withKey:true; this
+    // test stays on --pages=1 so coach-page actions are not in the zip.
     assert.ok(existsSync(profilePath), 'keyed profile was not written');
     const entries = unzipEntries(readFileSync(profilePath));
-    let keyedHttp = 0;
+    const httpUrls = [];
     const walk = (o) => {
       if (!o || typeof o !== 'object') return;
       if (o.UUID === 'gg.datagram.web-requests.http' &&
-          o.Settings && typeof o.Settings.url === 'string' &&
-          o.Settings.url.includes(fakeKey)) {
-        keyedHttp++;
+          o.Settings && typeof o.Settings.url === 'string') {
+        httpUrls.push(o.Settings.url);
       }
       for (const v of Object.values(o)) walk(v);
     };
@@ -414,8 +415,14 @@ test('generate --key runtime keeps key out of urls.txt and stdout', () => {
       if (!e.name.endsWith('manifest.json')) continue;
       walk(JSON.parse(e.data.toString('utf8')));
     }
-    assert.ok(keyedHttp > 0,
-      'no gg.datagram.web-requests.http Settings.url carries the --key value');
+    assert.ok(httpUrls.length > 0,
+      'no gg.datagram.web-requests.http Settings.url in keyed profile');
+    for (const url of httpUrls) {
+      let param;
+      try { param = new URL(url).searchParams.get(K); } catch { param = null; }
+      assert.equal(param, fakeKey,
+        'gg.datagram.web-requests.http Settings.url missing --key value: ' + url);
+    }
   } finally {
     if (prevUrls) writeFileSync(urlsPath, prevUrls);
     else if (existsSync(urlsPath)) rmSync(urlsPath);
