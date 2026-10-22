@@ -4,12 +4,18 @@ on:
   push:
     branches: [claude/stream-deck-developers-tqy1gj, main]
   pull_request:
+  # Value scan also on a quiet weekly beat so a missed push still catches a
+  # committed secret (#115). Pattern (non-value) checks stay on every PR.
+  schedule:
+    - cron: "17 5 * * 1" # Mondays 05:17 UTC
 
 permissions:
   contents: read
 
 jobs:
   unit:
+    # Schedule is value-scan only; pattern checks already ran on every PR/push.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,10 +25,30 @@ jobs:
       # Unit tests are zero-dependency by design — no npm install.
       # Prompt/sanitizer/shape tests import lib/coach-shape.js only (not
       # lib/agent.js / ai). Do not add framework packages (e.g. @mastra/*) here.
+      # Includes the pattern-based key scanner (no secret value required).
       - run: npm test
-      # Value-based leak check (Cipher L1): the real key must not be anywhere in
-      # the tree. Skips when the secret is unavailable (e.g. fork PRs); the value
-      # is passed via env/stdin only and never echoed.
+      - name: Syntax-check all source
+        run: |
+          set -e
+          for f in $(git ls-files '*.js' '*.mjs'); do
+            node --check "$f"
+          done
+
+  # Value-based leak check (Cipher L1 / #115): the real HABIT_KEY must not be
+  # anywhere in the tree. Runs only on push to the default branches and on the
+  # weekly schedule — NEVER on pull_request. A crafted PR could replace
+  # tools/scan-value.mjs (or the step script) and exfiltrate the secret when
+  # GitHub injects it for same-repo PRs. Pattern checks above stay on PRs.
+  habit-key-value-scan:
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: HABIT_KEY value scan
         env:
           HABIT_KEY: ${{ secrets.HABIT_KEY }}
@@ -32,21 +58,17 @@ jobs:
             echo "::error::The HABIT_KEY value is committed in the tree (git grep)."; exit 1
           fi
           node tools/scan-value.mjs
-      - name: Syntax-check all source
-        run: |
-          set -e
-          for f in $(git ls-files '*.js' '*.mjs'); do
-            node --check "$f"
-          done
 
   e2e:
+    # Schedule only needs the value scan; skip the longer e2e suite there.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm i playwright-core @elgato/streamdeck esbuild --no-save
+      - run: npm ci
       - name: Install Chromium
         run: npx playwright-core install --with-deps chromium
       - run: npm run test:e2e
