@@ -20,23 +20,23 @@ to this repo — **every push to the default branch deploys production**).
 ## Commands
 
 ```bash
-# One-time per machine (tool deps are intentionally NOT in package.json —
-# runtime deps are kept lean on purpose so Vercel's build stays trivial, but
-# they are NOT just @vercel/functions: the coach runs on the Vercel AI SDK
-# (generateText + tool()), so @vercel/functions, ai, @ai-sdk/openai-compatible,
-# and zod are all load-bearing runtime deps and belong in package.json; do not
-# prune them. (Mastra was dropped — decision #66 / PR #96.)
-# esbuild + @elgato/streamdeck are BUILD-time deps of the Stream Deck plugin —
-# the SDK is bundled into bin/plugin.js, never installed at runtime):
-npm i playwright-core pngjs gifenc esbuild @elgato/streamdeck --no-save
+# Install (runtime deps + exact plugin/tool pins in devDependencies — #108).
+# Pins: esbuild@0.28.2, @elgato/streamdeck@3.0.2, ws@8.22.0 (overrides),
+# playwright-core@1.64.1, pngjs@7.0.0, gifenc@1.0.3. Runtime deps stay in
+# dependencies (@vercel/functions, ai, @ai-sdk/openai-compatible, zod) — do
+# not prune them. (Mastra was dropped — decision #66 / PR #96.) The SDK is
+# bundled into bin/plugin.js, never needed at Vercel runtime.
+npm ci
 
 # Regenerate still icons (icons/) and animated GIFs (icons/animated/):
 node tools/make-icons.mjs
 node tools/make-animations.mjs
 
 # Rebuild the Stream Deck plugin package into public/downloads/ (renders
-# manifest images, bundles src/ -> bin/plugin.js, zips). Bundle-only rebuild:
-# node tools/bundle-plugin.mjs
+# manifest images, bundles src/ -> bin/plugin.js, zips). Reproducible
+# bundle-only rebuild (no image re-render):
+#   npm run build:plugin
+# Full rebuild with images:
 node tools/build-plugin.mjs
 
 # Regenerate the bundled profile (single-user build: 15-key, plugin flavor,

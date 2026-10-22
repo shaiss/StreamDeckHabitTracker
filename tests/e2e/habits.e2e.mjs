@@ -2,7 +2,7 @@
 // The mock is stateful and runs the REAL roster decision logic (lib/roster.js)
 // behind /api/roster, so these tests cover the wiring between the two rather
 // than a hand-written stub of it.
-// Requires: npm i playwright-core --no-save, and Chromium at CHROME_PATH or
+// Requires: npm ci (playwright-core pinned), and Chromium at CHROME_PATH or
 // the repo default (/opt/pw-browsers/chromium).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';

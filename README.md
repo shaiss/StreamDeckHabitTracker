@@ -364,9 +364,10 @@ npm test          # unit suite
 npm run test:e2e  # habit-manager flows in Chromium + the real plugin against
                   # a mock Stream Deck WebSocket server
 
-# Tool dependencies are intentionally not in package.json — runtime deps stay
-# lean so Vercel's build stays trivial. Install them once per machine:
-npm i playwright-core pngjs gifenc esbuild @elgato/streamdeck --no-save
+# Plugin/tool build pins live in package.json devDependencies (exact versions
+# + overrides.ws@8.22.0 so bin/plugin.js is reproducible — #108):
+npm ci
+npm run build:plugin   # == node tools/build-plugin.mjs --no-images
 ```
 
 Both suites run in CI on every pull request, alongside a `node --check` pass over every

@@ -8,7 +8,7 @@
 // renderer changes; driving the real renderers with hostile values covers all
 // of them by construction, including multiline templates.
 //
-// Requires: npm i playwright-core --no-save, and Chromium at CHROME_PATH or the
+// Requires: npm ci (playwright-core pinned), and Chromium at CHROME_PATH or the
 // repo default (/opt/pw-browsers/chromium).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
