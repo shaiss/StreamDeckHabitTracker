@@ -11,7 +11,7 @@
 import { getQuestions, getSlots, isConfigured } from '../lib/store.js';
 import { dismissQuestion } from '../lib/coach.js';
 import { openQuestion, scoreQuestions } from '../lib/question.js';
-import { keyOk } from '../lib/habit-key.js';
+import { keyDenied } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -32,10 +32,7 @@ export default async function handler(req, res) {
 
     if (q.dismiss === '1') {
       // A write, so it honors HABIT_KEY like /api/log and the nudge dismissal.
-      if (!keyOk(req)) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+      if (keyDenied(req, res)) return;
       // Addressable two ways: by slot (what the deck knows — it holds a key,
       // not a question id) or by qid (what the dashboard knows).
       let qid = (q.qid || '').toString();

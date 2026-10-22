@@ -7,7 +7,7 @@
 import { getProfile, setProfile, isConfigured } from '../lib/store.js';
 import { isValidTz, HOME_TZ } from '../lib/tz.js';
 import { normalizeConsent } from '../lib/takeover.js';
-import { keyOk } from '../lib/habit-key.js';
+import { keyDenied } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -35,10 +35,7 @@ export default async function handler(req, res) {
     }
 
     const body = req.method === 'POST' ? (typeof req.body === 'object' && req.body ? req.body : {}) : q;
-    if (!keyOk(req, body)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+    if (keyDenied(req, res, body)) return;
 
     const prev = (await getProfile()) || {};
     const next = { ...prev, updatedAt: Date.now() };
