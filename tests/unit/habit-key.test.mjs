@@ -257,10 +257,10 @@ test('web pages load the helper and drop the old ?key= plumbing', () => {
     assert.doesNotMatch(s, /localStorage/, f + ' must not use localStorage');
     assert.doesNotMatch(s, /withKey|'&key='|get\('key'\)/, f + ' still builds ?key= URLs');
   }
-  const h = read('public/habits.html');
+  const h = read('public/habits.js');
   assert.match(h, /HabitKey\.postJson\('\/api\/roster'/);
   assert.match(h, /HabitKey\.postJson\('\/api\/habits'/);
-  const i = read('public/index.html');
+  const i = read('public/index.js');
   assert.match(i, /HabitKey\.fetch\('\/api\/suggest'/);
   assert.match(i, /HabitKey\.postJson\('\/api\/profile'/);
 });

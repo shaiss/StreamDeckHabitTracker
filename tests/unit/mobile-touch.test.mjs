@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 const read = (f) => readFileSync(new URL('../../' + f, import.meta.url), 'utf8');
 
 test('virtual deck keys claim the touch gesture', () => {
-  const deck = read('public/deck.html');
+  const deck = read('public/deck.html') + '\n' + read('public/deck.js');
   assert.match(deck, /\.k\s*\{[^}]*touch-action:\s*none/s,
     '.k must use touch-action:none so a finger wobble cannot become a scroll cancel');
   assert.match(deck, /setPointerCapture/,

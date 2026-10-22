@@ -62,7 +62,7 @@ test('legacy 👍/👎 answers still paint as the gate verbs', () => {
 test('both renderers import the same module — they cannot fork the map', () => {
   const faces = readFileSync(new URL('../../streamdeck-plugin/src/faces.mjs', import.meta.url), 'utf8');
   const plugin = readFileSync(new URL('../../streamdeck-plugin/src/plugin.mjs', import.meta.url), 'utf8');
-  const deck = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
+  const deck = readFileSync(new URL('../../public/deck.js', import.meta.url), 'utf8');
   assert.match(faces, /from '\.\.\/\.\.\/public\/glyphs\.js'/);
   assert.match(plugin, /from '\.\.\/\.\.\/public\/glyphs\.js'/);
   assert.match(deck, /from '\/glyphs\.js'/);

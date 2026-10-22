@@ -22,7 +22,7 @@ is still the final verification — never skip step 6.
 1. **Pre-flight — no exceptions**:
    - `npm test` — unit suite (zero-dep, runs anywhere). Must be green.
    - If `public/`, `streamdeck-plugin/`, or `tools/` changed: `npm run test:e2e`
-     (needs `npm i playwright-core --no-save` once; Chromium at
+     (needs `npm ci` for pinned playwright-core; Chromium at
      `/opt/pw-browsers/chromium` or `CHROME_PATH`). Must be green.
    - `node --check` every touched `.js`/`.mjs` file.
    - New UI behavior (buttons, forms, flows) ships WITH a regression test in

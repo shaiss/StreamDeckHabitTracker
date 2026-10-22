@@ -5,7 +5,7 @@
 // name-hash the Stream Deck plugin uses, so baked icons and live-rendered
 // faces are one family. Output -> icons/<name>.png (576x576).
 //
-//   npm i playwright-core --no-save   # one-time, if regenerating
+//   npm ci   # playwright-core pinned in package.json (#108)
 //   node tools/make-icons.mjs
 
 import { readFileSync, mkdirSync, existsSync } from 'node:fs';
