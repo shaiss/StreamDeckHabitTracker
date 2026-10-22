@@ -202,7 +202,7 @@ test('owedFrame lights wait only for a live question or nudge', () => {
 });
 
 test('the virtual deck renders question keys through the shared grammar', () => {
-  const src = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../../public/deck.js', import.meta.url), 'utf8');
   const plugin = readFileSync(new URL('../../streamdeck-plugin/src/plugin.mjs', import.meta.url), 'utf8');
   assert.match(src, /qface/, 'a question face exists');
   assert.match(src, /questionPaint\(def\)/, 'and is painted from the shared grammar');

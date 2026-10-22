@@ -15,6 +15,7 @@ import { zaiKey } from '../lib/ai.js';
 import { getHabits } from '../lib/habits.js';
 import { reactTo, answerQuestion } from '../lib/coach.js';
 import { tzHelpers } from '../lib/tz.js';
+import { keyOk } from '../lib/habit-key.js';
 
 // Only two levels, because only two are expressible on a key: a plain tap
 // means "normal" (no field at all) and a double-tap means "big". `low` exists
@@ -27,6 +28,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   // Undo is a DELETE, which is not a "simple" cross-origin request — without
   // these an in-browser caller from another origin gets stopped at preflight.
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-habit-key');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') {
     res.status(204).end();
@@ -35,9 +37,9 @@ export default async function handler(req, res) {
   try {
     const q = req.query || {};
 
-    // Optional shared secret. Set HABIT_KEY in the Vercel project env to require it.
-    const secret = process.env.HABIT_KEY;
-    if (secret && q.key !== secret) {
+    // Optional shared secret. Set HABIT_KEY in the Vercel project env to require it;
+    // callers send it as the x-habit-key header (lib/habit-key.js).
+    if (!keyOk(req)) {
       res.status(401).send('Unauthorized');
       return;
     }

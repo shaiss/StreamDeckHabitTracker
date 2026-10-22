@@ -36,8 +36,9 @@ test('package.json pins plugin build deps to exact versions', () => {
 });
 
 test('package.json overrides force ws@8.22.0 for transitive deps', () => {
-  // @mastra/core pulls ws^8.21.0 → 8.21.1 without this; the plugin bundle
-  // vendors whatever is hoisted, so the override is load-bearing (#108 / #95 F2).
+  // Transitive deps can float ws (historically @mastra/core → 8.21.1); the
+  // plugin bundle vendors whatever is hoisted, so the override is
+  // load-bearing (#108 / #95 F2).
   assert.equal(pkg.overrides?.ws, '8.22.0');
 });
 

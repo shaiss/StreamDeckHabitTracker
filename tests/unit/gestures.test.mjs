@@ -12,15 +12,15 @@ test('the pinned constants are the ones issues #33, #35, and #78 agreed on', () 
 });
 
 test('the virtual deck embeds the identical timings (drift guard)', () => {
-  // public/deck.html has no build step, so it cannot import the module — it
+  // public/deck.js has no build step, so it cannot import the module — it
   // carries its own copy. Two timings that disagree would make the virtual
   // deck a lying preview of the physical one, so pin them from the source of
   // truth rather than trusting a comment to keep them in step.
-  const src = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../../public/deck.js', import.meta.url), 'utf8');
   assert.match(src, new RegExp('LONG_PRESS_MS\\s*=\\s*' + LONG_PRESS_MS + '\\b'));
   assert.match(src, new RegExp('DOUBLE_TAP_MS\\s*=\\s*' + DOUBLE_TAP_MS + '\\b'));
   assert.match(src, new RegExp('ARM_MS\\s*=\\s*' + ARM_MS + '\\b'));
-  const habits = readFileSync(new URL('../../public/habits.html', import.meta.url), 'utf8');
+  const habits = readFileSync(new URL('../../public/habits.js', import.meta.url), 'utf8');
   assert.match(habits, new RegExp('ARM_MS\\s*=\\s*' + ARM_MS + '\\b'),
     'habit-manager two-stage confirm must share the deck arm window');
 });

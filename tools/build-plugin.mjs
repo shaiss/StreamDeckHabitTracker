@@ -10,9 +10,9 @@
 //
 // Verified sha256 of bin/plugin.js from that path on this tip (two clean
 // rebuilds byte-identical):
-//   1f5dbc8328a97ebb83f719ea86867c15a2dd60700954efeb464924ae95391cb2
-// (#95 at 7911a44 with autonomy changes used a different tree hash —
-// 75e9b190… — do not expect that here on base without those sources.)
+//   a50e4ce517c6fbca3876cf453f865bab54faccdd381805c551697ccd8b29908c
+// (Hash is tree-dependent — re-verify after merging source changes that
+// affect the plugin bundle.)
 //
 // Full image regenerate (needs Chromium at CHROME_PATH or /opt/pw-browsers):
 //   node tools/build-plugin.mjs
@@ -23,6 +23,7 @@ import { dirname, join, relative } from 'node:path';
 import { chromium } from 'playwright-core';
 import { zip } from './lib-zip.mjs';
 import { bundlePlugin } from './bundle-plugin.mjs';
+import { scanFile } from './lib-secret-scan.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -98,6 +99,15 @@ const entries = walk(PLUGIN_DIR).map((p) => ({
   name: 'com.shaiss.habit-tracker.sdPlugin/' + relative(PLUGIN_DIR, p).split('\\').join('/'),
   data: readFileSync(p)
 }));
+// Hard stop (#112 prep): the zip is public. If any packaged file carries key
+// material (a keyed profile copied into profiles/, a literal x-habit-key),
+// refuse to build rather than ship it.
+const leaks = entries.flatMap((e) => scanFile(e.name, e.data));
+if (leaks.length) {
+  console.error('Refusing to package: key-like material found:\n' +
+    leaks.map((h) => '  ' + h.file + (h.line ? ':' + h.line : '') + ' (' + h.rule + ')').join('\n'));
+  process.exit(1);
+}
 mkdirSync(join(ROOT, 'public/downloads'), { recursive: true });
 const out = join(ROOT, 'public/downloads/com.shaiss.habit-tracker.streamDeckPlugin');
 writeFileSync(out, zip(entries));
