@@ -26,6 +26,13 @@ const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript
 
 let server, browser, page, port;
 const posted = [];
+// When set, /api/targets POST requires matching x-habit-key (#111).
+let requiredTargetsKey = null;
+// When true, /api/targets POST answers 503 (production HABIT_KEY unset — issue 112).
+let targetsMisconfigured = false;
+// Dialog policy for window.prompt HABIT_KEY asks (mutable per test).
+let dialogMode = 'dismiss'; // 'dismiss' | 'accept'
+let dialogAcceptValue = 'test-habit-key-111-dummy';
 
 let habits = [
   { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
@@ -98,6 +105,16 @@ before(async () => {
     }
     if (url === '/api/targets' && req.method === 'POST') {
       readBody(req, (body) => {
+        if (targetsMisconfigured) {
+          return json(res, 503, { error: 'Server misconfigured: HABIT_KEY is not set.' });
+        }
+        if (requiredTargetsKey) {
+          const hdr = req.headers['x-habit-key'];
+          const got = Array.isArray(hdr) ? hdr[0] : hdr;
+          if (got !== requiredTargetsKey) {
+            return json(res, 401, { error: 'Unauthorized' });
+          }
+        }
         const r = applyTargetDecision({
           habits,
           targets,
@@ -137,6 +154,11 @@ before(async () => {
     (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
   browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
   page = await browser.newPage();
+  // Default: dismiss HABIT_KEY prompts so unkeyed flows keep working (#111).
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
 });
 
 after(async () => { await browser?.close(); server?.close(); });
@@ -350,4 +372,103 @@ test('auto-down applies with reason and never touches the tap log shape (#70)', 
   assert.equal(after[0].goal.setBy, 'coach');
   assert.match(after[0].goal.reason, /well over/);
   assert.equal(after[1].goal, 1);
+});
+
+test('targets decide with correct x-habit-key succeeds when key required (#111)', async () => {
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredTargetsKey = DUMMY;
+  dialogMode = 'accept';
+  dialogAcceptValue = DUMMY;
+  if (!habits.some((h) => h.name === 'Exercise')) {
+    habits = [...habits, { name: 'Exercise', emoji: '🏃', label: 'Exercise', origin: 'human', goal: 1 }];
+  } else {
+    const idx = habits.findIndex((h) => h.name === 'Exercise');
+    habits[idx] = { ...habits[idx], goal: 1 };
+  }
+  const { queue } = sanitizeTargetChanges(
+    [{ name: 'Exercise', to: 2, reason: 'keyed raise for #111' }],
+    { habits, now: Date.now() }
+  );
+  targets = normalizeTargets({ proposals: queue });
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.tdecide[data-name="Exercise"][data-decision="approve"]');
+  await settled('Raised Exercise');
+  assert.equal(habits.find((h) => h.name === 'Exercise').goal.target, 2);
+  requiredTargetsKey = null;
+  dialogMode = 'dismiss';
+});
+
+test('targets decide without/wrong key gets Unauthorized (#111)', async () => {
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredTargetsKey = DUMMY;
+  // Dismiss first prompt (no key sent) → 401 → accept with wrong key → still 401.
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    if (prompts === 1) await d.dismiss();
+    else await d.accept('wrong-key-not-secret');
+  });
+  if (!habits.some((h) => h.name === 'Caffeine')) {
+    habits = [...habits, { name: 'Caffeine', emoji: '☕', label: 'Caffeine', origin: 'human', goal: 5 }];
+  }
+  const caf = habits.find((h) => h.name === 'Caffeine');
+  caf.goal = 5;
+  const beforeGoal = caf.goal;
+  const { queue } = sanitizeTargetChanges(
+    [{ name: 'Caffeine', to: 6, reason: 'auth failure path' }],
+    { habits, now: Date.now() }
+  );
+  targets = normalizeTargets({ proposals: queue });
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.tdecide[data-name="Caffeine"][data-decision="dismiss"]');
+  await settled('Unauthorized');
+  assert.equal(habits.find((h) => h.name === 'Caffeine').goal, beforeGoal);
+  // Approve + dismiss buttons both remain — the proposal was not applied.
+  assert.equal((await page.$$('.tdecide[data-name="Caffeine"]')).length, 2, 'proposal stays pending');
+  // Restore default dialog handler for any later tests.
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  requiredTargetsKey = null;
+  dialogMode = 'dismiss';
+  assert.ok(prompts >= 1, 'user must be prompted for the key');
+});
+
+test('targets decide 503 shows misconfig and does not re-prompt (issue 112)', async () => {
+  targetsMisconfigured = true;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    await d.accept('test-habit-key-111-dummy');
+  });
+  // Use Caffeine at a known low goal so sanitize queues a raise (Exercise may
+  // already be at 2 from the prior keyed-approve test).
+  if (!habits.some((h) => h.name === 'Caffeine')) {
+    habits = [...habits, { name: 'Caffeine', emoji: '☕', label: 'Caffeine', origin: 'human', goal: 5 }];
+  }
+  const caf = habits.find((h) => h.name === 'Caffeine');
+  caf.goal = 5;
+  const beforeGoal = caf.goal;
+  const { queue } = sanitizeTargetChanges(
+    [{ name: 'Caffeine', to: 6, reason: '503 misconfig path' }],
+    { habits, now: Date.now() }
+  );
+  assert.ok(queue.length, 'need a queued raise for the decide UI');
+  targets = normalizeTargets({ proposals: queue });
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.tdecide[data-name="Caffeine"][data-decision="approve"]');
+  await settled('Server misconfigured');
+  assert.equal(habits.find((h) => h.name === 'Caffeine').goal, beforeGoal, 'no write on 503');
+  assert.equal(prompts, 1, '503 must not clear/re-prompt');
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  targetsMisconfigured = false;
+  dialogMode = 'dismiss';
 });

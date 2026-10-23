@@ -153,6 +153,9 @@ test('withTargetsLock contention surfaces TARGETS_BUSY (handler → 409)', async
     }
     throw new Error(`unexpected redis ${JSON.stringify(args)}`);
   };
+  const scrub = ['VERCEL_ENV', 'HABIT_KEY', 'KV_REST_API_URL', 'KV_REST_API_TOKEN'];
+  const saved = Object.fromEntries(scrub.map((k) => [k, process.env[k]]));
+  for (const k of scrub) delete process.env[k];
   process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
@@ -176,8 +179,9 @@ test('withTargetsLock contention surfaces TARGETS_BUSY (handler → 409)', async
     assert.equal(mapped.status, 409);
   } finally {
     globalThis.fetch = originalFetch;
-    delete process.env.VERCEL_ENV;
-    delete process.env.KV_REST_API_URL;
-    delete process.env.KV_REST_API_TOKEN;
+    for (const k of scrub) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
   }
 });
