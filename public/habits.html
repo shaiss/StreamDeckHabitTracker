@@ -268,6 +268,8 @@
     // HABIT_KEY for decide() — in-memory only for this page load (issue 111).
     // Never URL / query / cookie / localStorage / sessionStorage. Prompt on
     // first approve/decline; on 401 clear, re-prompt, and retry once.
+    // A 503 means the server is misconfigured (HABIT_KEY unset in production
+    // — issue 112) — show that message and do not re-prompt.
     let pageHabitKey = null;
 
     function promptHabitKey() {
@@ -303,6 +305,10 @@
           pageHabitKey = entered == null ? '' : entered;
         }
         let res = await postOnce(pageHabitKey);
+        if (res.status === 503) {
+          const j = await res.json().catch(() => ({ error: 'Server misconfigured.' }));
+          return finish({ ok: false, error: j.error || 'Server misconfigured.' });
+        }
         if (res.status === 401) {
           pageHabitKey = null;
           const again = promptHabitKey();
@@ -314,6 +320,9 @@
           res = await postOnce(pageHabitKey);
         }
         const j = await res.json().catch(() => ({ error: 'Failed.' }));
+        if (res.status === 503) {
+          return finish({ ok: false, error: j.error || 'Server misconfigured.' });
+        }
         if (res.status === 401) {
           pageHabitKey = null;
           return finish({ ok: false, error: j.error || 'Unauthorized' });

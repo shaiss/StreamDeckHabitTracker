@@ -28,6 +28,8 @@ let server, browser, page, port;
 const posted = [];
 // When set, /api/targets POST requires matching x-habit-key (#111).
 let requiredTargetsKey = null;
+// When true, /api/targets POST answers 503 (production HABIT_KEY unset — issue 112).
+let targetsMisconfigured = false;
 // Dialog policy for window.prompt HABIT_KEY asks (mutable per test).
 let dialogMode = 'dismiss'; // 'dismiss' | 'accept'
 let dialogAcceptValue = 'test-habit-key-111-dummy';
@@ -103,6 +105,9 @@ before(async () => {
     }
     if (url === '/api/targets' && req.method === 'POST') {
       readBody(req, (body) => {
+        if (targetsMisconfigured) {
+          return json(res, 503, { error: 'Server misconfigured: HABIT_KEY is not set.' });
+        }
         if (requiredTargetsKey) {
           const hdr = req.headers['x-habit-key'];
           const got = Array.isArray(hdr) ? hdr[0] : hdr;
@@ -430,4 +435,35 @@ test('targets decide without/wrong key gets Unauthorized (#111)', async () => {
   requiredTargetsKey = null;
   dialogMode = 'dismiss';
   assert.ok(prompts >= 1, 'user must be prompted for the key');
+});
+
+test('targets decide 503 shows misconfig and does not re-prompt (issue 112)', async () => {
+  targetsMisconfigured = true;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    await d.accept('test-habit-key-111-dummy');
+  });
+  if (!habits.some((h) => h.name === 'Exercise')) {
+    habits = [...habits, { name: 'Exercise', emoji: '🏃', label: 'Exercise', origin: 'human', goal: 1 }];
+  }
+  const beforeGoal = habits.find((h) => h.name === 'Exercise').goal;
+  const { queue } = sanitizeTargetChanges(
+    [{ name: 'Exercise', to: 2, reason: '503 misconfig path' }],
+    { habits, now: Date.now() }
+  );
+  targets = normalizeTargets({ proposals: queue });
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.tdecide[data-name="Exercise"][data-decision="approve"]');
+  await settled('Server misconfigured');
+  assert.equal(habits.find((h) => h.name === 'Exercise').goal, beforeGoal, 'no write on 503');
+  assert.equal(prompts, 1, '503 must not clear/re-prompt');
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  targetsMisconfigured = false;
+  dialogMode = 'dismiss';
 });

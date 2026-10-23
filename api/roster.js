@@ -7,13 +7,14 @@
 // human decides here. Approvals apply immediately and atomically enough — the
 // habit list is written first, so a failure leaves the proposal pending rather
 // than silently losing the change. Retirement is soft; see lib/roster.js.
-// HABIT_KEY (if set) gates writes via x-habit-key / ?key= / body.key (lib/habit-key.js).
+// HABIT_KEY gates writes via x-habit-key / ?key= / body.key (lib/habit-key.js).
+// Production fails closed when the secret is unset (#112).
 import { isConfigured, getRoster, setRoster } from '../lib/store.js';
 import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
 import { rosterPass, ROSTER_COOLDOWN_MS } from '../lib/coach.js';
 import { normalizeRoster, applyDecision, restoreFromArchive } from '../lib/roster.js';
-import { keyOk } from '../lib/habit-key.js';
+import { keyDenied } from '../lib/habit-key.js';
 
 const view = (doc) => ({
   proposals: doc.proposals,
@@ -39,10 +40,7 @@ export default async function handler(req, res) {
         res.status(200).json(view(current));
         return;
       }
-      if (!keyOk(req)) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+      if (keyDenied(req, res)) return;
       if (!zaiKey()) {
         res.status(503).json({ error: 'No AI key set — add ZAI_API_KEY in Vercel, then redeploy.' });
         return;
@@ -57,10 +55,7 @@ export default async function handler(req, res) {
     }
 
     const body = typeof req.body === 'object' && req.body ? req.body : {};
-    if (!keyOk(req)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+    if (keyDenied(req, res, body)) return;
     const [habits, roster] = await Promise.all([getHabits(), getRoster()]);
     const result = body.restore
       ? restoreFromArchive({ habits, roster, name: String(body.restore) })
