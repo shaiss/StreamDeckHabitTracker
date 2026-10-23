@@ -5,7 +5,7 @@
 // Adaptive daily targets (#70): the coach proposes/applies goal changes
 // (lib/coach.js targetPass, also run by the morning cron after roster). Downs
 // auto-apply; ups wait here for a human decision. HABIT_KEY (if set) gates
-// writes via ?key= or body.key, matching api/roster.js / api/habits.js.
+// writes via x-habit-key (preferred), ?key=, or body.key — see lib/habit-key.js.
 import { isConfigured, getTargets, setTargets, setHabitsAndTargets, withTargetsLock } from '../lib/store.js';
 import { getHabitsStrict, prepareHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
@@ -17,6 +17,7 @@ import {
   targetsClientMessage,
   TARGETS_WRITE_FAILED_MSG
 } from '../lib/target.js';
+import { keyOk } from '../lib/habit-key.js';
 
 const view = (doc) => ({
   proposals: doc.proposals,
@@ -44,7 +45,6 @@ export default async function handler(req, res) {
       return;
     }
     const q = req.query || {};
-    const secret = process.env.HABIT_KEY;
 
     if (req.method !== 'POST') {
       const current = normalizeTargets(await getTargets());
@@ -52,7 +52,7 @@ export default async function handler(req, res) {
         res.status(200).json(view(current));
         return;
       }
-      if (secret && q.key !== secret) {
+      if (!keyOk(req)) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
@@ -75,7 +75,7 @@ export default async function handler(req, res) {
     }
 
     const body = typeof req.body === 'object' && req.body ? req.body : {};
-    if (secret && body.key !== secret && q.key !== secret) {
+    if (!keyOk(req)) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }

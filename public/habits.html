@@ -265,21 +265,61 @@
       return `${a.label} is a fixed key now — re-import your deck profile to give it a physical key.`;
     }
 
+    // HABIT_KEY for decide() — in-memory only for this page load (#111). Never
+    // URL / query / cookie / localStorage / sessionStorage. Prompt on first
+    // approve/decline; on 401 clear, re-prompt, and retry once.
+    let pageHabitKey = null;
+
+    function promptHabitKey() {
+      const v = window.prompt('Enter HABIT_KEY to approve or decline coach proposals:');
+      return v == null ? null : v;
+    }
+
+    function decideHeaders(key) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (key) headers['x-habit-key'] = key;
+      return headers;
+    }
+
     function decide(url, payload, kind) {
       document.querySelectorAll('.decide, .restore, .tdecide').forEach(b => { b.disabled = true; });
       statusEl.className = 'status'; statusEl.textContent = 'Working…';
-      return fetch(url, {
+
+      const postOnce = (key) => fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: decideHeaders(key),
         body: JSON.stringify(payload)
-      }).then(r=>r.json()).then(j =>
-        // Re-read first, then report: the status line must never announce a
-        // change the lists above it haven't caught up to yet.
-        load(true).then(() => {
-          if (!j.ok) { statusEl.className = 'status err'; statusEl.textContent = j.error || 'Failed.'; }
-          else { statusEl.textContent = decided(j.applied, kind); }
-        })
-      ).catch(e => load(true).then(() => {
+      });
+
+      const finish = (j) => load(true).then(() => {
+        if (!j.ok) { statusEl.className = 'status err'; statusEl.textContent = j.error || 'Failed.'; }
+        else { statusEl.textContent = decided(j.applied, kind); }
+      });
+
+      return (async () => {
+        if (pageHabitKey === null) {
+          const entered = promptHabitKey();
+          // Cancel → try without a header (Preview has no HABIT_KEY).
+          pageHabitKey = entered == null ? '' : entered;
+        }
+        let res = await postOnce(pageHabitKey);
+        if (res.status === 401) {
+          pageHabitKey = null;
+          const again = promptHabitKey();
+          if (again == null || again === '') {
+            const j = await res.json().catch(() => ({ error: 'Unauthorized' }));
+            return finish({ ok: false, error: j.error || 'Unauthorized' });
+          }
+          pageHabitKey = again;
+          res = await postOnce(pageHabitKey);
+        }
+        const j = await res.json().catch(() => ({ error: 'Failed.' }));
+        if (res.status === 401) {
+          pageHabitKey = null;
+          return finish({ ok: false, error: j.error || 'Unauthorized' });
+        }
+        return finish(j);
+      })().catch(e => load(true).then(() => {
         statusEl.className = 'status err'; statusEl.textContent = 'Failed: ' + e.message;
       }));
     }
