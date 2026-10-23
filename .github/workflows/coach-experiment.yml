@@ -26,6 +26,9 @@ permissions: {}
 jobs:
   experiment:
     runs-on: ubuntu-latest
+    # Typical runs ~1m; one outlier ~11m (slow model / queue). curl --max-time
+    # 120 plus runner overhead — 15m is comfortable headroom.
+    timeout-minutes: 15
     steps:
       - name: Run experiment on the live deployment
         env:
