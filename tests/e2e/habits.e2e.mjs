@@ -445,19 +445,24 @@ test('targets decide 503 shows misconfig and does not re-prompt (issue 112)', as
     prompts += 1;
     await d.accept('test-habit-key-111-dummy');
   });
-  if (!habits.some((h) => h.name === 'Exercise')) {
-    habits = [...habits, { name: 'Exercise', emoji: '🏃', label: 'Exercise', origin: 'human', goal: 1 }];
+  // Use Caffeine at a known low goal so sanitize queues a raise (Exercise may
+  // already be at 2 from the prior keyed-approve test).
+  if (!habits.some((h) => h.name === 'Caffeine')) {
+    habits = [...habits, { name: 'Caffeine', emoji: '☕', label: 'Caffeine', origin: 'human', goal: 5 }];
   }
-  const beforeGoal = habits.find((h) => h.name === 'Exercise').goal;
+  const caf = habits.find((h) => h.name === 'Caffeine');
+  caf.goal = 5;
+  const beforeGoal = caf.goal;
   const { queue } = sanitizeTargetChanges(
-    [{ name: 'Exercise', to: 2, reason: '503 misconfig path' }],
+    [{ name: 'Caffeine', to: 6, reason: '503 misconfig path' }],
     { habits, now: Date.now() }
   );
+  assert.ok(queue.length, 'need a queued raise for the decide UI');
   targets = normalizeTargets({ proposals: queue });
   await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
-  await page.click('.tdecide[data-name="Exercise"][data-decision="approve"]');
+  await page.click('.tdecide[data-name="Caffeine"][data-decision="approve"]');
   await settled('Server misconfigured');
-  assert.equal(habits.find((h) => h.name === 'Exercise').goal, beforeGoal, 'no write on 503');
+  assert.equal(habits.find((h) => h.name === 'Caffeine').goal, beforeGoal, 'no write on 503');
   assert.equal(prompts, 1, '503 must not clear/re-prompt');
   page.removeAllListeners('dialog');
   page.on('dialog', async (d) => {

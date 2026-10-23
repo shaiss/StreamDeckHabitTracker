@@ -51,10 +51,10 @@ test('habits.html: in-memory key only; 401 re-prompts; 503 shows misconfig (no s
   assert.match(src, /pageHabitKey/);
   assert.match(src, /x-habit-key/);
   assert.match(src, /promptHabitKey/);
-  // Never persist the key.
-  assert.doesNotMatch(src, /sessionStorage/);
-  assert.doesNotMatch(src, /localStorage/);
-  assert.doesNotMatch(src, /document\.cookie/);
+  // Never persist the key (a comment may name the forbidden stores).
+  assert.doesNotMatch(src, /sessionStorage\.(get|set|remove)Item|sessionStorage\[/);
+  assert.doesNotMatch(src, /localStorage\.(get|set|remove)Item|localStorage\[/);
+  assert.doesNotMatch(src, /document\.cookie\s*=/);
   // 401 clears + re-prompts; 503 does not re-prompt.
   assert.match(src, /res\.status === 401/);
   assert.match(src, /res\.status === 503/);
