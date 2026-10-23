@@ -265,9 +265,9 @@
       return `${a.label} is a fixed key now — re-import your deck profile to give it a physical key.`;
     }
 
-    // HABIT_KEY for decide() — in-memory only for this page load (#111). Never
-    // URL / query / cookie / localStorage / sessionStorage. Prompt on first
-    // approve/decline; on 401 clear, re-prompt, and retry once.
+    // HABIT_KEY for decide() — in-memory only for this page load (issue 111).
+    // Never URL / query / cookie / localStorage / sessionStorage. Prompt on
+    // first approve/decline; on 401 clear, re-prompt, and retry once.
     let pageHabitKey = null;
 
     function promptHabitKey() {

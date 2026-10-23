@@ -419,7 +419,8 @@ test('targets decide without/wrong key gets Unauthorized (#111)', async () => {
   await page.click('.tdecide[data-name="Caffeine"][data-decision="dismiss"]');
   await settled('Unauthorized');
   assert.equal(habits.find((h) => h.name === 'Caffeine').goal, beforeGoal);
-  assert.equal((await page.$$('.tdecide[data-name="Caffeine"]')).length, 1, 'proposal stays pending');
+  // Approve + dismiss buttons both remain — the proposal was not applied.
+  assert.equal((await page.$$('.tdecide[data-name="Caffeine"]')).length, 2, 'proposal stays pending');
   // Restore default dialog handler for any later tests.
   page.removeAllListeners('dialog');
   page.on('dialog', async (d) => {
