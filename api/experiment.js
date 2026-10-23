@@ -18,8 +18,16 @@ import { keyDenied } from '../lib/habit-key.js';
 import {
   parseExperimentModels,
   claimExperimentRun,
-  finishExperimentRun
+  finishExperimentRun,
+  EXPERIMENT_RUN_TIMEOUT_MS
 } from '../lib/experiment-guard.js';
+
+/** Safe server log: name + short message only (no stacks, secrets, or response bodies). */
+function logExperimentError(label, err) {
+  const name = err?.name || 'Error';
+  const msg = String(err?.message || err).slice(0, 200);
+  console.error(label, name, msg);
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -63,14 +71,23 @@ export default async function handler(req, res) {
     }
 
     let succeeded = false;
+    const runController = new AbortController();
+    const runTimer = setTimeout(() => runController.abort(), EXPERIMENT_RUN_TIMEOUT_MS);
     try {
+      const signal = runController.signal;
       // All calls in parallel; per-call failure counts against that model.
+      // AbortError (run deadline) is not swallowed into a per-model score —
+      // it fails the whole run so we do not store a truncated result.
       const runs = await Promise.all(
         items.flatMap((it) =>
           models.map(async (model) => {
             const prompt = PROMPTS[it.input.kind](it.input.context);
             try {
-              const text = await chat([{ role: 'user', content: prompt }], { model, temperature: 0.8 });
+              const text = await chat([{ role: 'user', content: prompt }], {
+                model,
+                temperature: 0.8,
+                signal
+              });
               let raw = null, parseOk = true;
               try {
                 const parsedJson = extractJson(text);
@@ -81,6 +98,7 @@ export default async function handler(req, res) {
               }
               return { model, kind: it.input.kind, itemAt: it.at, quality: scoreOutput(raw, { parseOk, fixedNames }), error: null };
             } catch (err) {
+              if (signal.aborted || err?.name === 'AbortError') throw err;
               return {
                 model, kind: it.input.kind, itemAt: it.at,
                 quality: scoreOutput(null, { parseOk: false, fixedNames }),
@@ -118,13 +136,17 @@ export default async function handler(req, res) {
       ).toFixed(3);
 
       const doc = { at: Date.now(), items: items.length, models: summary, productionAvgComposite: productionAvg, runs };
-      await storeExperiment(doc);
+      await storeExperiment(doc, { signal });
       succeeded = true;
       res.status(200).json(doc);
     } finally {
-      await finishExperimentRun({ ok: succeeded }).catch(() => {});
+      clearTimeout(runTimer);
+      await finishExperimentRun({ ok: succeeded }).catch((err) => {
+        logExperimentError('finishExperimentRun failed:', err);
+      });
     }
-  } catch {
+  } catch (err) {
+    logExperimentError('experiment failed:', err);
     res.status(500).json({ error: 'Experiment failed.' });
   }
 }

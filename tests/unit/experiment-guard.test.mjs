@@ -5,6 +5,7 @@ import {
   EXPERIMENT_ALLOWED_MODELS,
   EXPERIMENT_COOLDOWN_MS,
   EXPERIMENT_LOCK_TTL_SEC,
+  EXPERIMENT_RUN_TIMEOUT_MS,
   experimentAllowlist,
   parseExperimentModels,
   claimExperimentRun,
@@ -59,6 +60,16 @@ test('allowlist includes the current default model pair', () => {
   assert.deepEqual([...EXPERIMENT_ALLOWED_MODELS], ['glm-5.2', 'glm-4.7-flash']);
   assert.ok(EXPERIMENT_COOLDOWN_MS >= 30_000);
   assert.ok(EXPERIMENT_LOCK_TTL_SEC * 1000 >= EXPERIMENT_COOLDOWN_MS);
+});
+
+test('run timeout stays comfortably below the lock lease', () => {
+  assert.ok(EXPERIMENT_RUN_TIMEOUT_MS > 0);
+  assert.ok(
+    EXPERIMENT_RUN_TIMEOUT_MS < EXPERIMENT_LOCK_TTL_SEC * 1000,
+    'run budget must end before the 90s lease so a hung fetch cannot overlap a second claim'
+  );
+  // Slack for Vercel maxDuration 60s and cleanup.
+  assert.ok(EXPERIMENT_RUN_TIMEOUT_MS <= 60_000);
 });
 
 test('parseExperimentModels: default (no raw) accepts preferred + flash', () => {
@@ -155,4 +166,36 @@ test('finishExperimentRun: always deletes the lock even when cooldown SET would 
   // Lock must still be gone despite the cooldown write failing.
   const relock = await claimExperimentRun({ now: NOW + 10, cmd: base });
   assert.equal(relock.ok, true);
+});
+
+test('claimExperimentRun: releases lock if cooldown GET throws (and DEL failure does not mask)', async () => {
+  const base = memoryCmd();
+  let coolGetFails = false;
+  let delFails = false;
+  const cmd = async (args) => {
+    const op = String(args[0] || '').toUpperCase();
+    const key = String(args[1] || '');
+    if (coolGetFails && op === 'GET' && key.includes('cooldown')) {
+      throw new Error('cooldown GET boom');
+    }
+    if (delFails && op === 'DEL' && key.includes('lock')) {
+      throw new Error('DEL boom');
+    }
+    return base(args);
+  };
+  cmd._now = base._now;
+  cmd._store = base._store;
+
+  coolGetFails = true;
+  await assert.rejects(() => claimExperimentRun({ now: NOW, cmd }), /cooldown GET boom/);
+  // Lock must be gone so a later claim can succeed.
+  coolGetFails = false;
+  const again = await claimExperimentRun({ now: NOW + 10, cmd: base });
+  assert.equal(again.ok, true);
+  await finishExperimentRun({ ok: false, now: NOW + 20, cmd: base });
+
+  // If DEL also fails, the original cooldown error must still surface.
+  coolGetFails = true;
+  delFails = true;
+  await assert.rejects(() => claimExperimentRun({ now: NOW + 30, cmd }), /cooldown GET boom/);
 });
