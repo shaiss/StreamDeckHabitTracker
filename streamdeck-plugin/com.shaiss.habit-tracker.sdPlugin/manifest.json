@@ -58,6 +58,7 @@
       "Tooltip": "Autonomy Toggle: shows MANUAL / ASSISTED / AUTO (coach leash). Tap cycles; persists to profile. Never logs.",
       "Icon": "images/autonomy_action",
       "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "ui/settings.html",
       "States": [{ "Image": "images/autonomy_key" }]
     }
   ]

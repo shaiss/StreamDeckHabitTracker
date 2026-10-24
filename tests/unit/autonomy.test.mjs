@@ -1,6 +1,6 @@
 // Autonomy Toggle (#94 / study §3.5): cycle order, consent mapping, face
-// parity across the three modes, and a drift guard so deck.html cannot fork
-// the pure helpers in lib/takeover.js.
+// parity across the three modes, and a drift guard so public/deck.js (and
+// its deck.html CSS) cannot fork the pure helpers in lib/takeover.js.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -337,7 +337,9 @@ test('stale 409 settle is still a no-op when a newer write is in flight', () => 
 });
 
 test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift)', () => {
-  const deck = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
+  // Logic lives in public/deck.js (extracted with habit-key); CSS class in deck.html.
+  const deckJs = readFileSync(new URL('../../public/deck.js', import.meta.url), 'utf8');
+  const deckHtml = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
   const plugin = readFileSync(new URL('../../streamdeck-plugin/src/plugin.mjs', import.meta.url), 'utf8');
   const takeover = readFileSync(new URL('../../lib/takeover.js', import.meta.url), 'utf8');
   assert.match(takeover, /export function cycleConsent/);
@@ -346,6 +348,8 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
   assert.match(takeover, /export function settleConsentWrite/);
   assert.match(takeover, /export function mergePolledConsent/);
   assert.match(takeover, /export function acceptCoachNavSeq/);
+  assert.match(deckHtml, /autonomyface/);
+  assert.match(deckHtml, /src="\/deck\.js"/);
   for (const marker of [
     "const CONSENT_LEVELS = ['off', 'nudge-only', 'may-navigate']",
     "label: 'MANUAL'",
@@ -365,7 +369,7 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
     'data-autonomy',
     'autonomyface'
   ]) {
-    assert.ok(deck.includes(marker), 'deck.html missing autonomy marker: ' + marker);
+    assert.ok(deckJs.includes(marker), 'deck.js missing autonomy marker: ' + marker);
   }
   assert.match(plugin, /cycleConsent/);
   assert.match(plugin, /autonomyOf/);

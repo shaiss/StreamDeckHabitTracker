@@ -210,29 +210,30 @@ test('stale navSeq is rejected (409) without mutating store', () => {
 });
 
 test('dashboard Save omits coachNav unless the select changed (drift)', () => {
-  const html = readFileSync(new URL('../../public/index.html', import.meta.url), 'utf8');
-  assert.match(html, /let loadedCoachNav\s*=/);
-  assert.match(html, /let loadedCoachNavSeq\s*=/);
-  assert.match(html, /if \(coachNav !== loadedCoachNav\)/);
-  assert.match(html, /body\.coachNav\s*=\s*coachNav/);
-  assert.match(html, /body\.navSeq\s*=\s*loadedCoachNavSeq\s*\+\s*1/);
+  // Dashboard script lives in public/index.js (extracted with habit-key).
+  const js = readFileSync(new URL('../../public/index.js', import.meta.url), 'utf8');
+  assert.match(js, /let loadedCoachNav\s*=/);
+  assert.match(js, /let loadedCoachNavSeq\s*=/);
+  assert.match(js, /if \(coachNav !== loadedCoachNav\)/);
+  assert.match(js, /body\.coachNav\s*=\s*coachNav/);
+  assert.match(js, /body\.navSeq\s*=\s*loadedCoachNavSeq\s*\+\s*1/);
   // Must not unconditionally stuff coachNav into every Save payload.
   assert.doesNotMatch(
-    html,
+    js,
     /JSON\.stringify\(\{\s*name:[\s\S]*coachNav:\s*document\.getElementById\('setCoachNav'\)/
   );
 });
 
 test('dashboard Save 409 with coachNavSeq resyncs consent without clearing edits (drift)', () => {
-  const html = readFileSync(new URL('../../public/index.html', import.meta.url), 'utf8');
-  assert.match(html, /r\.status\s*===\s*409\s*&&\s*j\.coachNavSeq\s*!==\s*undefined/);
-  assert.match(html, /loadedCoachNav\s*=\s*j\.coachNav\s*\|\|\s*loadedCoachNav/);
-  assert.match(html, /loadedCoachNavSeq\s*=\s*Math\.max\(0,\s*Number\(j\.coachNavSeq\)/);
-  assert.match(html, /getElementById\('setCoachNav'\)\.value\s*=\s*loadedCoachNav/);
-  assert.match(html, /Consent changed on the deck/);
+  const js = readFileSync(new URL('../../public/index.js', import.meta.url), 'utf8');
+  assert.match(js, /r\.status\s*===\s*409\s*&&\s*j\.coachNavSeq\s*!==\s*undefined/);
+  assert.match(js, /loadedCoachNav\s*=\s*j\.coachNav\s*\|\|\s*loadedCoachNav/);
+  assert.match(js, /loadedCoachNavSeq\s*=\s*Math\.max\(0,\s*Number\(j\.coachNavSeq\)/);
+  assert.match(js, /getElementById\('setCoachNav'\)\.value\s*=\s*loadedCoachNav/);
+  assert.match(js, /Consent changed on the deck/);
   // Must not wipe name/tz/about on 409 — only status + consent select.
   assert.doesNotMatch(
-    html,
+    js,
     /status\s*===\s*409[\s\S]{0,400}getElementById\('setName'\)\.value\s*=/
   );
 });
@@ -248,10 +249,12 @@ test('api/profile requires navSeq for coachNav and CAS-gates unsequenced writes 
   assert.doesNotMatch(api, /await setProfile\(next\)/);
   assert.match(rules, /coachNav requires navSeq/);
   // First-write path must be SET NX (not bare SET) so two null-snapshot
-  // writers cannot both report success.
+  // writers cannot both report success. Key is redisKey('habits:profile')
+  // (preview isolation), not a module-level PROFILE_KEY constant.
   assert.match(
     store,
-    /SET',\s*PROFILE_KEY,\s*nextRaw,\s*'NX'|SET",\s*PROFILE_KEY,\s*nextRaw,\s*"NX/
+    /SET',\s*key,\s*nextRaw,\s*'NX'|SET",\s*key,\s*nextRaw,\s*"NX/
   );
   assert.match(store, /created\s*===\s*'OK'|return created === 'OK'/);
+  assert.match(store, /redisKey\('habits:profile'\)/);
 });
