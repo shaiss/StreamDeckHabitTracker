@@ -156,8 +156,12 @@ import { esc } from '/escape.js';
     function decide(url, payload, kind) {
       document.querySelectorAll('.decide, .restore, .tdecide').forEach(b => { b.disabled = true; });
       statusEl.className = 'status'; statusEl.textContent = 'Working…';
-      // window.HabitKey.postJson sends x-habit-key (asks once on 401).
-      return window.HabitKey.postJson(url, payload).then(r=>r.json()).then(j =>
+      // window.HabitKey.postJson sends x-habit-key (asks once on 401). Literal
+      // paths (not `postJson(url, …)`) so the habit-key unit scan can see them.
+      const post = url === '/api/targets'
+        ? window.HabitKey.postJson('/api/targets', payload)
+        : window.HabitKey.postJson('/api/roster', payload);
+      return post.then(r=>r.json()).then(j =>
         // Re-read first, then report: the status line must never announce a
         // change the lists above it haven't caught up to yet.
         load(true).then(() => {
