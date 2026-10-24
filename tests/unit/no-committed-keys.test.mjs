@@ -332,6 +332,11 @@ test('findKeyLinkHandoffs flags HTML-escaped, mid-string concat, and URLSearchPa
     // Multiline template: newline before &key=${…} still counts
     'const u = `?habit=Water\n' + AK + '${secret}`',
     'const u = `/api/log?habit=Water\n' + amp + K + '=${k}`',
+    // Template after logical / await openers
+    'ok && `?habit=Water' + AK + '${k}`',
+    'ok || `/api/log?x=1' + AK + '${k}`',
+    'v ?? `?habit=Water' + amp + K + '=${k}`',
+    'await `?habit=Water' + AK + '${k}`',
     // URLSearchParams writers (USP-like receivers + assigned locals)
     "searchParams.set('" + K + "', secret)",
     'q.set("' + K + '", key)',
@@ -339,6 +344,9 @@ test('findKeyLinkHandoffs flags HTML-escaped, mid-string concat, and URLSearchPa
     'url.searchParams.append("' + K + '", v)',
     "const sp = new URLSearchParams();\nsp.set('" + K + "', secret)",
     'let qs = new URLSearchParams();\nqs.append("' + K + '", v)',
+    // Conditional / parenthesized assigns still count as USP locals
+    'if (ok) sp = new URLSearchParams();\nsp.set("' + K + '", secret)',
+    'ok && (sp = new URLSearchParams());\nsp.append("' + K + '", v)',
     // Initializer property names (shorthand + quoted)
     'new URLSearchParams({ ' + K + ': secret })',
     'new URLSearchParams({' + K + ':secret})',

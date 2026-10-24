@@ -220,12 +220,13 @@ const KEY_LINK_RULES = [
   { name: 'concat &key=', re: /(['"`])[^'"`\n]*&(?:amp;)?key=\1\s*\+/g },
   // `...?key=${` / `...&key=${` / `...&amp;key=${`
   // Template &key= allows newlines inside the literal (#121 review). Opener
-  // must look like a real template start (`=`, `(`, `+`, …) so a prior
-  // closing backtick cannot span into later prose; ?key= stays single-line.
+  // must look like a real template start (`=`, `(`, `+`, `&&`/`||`/`??`,
+  // `await`, …) so a prior closing backtick cannot span into later prose;
+  // ?key= stays single-line.
   { name: 'template ?key=', re: /`[^`\n]*\?key=\$\{/g },
   {
     name: 'template &key=',
-    re: /(?:^|[=(+,[?:]|return\s*|=>\s*)\s*`[^`]*&(?:amp;)?key=\$\{/g
+    re: /(?:^|[=(+,[?:|&]|(?:return|await|yield)\s*|=>\s*)\s*`[^`]*&(?:amp;)?key=\$\{/g
   },
   // '?' + 'key=' / "&" + "key=" (same or mixed quotes)
   { name: 'split concat key=', re: /(['"`])([?&])\1\s*\+\s*(['"`])key=\3/g },
@@ -245,11 +246,12 @@ const KEY_LINK_RULES = [
 /** Identifiers bound to `new URLSearchParams(...)` in `text`. */
 function urlSearchParamsIds(text) {
   const ids = new Set();
-  const decl = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new\s+URLSearchParams\b/g;
+  // const/let/var and bare assigns in any statement context (if/&&/(…)/…),
+  // but not property writes (`obj.x = new URLSearchParams`).
+  const assign =
+    /(?:\b(?:const|let|var)\s+|(?:^|[^\w$.]))([A-Za-z_$][\w$]*)\s*=\s*new\s+URLSearchParams\b/g;
   let m;
-  while ((m = decl.exec(text))) ids.add(m[1]);
-  const bare = /(?:^|[\n;{])\s*([A-Za-z_$][\w$]*)\s*=\s*new\s+URLSearchParams\b/g;
-  while ((m = bare.exec(text))) ids.add(m[1]);
+  while ((m = assign.exec(text))) ids.add(m[1]);
   return ids;
 }
 
