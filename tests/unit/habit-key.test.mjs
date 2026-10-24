@@ -59,8 +59,14 @@ test('every gated route uses keyOk — no raw ?key= compares left', () => {
 });
 
 test('CORS preflight allows the x-habit-key header where OPTIONS is answered', () => {
+  // Routes may set the header inline or via setCors() in lib/auth.js (Clerk merge).
+  const authCors = read('lib/auth.js');
+  assert.match(authCors, /x-habit-key/);
   for (const f of ['api/log.js', 'api/nudge.js', 'api/question.js', 'api/coachpage.js']) {
-    assert.match(read(f), /Access-Control-Allow-Headers', 'Content-Type, x-habit-key'/, f);
+    const src = read(f);
+    const inline = /Access-Control-Allow-Headers', 'Content-Type, x-habit-key'/.test(src);
+    const viaSetCors = /setCors\(/.test(src) && /x-habit-key/.test(authCors);
+    assert.ok(inline || viaSetCors, f + ' must allow x-habit-key (inline or setCors)');
   }
 });
 

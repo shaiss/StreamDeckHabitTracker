@@ -16,13 +16,15 @@ import { runAsUser } from '../../lib/scope.js';
 const OWNER = 'user_owner_prefix_test';
 
 /** redisKey requires tenant ALS; owner maps logical keys without u: prefix. */
-function asOwner(fn) {
+async function asOwner(fn) {
   const prev = process.env.HABIT_OWNER_USER_ID;
   process.env.HABIT_OWNER_USER_ID = OWNER;
-  return runAsUser(OWNER, fn).finally(() => {
+  try {
+    return await runAsUser(OWNER, fn);
+  } finally {
     if (prev === undefined) delete process.env.HABIT_OWNER_USER_ID;
     else process.env.HABIT_OWNER_USER_ID = prev;
-  });
+  }
 }
 
 const TRACKED = [

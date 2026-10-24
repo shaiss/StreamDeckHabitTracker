@@ -13,13 +13,15 @@ import habitsHandler from '../../api/habits.js';
 
 const OWNER = 'user_owner_habits_test';
 
-function withOwnerScope(fn) {
+async function withOwnerScope(fn) {
   const prev = process.env.HABIT_OWNER_USER_ID;
   process.env.HABIT_OWNER_USER_ID = OWNER;
-  return runAsUser(OWNER, fn).finally(() => {
+  try {
+    return await runAsUser(OWNER, fn);
+  } finally {
     if (prev === undefined) delete process.env.HABIT_OWNER_USER_ID;
     else process.env.HABIT_OWNER_USER_ID = prev;
-  });
+  }
 }
 
 test('accepts a clean list with origins', () => {
