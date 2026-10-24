@@ -19,7 +19,8 @@ import {
   parseExperimentModels,
   claimExperimentRun,
   finishExperimentRun,
-  EXPERIMENT_RUN_TIMEOUT_MS
+  EXPERIMENT_RUN_TIMEOUT_MS,
+  EXPERIMENT_RUN_ERROR
 } from '../lib/experiment-guard.js';
 
 /** Safe server log: name + short message only (no stacks, secrets, or response bodies). */
@@ -99,10 +100,12 @@ export default async function handler(req, res) {
               return { model, kind: it.input.kind, itemAt: it.at, quality: scoreOutput(raw, { parseOk, fixedNames }), error: null };
             } catch (err) {
               if (signal.aborted || err?.name === 'AbortError') throw err;
+              // Never persist raw provider text — GET is unkeyed + CORS * (#133).
+              logExperimentError('experiment run:', err);
               return {
                 model, kind: it.input.kind, itemAt: it.at,
                 quality: scoreOutput(null, { parseOk: false, fixedNames }),
-                error: String(err?.message || err).slice(0, 160)
+                error: EXPERIMENT_RUN_ERROR
               };
             }
           })
@@ -141,7 +144,7 @@ export default async function handler(req, res) {
       res.status(200).json(doc);
     } finally {
       clearTimeout(runTimer);
-      await finishExperimentRun({ ok: succeeded }).catch((err) => {
+      await finishExperimentRun({ ok: succeeded, token: claim.token }).catch((err) => {
         logExperimentError('finishExperimentRun failed:', err);
       });
     }
