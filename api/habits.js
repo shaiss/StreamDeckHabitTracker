@@ -2,10 +2,11 @@
 // POST /api/habits          -> replace the whole list (body: {habits: [...]})
 // The live habit list backing the API, coach, and virtual deck. Physical deck
 // keys are baked into imported profiles — regenerate them after edits.
-// HABIT_KEY (if set) gates writes via ?key= or body.key.
+// HABIT_KEY (if set) gates writes via x-habit-key, ?key=, or body.key (lib/habit-key.js).
 import { isConfigured, getSlots, getSlotHistory, all } from '../lib/store.js';
 import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
 import { scoreSuggestions } from '../lib/scorer.js';
+import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -67,8 +68,7 @@ export default async function handler(req, res) {
       return;
     }
     const body = typeof req.body === 'object' && req.body ? req.body : {};
-    const secret = process.env.HABIT_KEY;
-    if (secret && body.key !== secret && (req.query || {}).key !== secret) {
+    if (!keyOk(req, body)) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }

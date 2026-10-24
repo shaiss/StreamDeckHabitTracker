@@ -31,7 +31,7 @@ test('plugin and virtual deck embed the identical FNV-1a formula (drift guard)',
     'Caffeine', 'Mood', 'Stretch', 'Water', 'Sunlight', '', 'a', 'ünïcøde ✨',
     'a night owl who logs most habits after 9pm'];
 
-  for (const f of ['public/deck.html', 'public/mind.html']) {
+  for (const f of ['public/deck.js', 'public/mind.js']) {
     const src = readFileSync(new URL('../../' + f, import.meta.url), 'utf8');
     // Fail closed: match globally and require EXACTLY one definition. A second
     // copy — even a stale one left in a comment — would mean this guard could

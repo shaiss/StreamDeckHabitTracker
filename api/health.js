@@ -3,19 +3,24 @@
 // when a physical Stream Deck last polled (`deck`, null if never) — the quickest
 // way to tell a dead plugin from a dead backend.
 // Returns variable NAMES only (never values), so it's safe to leave public.
-import { isConfigured, detectedKeys, getDeckState } from '../lib/store.js';
+import { isConfigured, detectedKeys, getDeckState, previewIsolationStatus } from '../lib/store.js';
 import { zaiKey, zaiModel } from '../lib/ai.js';
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   const aiKeys = Object.keys(process.env).filter((k) => /(ZAI|Z_AI|GLM|ZHIPU)/i.test(k));
   const configured = isConfigured();
-  const deck = configured ? await getDeckState().catch(() => null) : null;
+  const isolation = previewIsolationStatus();
+  // Skip deck read when non-prod would fail closed — avoids a 500 on /api/health
+  // before ops finishes the env split (#104 / #106).
+  const deck =
+    configured && isolation.ok ? await getDeckState().catch(() => null) : null;
   res.status(200).json({
     configured,
     aiReady: Boolean(zaiKey()),
     model: zaiModel(),
     deck: deck ? { ...deck, agoMs: Date.now() - (deck.at || 0) } : null,
+    previewIsolation: isolation,
     detectedEnvKeys: [...detectedKeys(), ...aiKeys]
   });
 }

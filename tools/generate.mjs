@@ -5,7 +5,7 @@
 //
 // Usage:
 //   node tools/generate.mjs "https://script.google.com/macros/s/XXXX/exec"
-//   node tools/generate.mjs "https://.../exec" --key=k9x2q      # if you set a SECRET
+//   node tools/generate.mjs "https://.../exec" --key=<SECRET>   # if you set a SECRET (output stays in dist/, never commit it)
 //   node tools/generate.mjs "https://.../exec" --model=xl       # deck model (see below)
 //   node tools/generate.mjs "https://.../exec" --pages=2        # multi-page profile (#51)
 //
@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { zip } from './lib-zip.mjs';
+import { keyedOutputAllowed, writeKeyedOutput } from './lib-keyed-output.mjs';
 import { loadHabits } from './lib-habits.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -123,14 +124,20 @@ const iconImage = (name) => {
 // ---- read habits (live list first — the habit manager is the source of truth)
 const { habits, source: habitsSource } = await loadHabits(siteOrigin, ROOT);
 
-const buildUrl = (h) => {
+// Public/manual URLs never carry ?key= (#115). Callers send x-habit-key as a
+// header; a URL key would land in dist/urls.txt (plain writeFileSync) and in
+// stdout. Web Requests profile Settings still embed the key in the URL when
+// --key is set — that path goes through writeKeyedOutput and is never printed.
+/** Build a habit log URL; withKey embeds ?key= only for Web Requests Settings. */
+const buildUrl = (h, { withKey = false } = {}) => {
   const q = new URLSearchParams({ habit: h.name });
-  if (key) q.set('key', key);
+  if (withKey && key) q.set('key', key);
   return `${execBase}?${q.toString()}`;
 };
-const buildSlotUrl = (n) => {
+/** Build a slot log URL; withKey embeds ?key= only for Web Requests Settings. */
+const buildSlotUrl = (n, { withKey = false } = {}) => {
   const q = new URLSearchParams({ slot: String(n) });
-  if (key) q.set('key', key);
+  if (withKey && key) q.set('key', key);
   return `${execBase}?${q.toString()}`;
 };
 
@@ -154,11 +161,16 @@ const slotCount = Math.max(0, Math.min(4, wanted, remaining));
 
 
 // ---- 1) urls.txt (guaranteed manual path) ---------------------------------
+// Always unkeyed (#115). Paste targets are for the Web Requests plugin or a
+// browser; auth goes in the x-habit-key header (or the Property Inspector),
+// never the query string. Plain writeFileSync is safe because there is no
+// secret in this file — if that ever changes, route through writeKeyedOutput.
 mkdirSync(join(ROOT, 'dist'), { recursive: true });
 const reportRows = habits.map((h) => `${(h.emoji || '').padEnd(2)} ${h.label.padEnd(12)} ${buildUrl(h)}`);
 const urlsTxt =
   `Web Request buttons (Method: GET). One per key.\n` +
-  `Plugin: "Web Requests" by data-enabler (install from the Stream Deck Marketplace).\n\n` +
+  `Plugin: "Web Requests" by data-enabler (install from the Stream Deck Marketplace).\n` +
+  `Do not put HABIT_KEY in these URLs — send x-habit-key as a header (or enter it in the Habit Tracker Property Inspector).\n\n` +
   habits.map((h) => `Title: ${h.emoji} ${h.label}\n  URL: ${buildUrl(h)}\n  Method: GET`).join('\n\n') +
   (dashboardUrl
     ? `\n\n--- Dashboard key (optional) ---\n` +
@@ -264,7 +276,7 @@ habits.forEach((h, i) => {
           ActionID: randomUUID().toUpperCase(),
           LinkedTitle: true,
           Name: 'HTTP Request',
-          Settings: { url: buildUrl(h), method: 'GET', contentType: '', headers: '', body: '' },
+          Settings: { url: buildUrl(h, { withKey: true }), method: 'GET', contentType: '', headers: '', body: '' },
           Resources: null,
           State: 0,
           States: states(h.name, `${h.emoji} ${h.label}`),
@@ -307,7 +319,7 @@ for (let n = 1; n <= slotCount; n++) {
           ActionID: randomUUID().toUpperCase(),
           LinkedTitle: true,
           Name: 'HTTP Request',
-          Settings: { url: buildSlotUrl(n), method: 'GET', contentType: '', headers: '', body: '' },
+          Settings: { url: buildSlotUrl(n, { withKey: true }), method: 'GET', contentType: '', headers: '', body: '' },
           Resources: null,
           State: 0,
           States: states(`Slot${n}`, `✨ AI ${n}`),
@@ -438,7 +450,31 @@ const files = [
   }
 ];
 const profilePath = outFile || join(ROOT, 'dist/Habit Tracker.streamDeckProfile');
-writeFileSync(profilePath, zip(files));
+// A keyed profile is a SECRET (the repo is public): it may only land in the
+// git-ignored dist/ or outside this checkout — never in streamdeck-plugin/ or
+// public/downloads/, which get committed and shipped. Prefer leaving --key off
+// and entering the key once in the plugin's Property Inspector instead.
+const profileBytes = zip(files);
+if (key) {
+  // Check and write are one operation: writeKeyedOutput rejects dangling
+  // symlinks and publishes through a no-follow directory fd, so a symlink
+  // swapped in after the check cannot receive the secret.
+  if (!keyedOutputAllowed(profilePath, ROOT)) {
+    console.error('Refusing to write a --key profile inside the repo outside dist/: ' + profilePath +
+      '\nKeyed profiles must never be committed. Drop --outfile (defaults to dist/) or write outside the checkout.' +
+      '\n(A symlinked dist/, a symlinked outfile, or a dangling symlink is refused.)');
+    process.exit(1);
+  }
+  try {
+    writeKeyedOutput(profilePath, ROOT, profileBytes);
+  } catch (e) {
+    console.error('Refusing to write a --key profile; the destination could not be pinned: ' + profilePath);
+    console.error(e && e.message ? e.message : e);
+    process.exit(1);
+  }
+} else {
+  writeFileSync(profilePath, profileBytes);
+}
 
 // ---- report ---------------------------------------------------------------
 console.log(`\nWrote ${profilePath}`);

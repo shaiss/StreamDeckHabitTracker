@@ -15329,6 +15329,10 @@ var Version = class {
   }
 };
 
+// node_modules/@elgato/streamdeck/dist/plugin/logging/index.js
+import path3 from "node:path";
+import { cwd } from "node:process";
+
 // node_modules/@elgato/utils/dist/logging/console-target.js
 var ConsoleTarget = class {
   /**
@@ -15613,10 +15617,6 @@ var FileTarget = class {
     }
   }
 };
-
-// node_modules/@elgato/streamdeck/dist/plugin/logging/index.js
-import path3 from "node:path";
-import { cwd } from "node:process";
 
 // node_modules/@elgato/streamdeck/dist/plugin/common/utils.js
 import path2 from "node:path";
@@ -17990,6 +17990,41 @@ function beaconOf(input = {}, now = Date.now()) {
   return { pending, blocked, frame, badge: pending > 0 ? String(pending) : "" };
 }
 
+// lib/habit-key.js
+function redactKey(s) {
+  return String(s).replace(/([?&](?:amp;)?key=)[^&#\s"']*/gi, "$1[redacted]").replace(/(x-habit-key["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, "$1[redacted]");
+}
+
+// streamdeck-plugin/src/habit-key.mjs
+var KEY_HEADER = "x-habit-key";
+var KEY_ORIGINS = Object.freeze([
+  "https://stream-deck-habit-tracker.vercel.app",
+  "https://habitdeck.fyi"
+]);
+function keyAllowedFor(base) {
+  if (typeof base !== "string" || !base) return false;
+  let u;
+  try {
+    u = new URL(base);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:" || u.username || u.password) return false;
+  return KEY_ORIGINS.includes(u.origin);
+}
+function resolveKey(globalSettings2, settings2, base) {
+  if (!keyAllowedFor(base)) return "";
+  const g = globalSettings2 && typeof globalSettings2.habitKey === "string" ? globalSettings2.habitKey.trim() : "";
+  if (g) return g;
+  const s = settings2 && typeof settings2.key === "string" ? settings2.key.trim() : "";
+  return s;
+}
+function keyedInit(key, init = {}) {
+  const headers = { ...init.headers || {} };
+  if (key) headers[KEY_HEADER] = key;
+  return { ...init, headers };
+}
+
 // streamdeck-plugin/src/plugin.mjs
 var DEFAULT_BASE = "https://stream-deck-habit-tracker.vercel.app";
 var baseOf = (s) => (s && s.base || DEFAULT_BASE).replace(/\/+$/, "");
@@ -18001,7 +18036,7 @@ var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.5.11";
+var VERSION = "2.6.1";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -18012,6 +18047,8 @@ var slotCache = null;
 var coachCache = null;
 var habitCache = null;
 var todayCache = null;
+var globalSettings = {};
+var keyOf = (s) => resolveKey(globalSettings, s, baseOf(s));
 var rosterPendingCache = 0;
 var blockedCache = false;
 var consentCache = "off";
@@ -18036,7 +18073,7 @@ var gestTimer = null;
 var log = plugin_default.logger.createScope("habit-tracker");
 process.on("unhandledRejection", (err) => {
   try {
-    log.error("unhandled rejection: " + (err && err.message ? err.message : err));
+    log.error("unhandled rejection: " + redactKey(err && err.message ? err.message : err));
   } catch {
   }
 });
@@ -18106,11 +18143,11 @@ function visibility() {
   return deriveVisibility([...keys.values()].map((k) => k.settings));
 }
 function refreshSlots(now) {
-  let base = null, secret = null;
+  let base = null, secret = keyOf(null) || null;
   for (const k of keys.values()) {
     if (k.settings.base) {
       base = baseOf(k.settings);
-      secret = k.settings.key || null;
+      secret = keyOf(k.settings) || null;
       break;
     }
   }
@@ -18119,11 +18156,11 @@ function refreshSlots(now) {
     base = DEFAULT_BASE;
   }
   const seq = sched.pollStarted(now);
-  const url2 = base.replace(/\/+$/, "") + "/api/slots?deck=" + encodeURIComponent(VERSION) + "&keys=" + keys.size + "&tz=" + (/* @__PURE__ */ new Date()).getTimezoneOffset() + (secret ? "&key=" + encodeURIComponent(secret) : "");
+  const url2 = base.replace(/\/+$/, "") + "/api/slots?deck=" + encodeURIComponent(VERSION) + "&keys=" + keys.size + "&tz=" + (/* @__PURE__ */ new Date()).getTimezoneOffset();
   const pollSeq = consentSeq;
   const pendingAtStart = consentWritePending;
   inflightCtrl = new AbortController();
-  fetch(url2, { signal: inflightCtrl.signal }).then((r) => r.json()).then((j) => {
+  fetch(url2, keyedInit(secret, { signal: inflightCtrl.signal })).then((r) => r.json()).then((j) => {
     if (!sched.pollSettled(seq)) return;
     inflightCtrl = null;
     const slots = j.slots || [];
@@ -18263,7 +18300,6 @@ function cycleAutonomy(k) {
   const s = k.settings;
   const url2 = baseOf(s) + "/api/profile";
   const body = { coachNav: next, navSeq: seq };
-  if (s.key) body.key = s.key;
   const applySettle = (ok, server) => {
     const settled = settleConsentWrite({
       currentSeq: consentSeq,
@@ -18293,11 +18329,11 @@ function cycleAutonomy(k) {
     if (ok) k.action.showOk();
     else k.action.showAlert();
   };
-  fetch(url2, {
+  fetch(url2, keyedInit(keyOf(s), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
-  }).then(async (r) => {
+  })).then(async (r) => {
     let server;
     if (r.status === 409) {
       try {
@@ -18356,11 +18392,11 @@ function maybeTakeover() {
   if (vis.visiblePage === 0) return;
   const dev = [...keys.values()].map((k) => k.deviceId).find(Boolean);
   if (!dev) return;
-  let base = DEFAULT_BASE, secret = null;
+  let base = DEFAULT_BASE, secret = keyOf(null) || null;
   for (const k of keys.values()) {
     if (k.settings.base) {
       base = baseOf(k.settings);
-      secret = k.settings.key || null;
+      secret = keyOf(k.settings) || null;
       break;
     }
   }
@@ -18373,10 +18409,7 @@ function maybeTakeover() {
     }
   }, POLL_TIMEOUT_MS);
   if (deadline.unref) deadline.unref();
-  fetch(
-    base + "/api/nudge?takeover=1" + (secret ? "&key=" + encodeURIComponent(secret) : ""),
-    { method: "POST", signal: ctrl.signal }
-  ).then((r) => {
+  fetch(base + "/api/nudge?takeover=1", keyedInit(secret, { method: "POST", signal: ctrl.signal })).then((r) => {
     if (!r.ok) return;
     lastTakeoverDay = localDay(Date.now());
     const returnPage = vis.visiblePage == null ? 1 : vis.visiblePage;
@@ -18395,8 +18428,8 @@ function maybeTakeover() {
 }
 function suppressTakeovers(k) {
   const s = k.settings;
-  const url2 = baseOf(s) + "/api/nudge?suppress=1" + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
-  fetch(url2, { method: "POST" }).then((r) => {
+  const url2 = baseOf(s) + "/api/nudge?suppress=1";
+  fetch(url2, keyedInit(keyOf(s), { method: "POST" })).then((r) => {
     if (r.ok) {
       suppressedUntilLocal = Date.now() + SUPPRESS_MS;
       restoreTakeover();
@@ -18527,10 +18560,10 @@ function render(k) {
 function logUrl(k, extra = "") {
   const s = k.settings;
   const q = k.kind === "slot" ? "slot=" + encodeURIComponent(s.slot || 1) : "hkey=" + encodeURIComponent((+s.index || 0) + 1);
-  return baseOf(s) + "/api/log?" + q + extra + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
+  return baseOf(s) + "/api/log?" + q + extra;
 }
 function tap(k, { intensity = "" } = {}) {
-  fetch(logUrl(k, intensity ? "&intensity=" + encodeURIComponent(intensity) : "")).then((r) => {
+  fetch(logUrl(k, intensity ? "&intensity=" + encodeURIComponent(intensity) : ""), keyedInit(keyOf(k.settings))).then((r) => {
     if (r.ok) {
       k.action.showOk();
       sched.tapped(Date.now());
@@ -18541,7 +18574,7 @@ function tap(k, { intensity = "" } = {}) {
   }).catch(() => k.action.showAlert());
 }
 function undo(k) {
-  fetch(logUrl(k), { method: "DELETE" }).then((r) => {
+  fetch(logUrl(k), keyedInit(keyOf(k.settings), { method: "DELETE" })).then((r) => {
     if (r.ok) {
       k.action.showOk();
       sched.tapped(Date.now());
@@ -18553,8 +18586,8 @@ function undo(k) {
 }
 function dismissNudge(k) {
   const s = k.settings;
-  const url2 = baseOf(s) + "/api/nudge?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
-  fetch(url2, { method: "POST" }).then((r) => {
+  const url2 = baseOf(s) + "/api/nudge?dismiss=1&slot=" + encodeURIComponent(s.slot || 1);
+  fetch(url2, keyedInit(keyOf(s), { method: "POST" })).then((r) => {
     if (r.ok) {
       k.action.showOk();
       sched.forcePoll();
@@ -18566,8 +18599,8 @@ function dismissNudge(k) {
 }
 function dismissQuestion(k) {
   const s = k.settings;
-  const url2 = baseOf(s) + "/api/question?dismiss=1&slot=" + encodeURIComponent(s.slot || 1) + (s.key ? "&key=" + encodeURIComponent(s.key) : "");
-  fetch(url2, { method: "POST" }).then((r) => {
+  const url2 = baseOf(s) + "/api/question?dismiss=1&slot=" + encodeURIComponent(s.slot || 1);
+  fetch(url2, keyedInit(keyOf(s), { method: "POST" })).then((r) => {
     if (r.ok) {
       k.action.showOk();
       sched.forcePoll();
@@ -18713,7 +18746,24 @@ try {
   });
 } catch {
 }
+try {
+  plugin_default.settings.onDidReceiveGlobalSettings((ev) => {
+    globalSettings = ev && ev.settings || {};
+    sched.forcePoll();
+    pump();
+  });
+} catch {
+}
 await plugin_default.connect();
+try {
+  Promise.resolve(plugin_default.settings.getGlobalSettings()).then((gs) => {
+    globalSettings = gs || {};
+    sched.forcePoll();
+    pump();
+  }).catch(() => {
+  });
+} catch {
+}
 log.info(`habit-tracker ${VERSION} connected (poll=${POLL_MS}ms tick=${TICK_MS}ms)`);
 /*! Bundled license information:
 

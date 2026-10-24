@@ -2,7 +2,8 @@
 // Bundles streamdeck-plugin/src/ into the .sdPlugin's bin/plugin.js.
 // The output is a COMMITTED artifact (like public/downloads/): the packaged
 // zip and any local install run it directly, so rebuild + re-commit after any
-// src/ change. Requires: npm i esbuild @elgato/streamdeck --no-save
+// src/ change. Pins: package.json devDependencies (esbuild, @elgato/streamdeck,
+// ws@8.22.0 via overrides) — `npm ci` then `npm run build:plugin` (#108).
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';

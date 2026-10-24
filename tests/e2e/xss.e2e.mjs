@@ -8,7 +8,7 @@
 // renderer changes; driving the real renderers with hostile values covers all
 // of them by construction, including multiline templates.
 //
-// Requires: npm i playwright-core --no-save, and Chromium at CHROME_PATH or the
+// Requires: npm ci (playwright-core pinned), and Chromium at CHROME_PATH or the
 // repo default (/opt/pw-browsers/chromium).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,6 +17,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { documentHeaders } from './document-headers.mjs';
 
 const ROOT = fileURLToPath(new URL('../../public', import.meta.url));
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.gif': 'image/gif', '.png': 'image/png' };
@@ -47,6 +48,15 @@ const EVIL_QUESTION = {
 const EVIL_HABITS = [{ name: 'Evil', emoji: IMG, label: SVG, goal: 1 }];
 const EVIL_INSIGHT = { date: SCRIPT, text: IMG };
 
+// Quote + ampersand payloads rendered in attribute values (value="", data-*, title).
+const QNAME = 'Fish & "Chips"';
+const QLABEL = 'Say "hi" & \'bye\'';
+const QTEXT = 'Don\'t "tap" & go';
+const ATTR_HABITS = [{ name: QNAME, emoji: '🐟', label: QLABEL, goal: 1 }];
+const ATTR_SLOT = {
+  habit: QNAME, emoji: '🐟', label: QLABEL, reason: QTEXT, assignedAt: Date.now()
+};
+
 let server, browser, port;
 
 const json = (res, body) => {
@@ -57,7 +67,15 @@ const json = (res, body) => {
 before(async () => {
   server = createServer((req, res) => {
     const url = req.url.split('?')[0];
+    const attr = req.headers['x-fixture'] === 'attr';
     if (url === '/api/data') {
+      if (attr) {
+        return json(res, {
+          configured: true,
+          entries: [{ h: QNAME, t: Date.now(), e: '🐟', note: QTEXT }],
+          insight: { date: 'today', text: QTEXT }
+        });
+      }
       return json(res, {
         configured: true,
         entries: [{ h: SVG, t: Date.now(), e: IMG, note: SCRIPT, slot: 1 }],
@@ -65,6 +83,15 @@ before(async () => {
       });
     }
     if (url === '/api/slots') {
+      if (attr) {
+        return json(res, {
+          configured: true, aiReady: true, model: 'fixture', habits: ATTR_HABITS,
+          suggestedAt: Date.now(),
+          slots: [ATTR_SLOT, null, null, null],
+          coachPage: new Array(12).fill(null), coachNav: 'off',
+          today: {}, track: null, deck: null
+        });
+      }
       return json(res, {
         configured: true, aiReady: true, model: SCRIPT, habits: EVIL_HABITS,
         suggestedAt: Date.now(), slots: [EVIL_SLOT, EVIL_NUDGE, EVIL_QUESTION, null],
@@ -84,13 +111,22 @@ before(async () => {
         stats: { tapsObserved: 1, daysTogether: 1, ideasTried: 1, assignments: 1 }
       });
     }
-    if (url === '/api/habits') return json(res, { habits: EVIL_HABITS, coachHabits: [] });
-    if (url === '/api/roster') return json(res, { proposals: [], archive: [] });
+    if (url === '/api/habits') {
+      return json(res, attr
+        ? { habits: ATTR_HABITS, coachHabits: [{ habit: QNAME, emoji: '🐟', label: QLABEL, offered: 1, taps: 0 }] }
+        : { habits: EVIL_HABITS, coachHabits: [] });
+    }
+    if (url === '/api/roster') {
+      return json(res, attr
+        ? { proposals: [{ id: 'p1', kind: 'add', name: QNAME, label: QLABEL, emoji: '🐟', reason: QTEXT }], archive: [] }
+        : { proposals: [], archive: [] });
+    }
     if (url.startsWith('/api/')) return json(res, { ok: true });
 
     const p = join(ROOT, url === '/' ? 'index.html' : url);
     if (p.startsWith(ROOT) && existsSync(p)) {
-      res.writeHead(200, { 'Content-Type': MIME[extname(p)] || 'application/octet-stream' });
+      const type = MIME[extname(p)] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': type, ...(extname(p) === '.html' ? documentHeaders() : {}) });
       res.end(readFileSync(p));
     } else { res.writeHead(404); res.end(); }
   });
@@ -177,4 +213,105 @@ test('the virtual deck renders hostile key faces as inert text', async () => {
 test('the habit manager renders a hostile roster as inert text', async () => {
   const r = await probe('/habits.html', '.wrap');
   assertInert(r, 'habits');
+});
+
+test('quote and ampersand habit names and coach text do not break out of attributes', async () => {
+  const page = await browser.newPage();
+  const csp = [];
+  page.on('console', (msg) => {
+    if (/Content Security Policy|Refused to/i.test(msg.text())) csp.push(msg.text());
+  });
+  page.on('pageerror', (e) => csp.push(String(e)));
+  await page.setExtraHTTPHeaders({ 'x-fixture': 'attr' });
+
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('.promote');
+  const habits = await page.evaluate((expect) => {
+    const name = document.querySelector('.hrow .name');
+    const label = document.querySelector('.hrow .label');
+    const promote = document.querySelector('.promote');
+    const decide = document.querySelector('.decide');
+    const handlers = [...document.querySelectorAll('*')].filter((el) =>
+      [...el.attributes].some((a) => /^on/i.test(a.name))).map((el) => el.outerHTML.slice(0, 160));
+    return {
+      name: name && name.value,
+      label: label && label.value,
+      habit: promote && promote.getAttribute('data-habit'),
+      coachLabel: promote && promote.getAttribute('data-label'),
+      proposal: decide && decide.getAttribute('data-name'),
+      reason: (document.querySelector('.why') || {}).textContent || '',
+      handlers,
+      pwn: window.PWN || null
+    };
+  }, null);
+  assert.equal(habits.name, QNAME, 'habit name attribute truncated or rewritten');
+  assert.equal(habits.label, QLABEL, 'label attribute truncated or rewritten');
+  assert.equal(habits.habit, QNAME);
+  assert.equal(habits.coachLabel, QLABEL);
+  assert.equal(habits.proposal, QNAME);
+  assert.equal(habits.reason, QTEXT);
+  assert.deepEqual(habits.handlers, []);
+  assert.equal(habits.pwn, null);
+
+  await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('.k[data-slot="1"]');
+  const deck = await page.evaluate(({ name, label, text }) => {
+    const slot = document.querySelector('.k[data-slot="1"]');
+    const habit = document.querySelector('.k[data-habit]');
+    const handlers = [...document.querySelectorAll('*')].filter((el) =>
+      [...el.attributes].some((a) => /^on/i.test(a.name))).map((el) => el.outerHTML.slice(0, 160));
+    return {
+      slotTitle: slot && slot.getAttribute('title'),
+      habitTitle: habit && habit.getAttribute('title'),
+      hname: habit && habit.dataset.hname,
+      face: slot ? slot.innerHTML : '',
+      handlers,
+      pwn: window.PWN || null,
+      saw: !!(slot && slot.getAttribute('title') && slot.getAttribute('title').includes(text) && slot.getAttribute('title').includes(label) && habit && habit.dataset.hname === name)
+    };
+  }, { name: QNAME, label: QLABEL, text: QTEXT });
+  assert.equal(deck.saw, true, 'coach text or habit name missing from attribute context: ' + JSON.stringify(deck));
+  assert.equal(deck.hname, QNAME);
+  assert.ok(deck.slotTitle.includes('"') && deck.slotTitle.includes('&'), deck.slotTitle);
+  assert.ok(deck.habitTitle.includes(QLABEL), deck.habitTitle);
+  assert.equal(deck.face.includes(QTEXT) || deck.slotTitle.includes(QTEXT), true);
+  assert.ok(!deck.face.includes('onfocus') && !deck.face.includes('onerror'), deck.face.slice(0, 200));
+  assert.deepEqual(deck.handlers, []);
+  assert.equal(deck.pwn, null);
+  assert.deepEqual(csp, []);
+  await page.close();
+});
+
+test('a ?key= in the URL is stored and stripped before subresources send it as Referer', async () => {
+  const pages = ['/deck.html', '/index.html', '/habits.html', '/mind.html', '/design/ai-human-bridge/key-language.html'];
+  for (const path of pages) {
+    const page = await browser.newPage();
+    const leaks = [];
+    const csp = [];
+    page.on('console', (msg) => {
+      if (/Content Security Policy|Refused to/i.test(msg.text())) csp.push(path + ' ' + msg.text());
+    });
+    page.on('pageerror', (e) => csp.push(path + ' ' + String(e)));
+    page.on('request', (req) => {
+      const ref = req.headers()['referer'] || req.headers()['referrer'] || '';
+      if (ref.includes('fixture' + '-sample')) leaks.push(ref + ' -> ' + req.url());
+    });
+    // Built at runtime: a literal ?key=<token> in this file trips the secret scanner.
+    const sample = 'fixture' + '-sample';
+    const res = await page.goto(
+      `http://127.0.0.1:${port}${path}?` + 'x=1&' + 'key=' + sample + '#mark',
+      { waitUntil: 'networkidle' }
+    );
+    assert.equal(res.headers()['referrer-policy'], 'no-referrer', path);
+    assert.match(res.headers()['content-security-policy'] || '', /script-src 'self'/, path);
+    const url = page.url();
+    assert.equal(url.includes('key='), false, path + ' left the key in the URL: ' + url);
+    assert.match(url, /[?&]x=1/, path);
+    assert.match(url, /#mark$/, path);
+    const stored = await page.evaluate(() => sessionStorage.getItem('habitdeck.key'));
+    assert.equal(stored, 'fixture' + '-sample', path);
+    assert.deepEqual(leaks, [], path);
+    assert.deepEqual(csp, [], path);
+    await page.close();
+  }
 });

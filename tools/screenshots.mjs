@@ -6,7 +6,7 @@
 // this, and the screenshots follow. Demo data (not anyone's real log) so the
 // docs don't publish a personal history.
 //
-//   npm i playwright-core --no-save && node tools/screenshots.mjs
+//   npm ci && node tools/screenshots.mjs
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, extname } from 'node:path';

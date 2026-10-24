@@ -5,8 +5,10 @@ import {
   isPreviousSeed,
   PREVIOUS_SEED,
   seedHabits,
-  getHabits
+  getHabits,
+  saveHabits
 } from '../../lib/habits.js';
+import habitsHandler from '../../api/habits.js';
 
 test('accepts a clean list with origins', () => {
   assert.equal(validateHabits([
@@ -81,138 +83,141 @@ test('seedHabits includes Code as the ninth entry (hkey=9)', () => {
   assert.ok(!isPreviousSeed(seed));
 });
 
-// Redis CAS migration must GET-compare before SET. An unconditional SET script
-// (or a mock that ignores the Lua body) must not pass these tests.
-const EXPECTED_CAS_LUA =
-  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('set', KEYS[1], ARGV[2]) else return false end";
+const WRITE_CMDS = new Set([
+  'SET', 'SETNX', 'RPUSH', 'LPUSH', 'LSET', 'LREM', 'LTRIM', 'DEL', 'HSET', 'HDEL',
+  'INCR', 'INCRBY', 'EXPIRE', 'PEXPIRE', 'GETSET', 'SADD', 'SREM', 'ZADD', 'ZREM',
+  'MSET', 'APPEND', 'EVAL'
+]);
 
-/** Assert EVAL carries the real CAS script, then compare-and-set against `currentRaw`. */
-function evalCas(args, currentRaw) {
-  assert.equal(args[0], 'EVAL');
-  const lua = args[1];
-  assert.equal(lua, EXPECTED_CAS_LUA);
-  // Essential shape — fails if someone swaps in unconditional SET.
-  assert.match(lua, /redis\.call\(\s*'get'\s*,\s*KEYS\[1\]\s*\)\s*==\s*ARGV\[1\]/);
-  assert.match(lua, /redis\.call\(\s*'set'\s*,\s*KEYS\[1\]\s*,\s*ARGV\[2\]\s*\)/);
-  assert.equal(args[2], '1');
-  assert.equal(args[3], 'habits:config');
-  if (currentRaw === args[4]) return 'OK';
-  return null;
+function redisOk(result) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ result }),
+    text: async () => JSON.stringify({ result })
+  };
 }
 
-test('getHabits migrates persisted previous seed to the Code catalog once', async () => {
+function withRedis(handlers, fn) {
   const calls = [];
-  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
-  const prevRaw = JSON.stringify(prev);
-  let redisValue = prevRaw;
   const originalFetch = globalThis.fetch;
+  const env = {
+    VERCEL_ENV: process.env.VERCEL_ENV,
+    KV_REST_API_URL: process.env.KV_REST_API_URL,
+    KV_REST_API_TOKEN: process.env.KV_REST_API_TOKEN
+  };
   globalThis.fetch = async (_url, opts) => {
     const args = JSON.parse(opts.body);
     calls.push(args);
-    if (args[0] === 'GET') {
-      return {
-        ok: true,
-        json: async () => ({ result: redisValue })
-      };
+    const cmd = String(args[0] || '').toUpperCase();
+    if (typeof handlers === 'function') {
+      return handlers(args, calls);
     }
-    if (args[0] === 'EVAL') {
-      const result = evalCas(args, redisValue);
-      assert.deepEqual(JSON.parse(args[5]), seedHabits());
-      if (result === 'OK') redisValue = args[5];
-      return { ok: true, json: async () => ({ result }) };
-    }
-    throw new Error(`unexpected redis ${args[0]}`);
+    const reply = handlers[cmd];
+    if (reply === undefined) throw new Error(`unexpected redis ${args[0]}`);
+    const result = typeof reply === 'function' ? await reply(args, calls) : reply;
+    // Allow a handler to return a full Response-like object.
+    if (result && typeof result === 'object' && typeof result.json === 'function') return result;
+    return redisOk(result);
   };
-  try {
-    process.env.KV_REST_API_URL = 'https://example.test';
-    process.env.KV_REST_API_TOKEN = 'test';
+  process.env.VERCEL_ENV = 'production';
+  process.env.KV_REST_API_URL = 'https://example.test';
+  process.env.KV_REST_API_TOKEN = 'test';
+  return Promise.resolve()
+    .then(() => fn(calls))
+    .finally(() => {
+      globalThis.fetch = originalFetch;
+      for (const [k, v] of Object.entries(env)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+}
+
+function mkRes() {
+  const res = { statusCode: 200, body: undefined, headers: {} };
+  res.setHeader = (k, v) => { res.headers[k.toLowerCase()] = v; return res; };
+  res.status = (c) => { res.statusCode = c; return res; };
+  res.json = (b) => { res.body = b; return res; };
+  return res;
+}
+
+test('getHabits maps previous seed to current seed with zero Redis writes (#127)', async () => {
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prevRaw = JSON.stringify(prev);
+  let redisValue = prevRaw;
+  await withRedis({
+    GET: () => redisValue
+  }, async (calls) => {
     const list = await getHabits();
     assert.deepEqual(list.map((h) => h.name), seedHabits().map((h) => h.name));
     assert.equal(list[8].name, 'Code');
+    assert.equal(calls.length, 1);
     assert.equal(calls[0][0], 'GET');
-    assert.equal(calls[1][0], 'EVAL');
-    assert.equal(calls.length, 2);
-    assert.deepEqual(JSON.parse(redisValue), seedHabits());
-  } finally {
-    globalThis.fetch = originalFetch;
-    delete process.env.KV_REST_API_URL;
-    delete process.env.KV_REST_API_TOKEN;
-  }
+    assert.ok(!calls.some((c) => WRITE_CMDS.has(String(c[0]).toUpperCase())));
+    // Redis still holds the previous seed — no migration write on read.
+    assert.equal(redisValue, prevRaw);
+    assert.ok(isPreviousSeed(JSON.parse(redisValue)));
+  });
 });
 
 test('getHabits leaves an intentionally custom catalog unchanged', async () => {
-  const calls = [];
   const custom = [
     { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
     { name: 'Stretch', emoji: '🧘', label: 'Stretch', origin: 'coach' }
   ];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (_url, opts) => {
-    const args = JSON.parse(opts.body);
-    calls.push(args);
-    return {
-      ok: true,
-      json: async () => ({ result: JSON.stringify(custom) })
-    };
-  };
-  try {
-    process.env.KV_REST_API_URL = 'https://example.test';
-    process.env.KV_REST_API_TOKEN = 'test';
+  await withRedis({
+    GET: () => JSON.stringify(custom)
+  }, async (calls) => {
     const list = await getHabits();
     assert.deepEqual(list, custom);
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], 'GET');
-  } finally {
-    globalThis.fetch = originalFetch;
-    delete process.env.KV_REST_API_URL;
-    delete process.env.KV_REST_API_TOKEN;
-  }
+    assert.ok(!calls.some((c) => WRITE_CMDS.has(String(c[0]).toUpperCase())));
+  });
 });
 
-test('getHabits migration CAS aborts when a concurrent saveHabits wins', async () => {
-  const calls = [];
+test('GET /api/habits returns current seed with zero Redis writes when stored is previous (#127)', async () => {
   const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
   const prevRaw = JSON.stringify(prev);
-  const custom = [
-    { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
-    { name: 'Meditate', emoji: '🧘', label: 'Meditate', origin: 'coach' }
-  ];
-  const customRaw = JSON.stringify(custom);
-  // Concurrent saveHabits landed between our GET and EVAL.
   let redisValue = prevRaw;
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (_url, opts) => {
-    const args = JSON.parse(opts.body);
-    calls.push(args);
-    if (args[0] === 'GET') {
-      return { ok: true, json: async () => ({ result: redisValue }) };
+  await withRedis((args) => {
+    const cmd = String(args[0] || '').toUpperCase();
+    if (cmd === 'GET') {
+      // habits:config → previous seed; other GETs (log/slots/history) → empty.
+      if (args[1] === 'habits:config') return redisOk(redisValue);
+      return redisOk(null);
     }
-    if (args[0] === 'EVAL') {
-      // Race: custom catalog is already in Redis before CAS runs.
-      redisValue = customRaw;
-      assert.equal(args[4], prevRaw);
-      const result = evalCas(args, redisValue);
-      assert.equal(result, null);
-      return { ok: true, json: async () => ({ result }) };
+    if (cmd === 'LRANGE') return redisOk([]);
+    if (cmd === 'EXISTS' || cmd === 'TYPE') return redisOk(null);
+    throw new Error(`unexpected redis write/cmd ${args[0]}`);
+  }, async (calls) => {
+    const res = mkRes();
+    await habitsHandler({ method: 'GET', query: {}, headers: {} }, res);
+    assert.equal(res.statusCode, 200);
+    const names = (res.body.habits || []).map((h) => h.name);
+    assert.deepEqual(names, seedHabits().map((h) => h.name));
+    assert.equal(names[8], 'Code');
+    assert.ok(calls.every((c) => !WRITE_CMDS.has(String(c[0]).toUpperCase())),
+      `read path wrote Redis: ${JSON.stringify(calls.filter((c) => WRITE_CMDS.has(String(c[0]).toUpperCase())))}`);
+    assert.ok(calls.some((c) => c[0] === 'GET' && c[1] === 'habits:config'));
+    assert.equal(redisValue, prevRaw);
+  });
+});
+
+test('saveHabits persists the upgraded seed on the keyed write path (#127)', async () => {
+  let redisValue = JSON.stringify(PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' })));
+  await withRedis({
+    SET: (args) => {
+      redisValue = args[2];
+      return 'OK';
     }
-    if (args[0] === 'SET') {
-      throw new Error('unconditional SET must not run during seed migration');
-    }
-    throw new Error(`unexpected redis ${args[0]}`);
-  };
-  try {
-    process.env.KV_REST_API_URL = 'https://example.test';
-    process.env.KV_REST_API_TOKEN = 'test';
-    const list = await getHabits();
-    assert.deepEqual(list, custom);
-    assert.equal(calls[0][0], 'GET');
-    assert.equal(calls[1][0], 'EVAL');
-    assert.equal(calls[2][0], 'GET');
-    assert.ok(!calls.some((c) => c[0] === 'SET'));
-    assert.equal(redisValue, customRaw);
-  } finally {
-    globalThis.fetch = originalFetch;
-    delete process.env.KV_REST_API_URL;
-    delete process.env.KV_REST_API_TOKEN;
-  }
+  }, async (calls) => {
+    const saved = await saveHabits(seedHabits());
+    assert.equal(saved[8].name, 'Code');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], 'SET');
+    assert.equal(calls[0][1], 'habits:config');
+    assert.deepEqual(JSON.parse(redisValue).map((h) => h.name), seedHabits().map((h) => h.name));
+  });
 });

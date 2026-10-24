@@ -15,7 +15,9 @@ const read = (f) => readFileSync(new URL('../../' + f, import.meta.url), 'utf8')
 
 const THEME = 'public/theme.css';
 const PAGES = ['public/index.html', 'public/habits.html', 'public/mind.html', 'public/deck.html'];
-const SURFACE = [THEME, 'public/nav.js', ...PAGES];
+// mind.js / deck.js set custom properties (--c, --hue, --urg, --ring-pct,
+// --wait-ms) that the stylesheets only read. They used to live in the HTML.
+const SURFACE = [THEME, 'public/nav.js', 'public/mind.js', 'public/deck.js', ...PAGES];
 
 // Every token design/WEB-UX.md §2 names, and whether §2 promises a light value.
 const TOKENS = {
@@ -190,7 +192,8 @@ test('a recipe is declared once', () => {
 
 // --------------------------------------------- 5. key-face parity (§7.2)
 test('the virtual deck still mirrors the plugin key faces', () => {
-  const deck = read('public/deck.html');
+  // Faces CSS stays in deck.html; the renderer moved to deck.js for CSP.
+  const deck = read('public/deck.html') + '\n' + read('public/deck.js');
   const faces = read('streamdeck-plugin/src/faces.mjs');
   const plugin = read('streamdeck-plugin/src/plugin.mjs');
 

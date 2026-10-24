@@ -11,6 +11,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { documentHeaders } from './document-headers.mjs';
 
 const ROOT = fileURLToPath(new URL('../../public', import.meta.url));
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.gif': 'image/gif', '.png': 'image/png' };
@@ -129,7 +130,8 @@ before(async () => {
     }
     const p = join(ROOT, url === '/' ? 'index.html' : url);
     if (existsSync(p)) {
-      res.writeHead(200, { 'Content-Type': MIME[extname(p)] || 'application/octet-stream' });
+      const type = MIME[extname(p)] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': type, ...(extname(p) === '.html' ? documentHeaders() : {}) });
       res.end(readFileSync(p));
     } else { res.writeHead(404); res.end(); }
   });

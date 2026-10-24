@@ -48,9 +48,12 @@ import {
 } from '../../lib/takeover.js';
 import { beaconOf } from '../../lib/beacon.js';
 import { questionPaint, isDetailsKey } from '../../public/glyphs.js';
+// HABIT_KEY lives in the plugin's global settings (Property Inspector), never
+// in git or the bundled profile; it travels as the x-habit-key header.
+import { resolveKey, keyedInit, redactKey } from './habit-key.mjs';
 
 // A key dragged straight from the action list arrives with Settings: {} —
-// there is no Property Inspector, so without a compiled-in default it would
+// the Property Inspector only sets the shared key, so without a compiled-in default it would
 // stay a dead ⚙️ face forever (issue #55). The production origin is the same
 // constant the rest of the repo already hardcodes (setup.ps1, spike, docs).
 const DEFAULT_BASE = 'https://stream-deck-habit-tracker.vercel.app';
@@ -85,7 +88,7 @@ const reducedMotion = () => process.env.HT_REDUCED_MOTION === '1';
 
 // Reported to the server (?deck=) so the dashboard can show which build a
 // physical deck runs; falls back for runs outside the app.
-let VERSION = '2.5.11';
+let VERSION = '2.6.1';
 try { VERSION = streamDeck.info.plugin.version || VERSION; } catch { /* no registration info */ }
 
 // The bundled profile's manifest name (#50) — the ONLY profile
@@ -98,6 +101,9 @@ let slotCache = null;     // latest slots array from the server
 let coachCache = null;    // latest coach-page array (#52) — slots 5..16 render from it
 let habitCache = null;    // latest habit list from the server (live-editable)
 let todayCache = null;    // { habitName: {count, goal, doneToday, streak, ringFill} } (#32)
+let globalSettings = {};  // { habitKey } from the Property Inspector — on-device only
+// Pinned to KEY_ORIGINS (habit-key.mjs): any other base gets no key (Cipher M1).
+const keyOf = (s) => resolveKey(globalSettings, s, baseOf(s));
 
 // Takeover state (#54). The pure gate is lib/takeover.js; these are its
 // plugin-side inputs. Budget and kill switch are ALSO held server-side
@@ -138,7 +144,7 @@ const log = streamDeck.logger.createScope('habit-tracker');
 // Stream Deck would restart us, but a restart drops the poll caches and reads
 // as flicker on the deck. Log it; the next poll converges.
 process.on('unhandledRejection', (err) => {
-  try { log.error('unhandled rejection: ' + (err && err.message ? err.message : err)); } catch { /* logger gone */ }
+  try { log.error('unhandled rejection: ' + redactKey(err && err.message ? err.message : err)); } catch { /* logger gone */ }
 });
 
 function startClock() {
@@ -217,9 +223,9 @@ function visibility() {
 function refreshSlots(now) {
   // Prefer a key that names its own base (a generated profile); fall back to
   // the compiled-in default so hand-placed keys still poll (issue #55).
-  let base = null, secret = null;
+  let base = null, secret = keyOf(null) || null;
   for (const k of keys.values()) {
-    if (k.settings.base) { base = baseOf(k.settings); secret = k.settings.key || null; break; }
+    if (k.settings.base) { base = baseOf(k.settings); secret = keyOf(k.settings) || null; break; }
   }
   if (!base) {
     if (keys.size === 0) return;
@@ -228,19 +234,18 @@ function refreshSlots(now) {
   const seq = sched.pollStarted(now);
   // ?deck= marks this as the hardware plugin's poll (not the dashboard's), so
   // the server records a heartbeat and /api/health can say whether a physical
-  // deck is live. ?key= rides along because that heartbeat is a write, gated
-  // by HABIT_KEY when it's set. ?tz= is this machine's UTC offset — the deck
+  // deck is live. The key rides along (x-habit-key header) because that
+  // heartbeat is a write, gated by HABIT_KEY when it's set. ?tz= is this machine's UTC offset — the deck
   // sits next to its human, so the host timezone IS the right day boundary
   // for the `today` map (#32).
   const url = base.replace(/\/+$/, '') + '/api/slots?deck=' + encodeURIComponent(VERSION) +
-    '&keys=' + keys.size + '&tz=' + new Date().getTimezoneOffset() +
-    (secret ? '&key=' + encodeURIComponent(secret) : '');
+    '&keys=' + keys.size + '&tz=' + new Date().getTimezoneOffset();
   // Capture write state at poll *start* — a slots response that raced a
   // completed /api/profile write must not feed a stale coachNav into takeoverDue().
   const pollSeq = consentSeq;
   const pendingAtStart = consentWritePending;
   inflightCtrl = new AbortController();
-  fetch(url, { signal: inflightCtrl.signal })
+  fetch(url, keyedInit(secret, { signal: inflightCtrl.signal }))
     .then((r) => r.json())
     .then((j) => {
       if (!sched.pollSettled(seq)) return;   // pump() already orphaned this poll
@@ -394,7 +399,6 @@ function cycleAutonomy(k) {
   const s = k.settings;
   const url = baseOf(s) + '/api/profile';
   const body = { coachNav: next, navSeq: seq };
-  if (s.key) body.key = s.key;
   const applySettle = (ok, server) => {
     const settled = settleConsentWrite({
       currentSeq: consentSeq, writeSeq: seq, ok,
@@ -417,11 +421,11 @@ function cycleAutonomy(k) {
     if (ok) k.action.showOk();
     else k.action.showAlert();
   };
-  fetch(url, {
+  fetch(url, keyedInit(keyOf(s), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
-  })
+  }))
     .then(async (r) => {
       let server;
       if (r.status === 409) {
@@ -484,9 +488,9 @@ function maybeTakeover() {
   if (vis.visiblePage === 0) return;             // the nudge is already on the glass
   const dev = [...keys.values()].map((k) => k.deviceId).find(Boolean);
   if (!dev) return;
-  let base = DEFAULT_BASE, secret = null;
+  let base = DEFAULT_BASE, secret = keyOf(null) || null;
   for (const k of keys.values()) {
-    if (k.settings.base) { base = baseOf(k.settings); secret = k.settings.key || null; break; }
+    if (k.settings.base) { base = baseOf(k.settings); secret = keyOf(k.settings) || null; break; }
   }
   // Claim the day's budget server-side FIRST — a refusal (budget spent on a
   // previous process, kill switch engaged) means stay silent. The pending
@@ -497,8 +501,7 @@ function maybeTakeover() {
   const ctrl = new AbortController();
   const deadline = setTimeout(() => { try { ctrl.abort(); } catch { /* settled */ } }, POLL_TIMEOUT_MS);
   if (deadline.unref) deadline.unref();
-  fetch(base + '/api/nudge?takeover=1' + (secret ? '&key=' + encodeURIComponent(secret) : ''),
-    { method: 'POST', signal: ctrl.signal })
+  fetch(base + '/api/nudge?takeover=1', keyedInit(secret, { method: 'POST', signal: ctrl.signal }))
     .then((r) => {
       if (!r.ok) return;
       lastTakeoverDay = localDay(Date.now());
@@ -523,8 +526,8 @@ function maybeTakeover() {
 // server-side so a plugin restart cannot forget it.
 function suppressTakeovers(k) {
   const s = k.settings;
-  const url = baseOf(s) + '/api/nudge?suppress=1' + (s.key ? '&key=' + encodeURIComponent(s.key) : '');
-  fetch(url, { method: 'POST' })
+  const url = baseOf(s) + '/api/nudge?suppress=1';
+  fetch(url, keyedInit(keyOf(s), { method: 'POST' }))
     .then((r) => {
       if (r.ok) {
         suppressedUntilLocal = Date.now() + SUPPRESS_MS;
@@ -666,12 +669,11 @@ function logUrl(k, extra = '') {
   const q = k.kind === 'slot'
     ? 'slot=' + encodeURIComponent(s.slot || 1)
     : 'hkey=' + encodeURIComponent((+s.index || 0) + 1);
-  return baseOf(s) + '/api/log?' + q + extra +
-    (s.key ? '&key=' + encodeURIComponent(s.key) : '');
+  return baseOf(s) + '/api/log?' + q + extra;
 }
 
 function tap(k, { intensity = '' } = {}) {
-  fetch(logUrl(k, intensity ? '&intensity=' + encodeURIComponent(intensity) : ''))
+  fetch(logUrl(k, intensity ? '&intensity=' + encodeURIComponent(intensity) : ''), keyedInit(keyOf(k.settings)))
     .then((r) => {
       if (r.ok) {
         k.action.showOk();
@@ -687,7 +689,7 @@ function tap(k, { intensity = '' } = {}) {
 // flash when there was nothing to remove is the only "are you sure" a key can
 // honestly offer.
 function undo(k) {
-  fetch(logUrl(k), { method: 'DELETE' })
+  fetch(logUrl(k), keyedInit(keyOf(k.settings), { method: 'DELETE' }))
     .then((r) => {
       if (r.ok) {
         k.action.showOk();
@@ -704,8 +706,8 @@ function undo(k) {
 function dismissNudge(k) {
   const s = k.settings;
   const url = baseOf(s) + '/api/nudge?dismiss=1&slot=' +
-    encodeURIComponent(s.slot || 1) + (s.key ? '&key=' + encodeURIComponent(s.key) : '');
-  fetch(url, { method: 'POST' })
+    encodeURIComponent(s.slot || 1);
+  fetch(url, keyedInit(keyOf(s), { method: 'POST' }))
     .then((r) => {
       if (r.ok) {
         k.action.showOk();
@@ -722,8 +724,8 @@ function dismissNudge(k) {
 function dismissQuestion(k) {
   const s = k.settings;
   const url = baseOf(s) + '/api/question?dismiss=1&slot=' +
-    encodeURIComponent(s.slot || 1) + (s.key ? '&key=' + encodeURIComponent(s.key) : '');
-  fetch(url, { method: 'POST' })
+    encodeURIComponent(s.slot || 1);
+  fetch(url, keyedInit(keyOf(s), { method: 'POST' }))
     .then((r) => {
       if (r.ok) {
         k.action.showOk();
@@ -863,5 +865,21 @@ streamDeck.actions.registerAction(defineAction('com.shaiss.habit-tracker.autonom
 try { streamDeck.system.onSystemDidWakeUp(() => { sched.forcePoll(); pump(); }); } catch { /* optional */ }
 try { streamDeck.devices.onDeviceDidConnect(() => { sched.forcePoll(); pump(); }); } catch { /* optional */ }
 
+// The shared HABIT_KEY (#112 prep): read once after connect, then follow the
+// Property Inspector's edits live. Guarded like the hooks above.
+try {
+  streamDeck.settings.onDidReceiveGlobalSettings((ev) => {
+    globalSettings = (ev && ev.settings) || {};
+    sched.forcePoll(); pump();
+  });
+} catch { /* optional */ }
+
 await streamDeck.connect();
+// Never awaited: a host that is slow to answer must not hold up startup.
+// Until it does, per-key settings.key (older generated profiles) still works.
+try {
+  Promise.resolve(streamDeck.settings.getGlobalSettings())
+    .then((gs) => { globalSettings = gs || {}; sched.forcePoll(); pump(); })
+    .catch(() => { /* no global settings yet */ });
+} catch { /* optional */ }
 log.info(`habit-tracker ${VERSION} connected (poll=${POLL_MS}ms tick=${TICK_MS}ms)`);
