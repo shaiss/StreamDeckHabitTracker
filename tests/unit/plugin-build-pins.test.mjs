@@ -1,6 +1,8 @@
 // Guard: plugin rebuild pins stay exact so `npm ci` + `npm run build:plugin`
-// reproduces bin/plugin.js byte-for-byte (#108). Floating ranges here would
-// let lockfile drift change the vendored ws / SDK / esbuild inside the bundle.
+// reproduces bin/plugin.js byte-for-byte on the current tree (#108). Floating
+// ranges here would let lockfile drift change the vendored ws / SDK / esbuild
+// inside the bundle. (Historical #95 / 7911a44 sha256 differs only by esbuild
+// chunk order — see tools/build-plugin.mjs.)
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
