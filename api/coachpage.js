@@ -4,6 +4,7 @@ import { zaiKey } from '../lib/ai.js';
 import { coachPagePass, COACHPAGE_COOLDOWN_MS } from '../lib/coach.js';
 import { handleOptions, optionalAuth, withUser, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
+import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   if (handleOptions(req, res, 'GET, POST, OPTIONS')) return;
@@ -31,6 +32,10 @@ export default async function handler(req, res) {
       await runAsUser(auth.userId, async () => {
         res.status(200).json(await getCoachPage());
       });
+      return;
+    }
+    if (!keyOk(req)) {
+      res.status(401).json({ error: 'Unauthorized' });
       return;
     }
     await withUser(req, res, async () => {

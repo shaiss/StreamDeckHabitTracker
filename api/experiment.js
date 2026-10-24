@@ -8,6 +8,7 @@ import { listItems, storeExperiment, getExperiment } from '../lib/dataset.js';
 import { getHabits } from '../lib/habits.js';
 import { handleOptions, optionalAuth, withUser, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
+import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
@@ -26,6 +27,10 @@ export default async function handler(req, res) {
         const latest = await getExperiment();
         res.status(200).json(latest || { note: 'No experiment yet. GET ?run=1 to run one.' });
       });
+      return;
+    }
+    if (!keyOk(req)) {
+      res.status(401).json({ error: 'Unauthorized' });
       return;
     }
     await withUser(req, res, async () => {

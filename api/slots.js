@@ -14,6 +14,7 @@ import { nudgePass } from '../lib/coach.js';
 import { isBlocked } from '../lib/beacon.js';
 import { handleOptions, optionalAuth, hasExplicitCredential, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
+import { keyOk } from '../lib/habit-key.js';
 
 function publicPayload() {
   const habits = BASE_HABITS.map((h) => ({ name: h.name, emoji: h.emoji, label: h.label }));
@@ -97,7 +98,9 @@ export default async function handler(req, res) {
       // authFetch sends Authorization: Bearer.
       if (!hasExplicitCredential(req)) return;
 
-      if (q.deck) {
+      // Heartbeat is the one write on this open-CORS GET — HABIT_KEY (if set)
+      // plus an explicit credential (ht_ / Bearer), never cookie-only.
+      if (q.deck && keyOk(req)) {
         const uid = auth.userId;
         waitUntil(
           runAsUser(uid, () =>

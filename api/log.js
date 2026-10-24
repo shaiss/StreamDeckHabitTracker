@@ -8,8 +8,8 @@
 //   "snack"). The deck's double-tap gesture sends high (issue #33).
 // DELETE /api/log?... (or ...&undo=1) -> removes today's most recent entry for
 //   that key. The long-press "oops" affordance: no dialog, no confirmation.
-// Auth: Clerk session OR per-user plugin API token. Fail closed — no anonymous
-// writes. Returns plain text (handy when testing in a browser).
+// Auth: HABIT_KEY (if set) via x-habit-key/?key=, then Clerk session OR per-user
+// plugin API token (ht_). Fail closed — no anonymous writes. Returns plain text (handy when testing in a browser).
 import { waitUntil } from '@vercel/functions';
 import { append, removeLast, getSlots, getCoachPage, getProfile, isConfigured } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
@@ -18,6 +18,7 @@ import { reactTo, answerQuestion } from '../lib/coach.js';
 import { tzHelpers } from '../lib/tz.js';
 import { handleOptions, withUser, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
+import { keyOk } from '../lib/habit-key.js';
 
 const INTENSITIES = new Set(['high', 'low']);
 
@@ -26,6 +27,10 @@ export default async function handler(req, res) {
   if (handleOptions(req, res, 'GET, POST, DELETE, OPTIONS')) return;
   setCors(res, { methods: 'GET, POST, DELETE, OPTIONS' });
   try {
+    if (!keyOk(req)) {
+      res.status(401).send('Unauthorized');
+      return;
+    }
     await withUser(req, res, async (auth) => {
       if (!isConfigured()) {
         res

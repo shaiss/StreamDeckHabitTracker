@@ -3,6 +3,7 @@ import { getSlots, isConfigured } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { fullSuggest } from '../lib/coach.js';
 import { handleOptions, withUser, setCors } from '../lib/auth.js';
+import { keyOk } from '../lib/habit-key.js';
 
 const COOLDOWN_MS = 30_000;
 
@@ -14,6 +15,10 @@ export default async function handler(req, res) {
     const q = req.query || {};
     if (req.method !== 'POST' && q.run !== '1') {
       res.status(405).json({ error: 'POST here (or GET with ?run=1) to refresh AI suggestions.' });
+      return;
+    }
+    if (!keyOk(req)) {
+      res.status(401).json({ error: 'Unauthorized' });
       return;
     }
     await withUser(req, res, async () => {

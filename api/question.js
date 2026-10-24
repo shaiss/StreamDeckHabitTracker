@@ -4,6 +4,7 @@ import { dismissQuestion } from '../lib/coach.js';
 import { openQuestion, scoreQuestions } from '../lib/question.js';
 import { handleOptions, optionalAuth, withUser, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
+import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   if (handleOptions(req, res, 'GET, POST, OPTIONS')) return;
@@ -18,6 +19,10 @@ export default async function handler(req, res) {
     }
 
     if (q.dismiss === '1') {
+      if (!keyOk(req)) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
       await withUser(req, res, async () => {
         let qid = (q.qid || '').toString();
         if (!qid) {

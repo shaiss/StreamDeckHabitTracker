@@ -104,7 +104,7 @@ test('the nudge prompt tells the coach dismissals exist and must be respected', 
 test('the virtual deck embeds the identical urgency curve (drift guard)', () => {
   // deck.html has no build step and carries its own copy. A virtual deck that
   // escalated on a different curve would be a lying preview of the hardware.
-  const src = readFileSync(new URL('../../public/deck.html', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../../public/deck.js', import.meta.url), 'utf8');
   assert.match(src, /function urgencyOf\(def\)/, 'the curve exists');
   for (const marker of ['def.expiresAt - def.assignedAt', 'Date.now() - def.assignedAt', 'Math.max(0, Math.min(1']) {
     assert.ok(src.includes(marker), 'deck.html missing urgency marker: ' + marker);

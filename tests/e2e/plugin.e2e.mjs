@@ -9,8 +9,8 @@
 //   5. a hung poll cannot wedge the sync — the guard expires and it retries
 //   6. the esbuild bundle (bin/plugin.js) passes the same boot smoke
 //
-// Requires: npm i @elgato/streamdeck esbuild --no-save (ws arrives as an SDK
-// dep). No Chromium — that need died with the HTML runtime.
+// Requires: npm ci (exact pins for esbuild / @elgato/streamdeck / ws@8.22.0 —
+// #108). No Chromium — that need died with the HTML runtime.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';

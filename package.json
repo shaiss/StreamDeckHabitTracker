@@ -6,14 +6,26 @@
   "scripts": {
     "generate": "node tools/generate.mjs",
     "test": "node --test \"tests/unit/*.test.mjs\"",
-    "test:e2e": "node --test \"tests/e2e/*.e2e.mjs\""
+    "test:e2e": "node --test \"tests/e2e/*.e2e.mjs\"",
+    "build:plugin": "node tools/build-plugin.mjs --no-images"
   },
   "license": "MIT",
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.14",
     "@clerk/backend": "^2.33.7",
-    "@mastra/core": "^1.52.1",
     "@vercel/functions": "^3.7.6",
+    "ai": "^7.0.0",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@elgato/streamdeck": "3.0.2",
+    "esbuild": "0.28.2",
+    "gifenc": "1.0.3",
+    "playwright-core": "1.64.1",
+    "pngjs": "7.0.0",
+    "ws": "8.22.0"
+  },
+  "overrides": {
+    "ws": "8.22.0"
   }
 }

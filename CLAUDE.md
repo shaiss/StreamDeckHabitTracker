@@ -20,22 +20,25 @@ to this repo — **every push to the default branch deploys production**).
 ## Commands
 
 ```bash
-# One-time per machine (tool deps are intentionally NOT in package.json —
-# runtime deps are kept lean on purpose so Vercel's build stays trivial, but
-# they are NOT just @vercel/functions: the coach runs on a Mastra agent, so
-# @vercel/functions, @mastra/core, @ai-sdk/openai-compatible, and zod are all
-# load-bearing runtime deps and belong in package.json; do not prune them.
-# esbuild + @elgato/streamdeck are BUILD-time deps of the Stream Deck plugin —
-# the SDK is bundled into bin/plugin.js, never installed at runtime):
-npm i playwright-core pngjs gifenc esbuild @elgato/streamdeck --no-save
+# Install (runtime deps + exact plugin/tool pins in devDependencies — #108).
+# Pins: esbuild@0.28.2, @elgato/streamdeck@3.0.2, ws@8.22.0 (overrides),
+# playwright-core@1.64.1, pngjs@7.0.0, gifenc@1.0.3. Runtime deps stay in
+# dependencies (@vercel/functions, ai, @ai-sdk/openai-compatible, zod) — do
+# not prune them. (Mastra was dropped — decision #66 / PR #96.) The SDK is
+# bundled into bin/plugin.js, never needed at Vercel runtime. Clean
+# `npm ci` + `npm run build:plugin` is byte-reproducible on the current
+# tree; see tools/build-plugin.mjs for the #95 / 7911a44 hash caveat.
+npm ci
 
 # Regenerate still icons (icons/) and animated GIFs (icons/animated/):
 node tools/make-icons.mjs
 node tools/make-animations.mjs
 
 # Rebuild the Stream Deck plugin package into public/downloads/ (renders
-# manifest images, bundles src/ -> bin/plugin.js, zips). Bundle-only rebuild:
-# node tools/bundle-plugin.mjs
+# manifest images, bundles src/ -> bin/plugin.js, zips). Reproducible
+# bundle-only rebuild (no image re-render):
+#   npm run build:plugin
+# Full rebuild with images:
 node tools/build-plugin.mjs
 
 # Regenerate the bundled profile (single-user build: 15-key, plugin flavor,
@@ -66,8 +69,11 @@ a mock server) run locally and in CI (.github/workflows/ci.yml). New UI behavior
 ships with a regression test. After merging, also probe the live deployment:
 
 - `GET /api/health` — storage + AI wiring (env var names only; never values),
-  plus `deck` — when a *physical* Stream Deck last polled (`null` = the plugin
-  has never connected). First thing to check when hardware keys look stale.
+ plus `deck` — when a *physical* Stream Deck last polled (`null` = the plugin
+ has never connected), plus `previewIsolation` (booleans for #104 / #106 —
+ non-production Redis gate; field name kept for callers). First
+ thing to check when hardware keys look stale. Preview Redis/`HABIT_KEY`
+ scoping: [docs/preview-isolation.md](docs/preview-isolation.md).
 - `GET /api/slots` — current AI slot assignments, plus `coachPage` (the wider
   Coach-page array, #52) and `coachNav` (navigation consent, #54)
 - `GET /api/log?habit=Test` — writes a real row (`?slot=N` for slot keys)
@@ -103,31 +109,38 @@ Vercel MCP `web_fetch_vercel_url` tool to probe the live site.
   model-level errors. Key from `ZAI_API_KEY` (also accepts
   `Z_AI_API_KEY`/`GLM_API_KEY`/`ZHIPU_API_KEY`). Also home to `extractJson`,
   the fenced/wrapped-JSON parser every coach pass runs its reply through.
-- `lib/agent.js` — the coach as a Mastra `Agent`. z.ai plugs in via the AI
-  SDK's OpenAI-compatible provider, but through a **custom `zaiFetch` that
-  injects `thinking:{type:'disabled'}`** into every `/chat/completions` body —
-  GLM-5.x are hybrid reasoning models and burn the whole token budget thinking
-  otherwise (PR #2). Never wire the agent up without that fetch; it is the only
-  guardrail. Hypothesis memory is a two-tool loop: `recall_hypotheses` (reads
-  prior notes at the start of a pass) and `update_hypotheses` (rewrites them
-  when the model's understanding changes). Both are Mastra-mediated; the bytes
-  persist in the `habits:coach:memory` Redis key via `lib/store.js` (survives
-  cold starts — Mastra's in-process memory would not, and we deliberately do
-  not add a full storage adapter).
-- `lib/coach.js` — the AI coach, **purely Mastra-routed** (no raw-z.ai
-  fallback). Seven entry points: `fullSuggest()` (manual refresh), `morningPass()`
-  (cron), `reactTo(entry)` (per-tap background pass via `waitUntil` from
-  `@vercel/functions`, 45s cooldown claimed in Redis *before* the model call to
-  prevent double-fire), `nudgePass()` (proactive single-slot repaint, driven by
-  the deck's `/api/slots` poll), `rosterPass()` (self-managing roster),
-  `coachPagePass()` (the AI-curated Coach page, `habits:coach:page`, slots
-  5..16 — run by the morning cron and `/api/coachpage`, reserves the fixed
-  habits + front-4, not dataset-captured like the roster pass), and
-  `dailyDigest()` (cron insight). A coach failure no longer silently rescues —
-  it surfaces as a clean error: `reactTo`/`nudgePass` no-op (already inside
-  `waitUntil(...catch)`), `fullSuggest`/`morningPass`/`dailyDigest` return null
-  → a 502 at the API, `rosterPass` queues nothing. All slot output is sanitized
-  hard (`sanitize()`) and replaces all 4 slots atomically.
+- `lib/agent.js` — the coach driven by AI SDK `generateText` + `tool()`. z.ai
+  plugs in via `@ai-sdk/openai-compatible`, but through a **custom `zaiFetch`
+  that injects `thinking:{type:'disabled'}`** into every `/chat/completions`
+  body — GLM-5.x are hybrid reasoning models and burn the whole token budget
+  thinking otherwise (PR #2 / `lib/zai-fetch.js`). Never wire the coach up
+  without that fetch; it is the only guardrail. Hypothesis memory is a
+  two-tool loop: `recall_hypotheses` (reads prior notes at the start of a
+  pass) and `update_hypotheses` (rewrites them when the model's understanding
+  changes). Both are AI SDK `tool()` wrappers over `lib/coach-memory.js`; the
+  bytes persist in the `habits:coach:memory` Redis key via `lib/store.js`
+  (survives cold starts — in-process memory would not).
+- `lib/coach.js` — the AI coach, **AI-SDK-routed** (no raw-z.ai fallback;
+  Mastra was dropped — decision #66). Seven entry points: `fullSuggest()`
+  (manual refresh), `morningPass()` (cron), `reactTo(entry)` (per-tap
+  background pass via `waitUntil` from `@vercel/functions`, 45s cooldown
+  claimed in Redis *before* the model call to prevent double-fire),
+  `nudgePass()` (proactive single-slot repaint, driven by the deck's
+  `/api/slots` poll), `rosterPass()` (self-managing roster), `coachPagePass()`
+  (the AI-curated Coach page, `habits:coach:page`, slots 5..16 — run by the
+  morning cron and `/api/coachpage`, reserves the fixed habits + front-4, not
+  dataset-captured like the roster pass), and `dailyDigest()` (cron insight).
+  A coach failure no longer silently rescues — it surfaces as a clean error:
+  `reactTo`/`nudgePass` no-op (already inside `waitUntil(...catch)`),
+  `fullSuggest`/`morningPass`/`dailyDigest` return null → a 502 at the API,
+  `rosterPass` queues nothing. All slot output is sanitized hard
+  (`sanitize()` in `lib/coach-shape.js`) and replaces all 4 slots atomically.
+  Prompt/sanitizer code stays in `coach-shape.js` so the zero-dep unit suite
+  never imports `lib/agent.js` / `ai`.
+- `lib/dataset.js` / `lib/quality.js` — hand-rolled capture + rule scores for
+  slots-producing passes (`habits:dataset`, cap 300). `/api/experiment`
+  replays captured contexts with `scoreOutput`; do not replace with framework
+  scorer/dataset packages (decision #66 / #99).
 - `lib/roster.js` — the **self-managing roster**: the coach proposes changes to
   the *fixed* habit list (`rosterPass()` in coach.js, run by the morning cron
   after the keys pass and never allowed to fail it). Proposals only ever queue;
@@ -213,8 +226,8 @@ Source is `src/` (plain ESM, no TypeScript, no property inspector):
 
 Taps push a **chain** of rechecks (2/5/9/15/25s) because the reactive coach pass
 runs in the background after `/api/log` answers — one recheck often lands before
-the swap exists. The poll tags itself `?deck=<version>&keys=N` (plus `?key=` when
-`HABIT_KEY` is set); `api/slots.js` records that as `habits:deck` so
+the swap exists. The poll tags itself `?deck=<version>&keys=N` (plus the
+`x-habit-key` header when `HABIT_KEY` is set — never in the URL); `api/slots.js` records that as `habits:deck` so
 `/api/health` and the dashboard can say whether a *physical* deck is live (the
 only way to tell a dead plugin from a dead backend). That heartbeat is the **one
 write on an otherwise read-only, open-CORS endpoint**, so it honors the same
@@ -279,7 +292,9 @@ gitignored scratch, `public/downloads/` is the published copy).
   the *viewer's* timezone by design.
 - Env vars bind at deploy time — after adding one in Vercel, a redeploy (any
   push) is required before functions see it.
-- The optional `HABIT_KEY` env var gates writes (`?key=`); regenerate profiles
-  with `--key=...` if it's ever set.
+- The optional `HABIT_KEY` env var gates writes via the `x-habit-key` header
+  (`lib/habit-key.js`). Callers: web prompt → sessionStorage; plugin → Property
+  Inspector global settings. Never commit a key or hand out `?key=` links — see
+  `docs/habit-key.md`.
 - Model replies are parsed with `extractJson` (first `{`…last `}`) — GLM often
   wraps JSON in fences; never assume clean JSON.
