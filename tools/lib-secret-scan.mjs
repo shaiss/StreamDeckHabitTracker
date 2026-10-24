@@ -180,17 +180,23 @@ export function valueNeedles(value) {
   return [...new Set([value, uri, formEnc, plusSpace])].map((v) => Buffer.from(v, 'utf8'));
 }
 
-// Docs/UI handoff detector (#115): flag text that hands a caller a keyed URL.
-// Bare mentions of the legacy parameter (`?key=` in migration notes) with no
-// path/URL in front stay allowed. Does not flag hkey=/keys=/keyboard/etc.
+// Docs/UI handoff detector (#115 / #121): flag text that hands a caller a
+// keyed URL. Bare mentions of the legacy parameter (`?key=` in migration
+// notes) with no path/URL in front stay allowed. Does not flag
+// hkey=/keys=/keyboard=/monkey=/x-habit-key, or searchParams.get('key').
 //
-// Catches: ?key= and &key= on URLs/paths, URL-encoded forms (%3Fkey%3D /
-// %26key%3D and mixed), and string/template construction that builds them.
+// Catches: ?key= and &key= on URLs/paths (including HTML-escaped &amp;key=),
+// URL-encoded forms (%3Fkey%3D / %26key%3D and mixed), string/template
+// construction that builds them (including mid-string `'…&key=' + k`), and
+// URLSearchParams writers (`.set('key',…)` / `.append('key',…)` /
+// `new URLSearchParams({ key … })`).
 const KEY_LINK_PREFIX =
   '(?:https?:\\/\\/[^\\s"\'`)\\]>]*|[A-Za-z0-9_./~-]*\\.html|\\/(?:api\\/)?[A-Za-z0-9_./~-]*)';
+// & / %26 / &amp; — literal, percent-encoded, or HTML-escaped (#121)
+const KEY_AMP = '(?:&(?:amp;)?|%26)';
 
 const KEY_LINK_RULES = [
-  // path?key= / path?other=…&key= and URL-encoded ?/%3F and &/%26 with =/%3D
+  // path?key= / path?other=…&key= (&amp;key=) and URL-encoded ?/%3F and &/%26
   {
     name: 'keyed url',
     re: new RegExp(
@@ -198,21 +204,29 @@ const KEY_LINK_RULES = [
         '(?:' +
         '(?:\\?|%3[Ff])key(?:%3[Dd]|=)' + // ?key= immediately
         '|' +
-        '(?:\\?|%3[Ff])[^\\s"\'`)\\]>]*?(?:&|%26)key(?:%3[Dd]|=)' + // ?…&key=
+        '(?:\\?|%3[Ff])[^\\s"\'`)\\]>]*?' + KEY_AMP + 'key(?:%3[Dd]|=)' + // ?…&key=
         '|' +
-        '(?:&|%26)key(?:%3[Dd]|=)' + // &key= abutting the path
+        KEY_AMP + 'key(?:%3[Dd]|=)' + // &key= / &amp;key= abutting the path
         ')',
       'gi'
     )
   },
-  // '?key=' +  /  "&key=" +  /  `?key=` +
-  { name: 'concat ?key=', re: /(['"`])\?key=\1\s*\+/g },
-  { name: 'concat &key=', re: /(['"`])&key=\1\s*\+/g },
-  // `...?key=${` / `...&key=${`
+  // '?key=' +  /  "&key=" +  /  `?key=` +  — also mid-string `'…&key=' + k`
+  { name: 'concat ?key=', re: /(['"`])[^'"`\n]*\?key=\1\s*\+/g },
+  { name: 'concat &key=', re: /(['"`])[^'"`\n]*&(?:amp;)?key=\1\s*\+/g },
+  // `...?key=${` / `...&key=${` / `...&amp;key=${`
   { name: 'template ?key=', re: /`[^`\n]*\?key=\$\{/g },
-  { name: 'template &key=', re: /`[^`\n]*&key=\$\{/g },
+  { name: 'template &key=', re: /`[^`\n]*&(?:amp;)?key=\$\{/g },
   // '?' + 'key=' / "&" + "key=" (same or mixed quotes)
-  { name: 'split concat key=', re: /(['"`])([?&])\1\s*\+\s*(['"`])key=\3/g }
+  { name: 'split concat key=', re: /(['"`])([?&])\1\s*\+\s*(['"`])key=\3/g },
+  // URLSearchParams writers that put the key in the query string (#121)
+  { name: 'searchParams.set key', re: /\.\s*set\s*\(\s*['"]key['"]\s*,/g },
+  { name: 'searchParams.append key', re: /\.\s*append\s*\(\s*['"]key['"]\s*,/g },
+  // new URLSearchParams({ key }) / ({ key: v }) / ({ "key": v }) — not get()
+  {
+    name: 'URLSearchParams key init',
+    re: /URLSearchParams\s*\(\s*\{[^}]*?(?:['"]key['"]|\bkey)\s*[,}:]/g
+  }
 ];
 
 /** Flag docs/UI text that hands callers a keyed URL (?key= / &key= forms). */
