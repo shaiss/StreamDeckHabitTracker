@@ -38,7 +38,10 @@ fetch live directly (`--base=URL` / `HABITS_BASE` override the default origin).
 Plugin/tool build pins are exact `devDependencies` in `package.json`
 (`esbuild`, `@elgato/streamdeck`, `playwright-core`, `pngjs`, `gifenc`, plus
 `overrides.ws` → `8.22.0`) so a clean checkout reproduces `bin/plugin.js`
-(#108). Runtime deps stay in `dependencies`.
+byte-for-byte on the current tree (#108). Runtime deps stay in
+`dependencies`. Historical tip `7911a44` (#95) is content-identical under
+chunk-order normalization but not the same sha256 — see the header comment
+in `tools/build-plugin.mjs`.
 
 ```bash
 npm ci

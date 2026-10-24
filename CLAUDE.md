@@ -25,7 +25,9 @@ to this repo — **every push to the default branch deploys production**).
 # playwright-core@1.64.1, pngjs@7.0.0, gifenc@1.0.3. Runtime deps stay in
 # dependencies (@vercel/functions, ai, @ai-sdk/openai-compatible, zod) — do
 # not prune them. (Mastra was dropped — decision #66 / PR #96.) The SDK is
-# bundled into bin/plugin.js, never needed at Vercel runtime.
+# bundled into bin/plugin.js, never needed at Vercel runtime. Clean
+# `npm ci` + `npm run build:plugin` is byte-reproducible on the current
+# tree; see tools/build-plugin.mjs for the #95 / 7911a44 hash caveat.
 npm ci
 
 # Regenerate still icons (icons/) and animated GIFs (icons/animated/):

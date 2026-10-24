@@ -8,11 +8,22 @@
 //   rm -rf node_modules && npm ci
 //   npm run build:plugin          # == node tools/build-plugin.mjs --no-images
 //
-// Verified sha256 of bin/plugin.js from that path on this tip (two clean
-// rebuilds byte-identical):
+// Forward tip (this tree): two clean rebuilds are byte-identical and match the
+// committed artifact:
 //   a50e4ce517c6fbca3876cf453f865bab54faccdd381805c551697ccd8b29908c
 // (Hash is tree-dependent — re-verify after merging source changes that
 // affect the plugin bundle.)
+//
+// Historical #95 tip 7911a44: the committed plugin.js sha256 is
+//   75e9b190f29abdb079cf6cd5682bfc914ab6917e5dccc28e475e847aa951070c
+// Applying the same pins on that tree and rebuilding yields
+//   c4cecb4dac81faf9509b29b35e210feba6401002aa9c25cd796f923d0df20e50
+// Content is identical after normalizing esbuild chunk order; the only
+// input that differs is emission order of the split module
+// `@elgato/streamdeck/.../logging/index.js` (import stub vs body) relative
+// to `@elgato/utils/dist/logging/*`. 7911a44 shares base c98d658's order
+// (utils-first); esbuild@0.28.2 today emits stub-first. Not faked — report
+// the actual rebuild hash; do not chase the historical byte digest.
 //
 // Full image regenerate (needs Chromium at CHROME_PATH or /opt/pw-browsers):
 //   node tools/build-plugin.mjs
