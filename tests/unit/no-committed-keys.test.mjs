@@ -316,6 +316,70 @@ test('findKeyLinkHandoffs flags URL, encoded, concat, and template forms', () =>
   }
 });
 
+test('findKeyLinkHandoffs flags HTML-escaped, mid-string concat, and URLSearchParams (#121)', () => {
+  const amp = '&amp;';
+  const bad = [
+    // HTML-escaped &amp;key= on a path / after other params
+    'href="/api/log?habit=Water' + amp + K + '=SECRET"',
+    'open deck.html?' + amp + K + '=x',
+    '/api/log' + amp + K + '=' + FAKE,
+    // mid-string concat: '...&key=' + k  (not only a bare '&key=' literal)
+    "const u = base + '?habit=Water" + AK + "' + secret",
+    'const u = base + "?habit=Water' + AK + '" + secret',
+    "const u = base + '/api/log?x=1" + AK + "' + k",
+    "const u = base + '?habit=Water" + amp + K + "=' + secret",
+    'const u = `/api/log?habit=Water' + amp + K + '=${k}`',
+    // Multiline template: newline before &key=${…} still counts
+    'const u = `?habit=Water\n' + AK + '${secret}`',
+    'const u = `/api/log?habit=Water\n' + amp + K + '=${k}`',
+    // Template after logical / await openers
+    'ok && `?habit=Water' + AK + '${k}`',
+    'ok || `/api/log?x=1' + AK + '${k}`',
+    'v ?? `?habit=Water' + amp + K + '=${k}`',
+    'await `?habit=Water' + AK + '${k}`',
+    // Single-line template &key= forms the opener-restricted rule misses
+    // (tagged / JSX / bare { / nested / bang / export default / throw)
+    'tag`?habit=Water' + AK + '${k}`',
+    'const el = <>{`?habit=Water' + AK + '${k}`}</>',
+    '{`?habit=Water' + AK + '${k}`}',
+    'const u = `outer ${`?habit=Water' + AK + '${k}`}`',
+    '!`?habit=Water' + AK + '${k}`',
+    'export default `?habit=Water' + AK + '${k}`',
+    'throw `?habit=Water' + AK + '${k}`',
+    // URLSearchParams writers (USP-like receivers + assigned locals)
+    "searchParams.set('" + K + "', secret)",
+    'q.set("' + K + '", key)',
+    "params.append('" + K + "', secret)",
+    'url.searchParams.append("' + K + '", v)',
+    "const sp = new URLSearchParams();\nsp.set('" + K + "', secret)",
+    'let qs = new URLSearchParams();\nqs.append("' + K + '", v)',
+    // Conditional / parenthesized assigns still count as USP locals
+    'if (ok) sp = new URLSearchParams();\nsp.set("' + K + '", secret)',
+    'ok && (sp = new URLSearchParams());\nsp.append("' + K + '", v)',
+    // Initializer property names (shorthand + quoted)
+    'new URLSearchParams({ ' + K + ': secret })',
+    'new URLSearchParams({' + K + ':secret})',
+    'new URLSearchParams({ ' + K + ' })',
+    'new URLSearchParams({' + K + '})',
+    'new URLSearchParams({ habit: h, "' + K + '": secret })',
+    "new URLSearchParams({ habit: h, '" + K + "': secret })"
+  ];
+  for (const s of bad) {
+    assert.ok(findKeyLinkHandoffs(s).length > 0, 'missed handoff: ' + s);
+  }
+});
+
+test('URLSearchParams key init is not ReDoS on long comma lists', () => {
+  // Nested [^{}]*?, * comma quantifiers blew up; 40 commas must stay fast.
+  const commas = ','.repeat(40);
+  const s = 'new URLSearchParams({' + commas + '})';
+  const t0 = performance.now();
+  const hits = findKeyLinkHandoffs(s);
+  const ms = performance.now() - t0;
+  assert.deepEqual(hits, [], 'false positive on comma-only init');
+  assert.ok(ms < 50, 'ReDoS: ' + ms.toFixed(1) + 'ms for 40 commas');
+});
+
 test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {
   const ok = [
     'The server still accepts ' + QK + ' during the transition.',
@@ -325,10 +389,34 @@ test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {
     'passkey= or monkey= must not trip this',
     '/api/slots?deck=1&keys=15',
     '/api/log?hkey=1&intensity=high',
+    '/api/log?habit=Water&keyboard=1',
     "params.get('" + K + "')",
     'searchParams.get("' + K + '")',
     "headers['x-habit-" + K + "'] = secret",
-    'Do not put HABIT_KEY in these URLs — send x-habit-key as a header'
+    'fetch(u, { headers: { "x-habit-' + K + '": secret } })',
+    'Do not put HABIT_KEY in these URLs — send x-habit-key as a header',
+    // URLSearchParams readers / unrelated keys must not trip (#121)
+    'new URLSearchParams({ habit: h.name })',
+    'new URLSearchParams({ slot: String(n) })',
+    'new URLSearchParams({ keyboard: 1 })',
+    'new URLSearchParams({ monkey: "x" })',
+    'new URLSearchParams({ keys: 15 })',
+    'new URLSearchParams({ hkey: 1 })',
+    "q.set('habit', h.name)",
+    "q.set('hkey', idx)",
+    "q.append('keys', n)",
+    "q.set('keyboard', 1)",
+    // Non-USP .set/.append('key', …) — not a URL handoff
+    "localStorage.set('" + K + "', value)",
+    "map.set('" + K + "', v)",
+    "headers.set('" + K + "', secret)",
+    "cache.append('" + K + "', v)",
+    // Initializer values named/stringed "key" are not a key= param
+    'new URLSearchParams({ habit: ' + K + ' })',
+    'new URLSearchParams({ habit: "' + K + '" })',
+    "new URLSearchParams({ habit: '" + K + "' })",
+    // Template &key= must not span past a closing backtick into later prose
+    'const a = `?habit=Water`;\nconst b = x; // ' + AK + '${nope} outside template'
   ];
   for (const s of ok) {
     assert.deepEqual(findKeyLinkHandoffs(s), [], 'false positive: ' + s);
@@ -336,11 +424,20 @@ test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {
 });
 
 test('no docs or UI hand out URL-key links', () => {
-  const files = execFileSync('git', ['ls-files', '*.md', 'public/*.html', 'public/*.js', 'public/*.ps1'], { cwd: ROOT })
-    .toString().split('\n').filter((f) => f && !f.startsWith('docs/superpowers/'));
+  // Recurse under public/** (#121) — top-level globs alone miss nested UI.
+  // Prefer pathspec magic so both public/foo.js and public/a/b/c.js are listed.
+  const listed = execFileSync(
+    'git',
+    ['ls-files', '-z', '--', '*.md', ':(glob)public/**/*.html', ':(glob)public/**/*.js', ':(glob)public/**/*.ps1'],
+    { cwd: ROOT }
+  ).toString().split('\0').filter((f) => f && !f.startsWith('docs/superpowers/'));
+  assert.ok(
+    listed.some((f) => /^public\/.+\/.+\.(html|js|ps1)$/.test(f)),
+    'expected at least one nested public/** file in the handoff scan'
+  );
   // Bare mentions of the legacy parameter (`?key=` in migration notes) have
   // no path in front and stay allowed; construction and encoded forms do not.
-  for (const f of files) {
+  for (const f of listed) {
     const s = readFileSync(join(ROOT, f), 'utf8');
     const hits = findKeyLinkHandoffs(s);
     assert.deepEqual(hits, [], f + ' hands out a keyed URL:\n' +
