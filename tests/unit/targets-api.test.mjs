@@ -1,16 +1,91 @@
-// Client-safe error mapping for /api/targets — storage/transport/parse/
-// strict-read failures must never echo raw messages. Validation → 400 and
-// TARGETS_BUSY → 409 are exercised via the same pure helpers the handler uses
-// (importing api/targets.js would pull Mastra into the zero-dep unit suite).
+// Client-safe error mapping + HTTP rails for /api/targets. Exercises the real
+// handler (and the shared targetsHttpError helper it uses) — not a local
+// reimplementation of the status map.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   targetsClientMessage,
-  applyTargetDecision,
+  targetsHttpError,
   TARGETS_WRITE_FAILED_MSG,
-  TARGETS_STORAGE_UNAVAILABLE_MSG
+  TARGETS_STORAGE_UNAVAILABLE_MSG,
+  TARGETS_COOLDOWN_MSG
 } from '../../lib/target.js';
 import { withTargetsLock } from '../../lib/store.js';
+import targetsHandler from '../../api/targets.js';
+
+const TARGETS_KEY = 'habits:targets';
+const HABITS_KEY = 'habits:config';
+const LOCK_KEY = 'habits:targets:lock';
+const RELEASE_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+const RENEW_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], tonumber(ARGV[2])) else return 0 end";
+
+function mkRes() {
+  return {
+    statusCode: 0,
+    body: null,
+    headers: {},
+    setHeader(k, v) { this.headers[k] = v; },
+    status(code) { this.statusCode = code; return this; },
+    json(obj) { this.body = obj; return this; }
+  };
+}
+
+function installRedis(state) {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    const op = args[0];
+    if (op === 'GET') {
+      return { ok: true, json: async () => ({ result: state[args[1]] ?? null }) };
+    }
+    if (op === 'SET') {
+      const key = args[1];
+      if (args.includes('NX') && state[key] != null) {
+        return { ok: true, json: async () => ({ result: null }) };
+      }
+      state[key] = args[2];
+      return { ok: true, json: async () => ({ result: 'OK' }) };
+    }
+    if (op === 'MSET') {
+      state[args[1]] = args[2];
+      state[args[3]] = args[4];
+      return { ok: true, json: async () => ({ result: 'OK' }) };
+    }
+    if (op === 'EVAL') {
+      const lua = args[1];
+      if (lua === RELEASE_LUA) {
+        if (state[args[3]] === args[4]) delete state[args[3]];
+        return { ok: true, json: async () => ({ result: 1 }) };
+      }
+      if (lua === RENEW_LUA) {
+        return { ok: true, json: async () => ({ result: state[args[3]] === args[4] ? 1 : 0 }) };
+      }
+      throw new Error(`unexpected EVAL ${lua}`);
+    }
+    throw new Error(`unexpected redis ${JSON.stringify(args)}`);
+  };
+  process.env.VERCEL_ENV = 'production';
+  process.env.KV_REST_API_URL = 'https://example.test';
+  process.env.KV_REST_API_TOKEN = 'test';
+  delete process.env.HABIT_KEY;
+  delete process.env.ZAI_API_KEY;
+  delete process.env.Z_AI_API_KEY;
+  delete process.env.GLM_API_KEY;
+  delete process.env.ZHIPU_API_KEY;
+  return {
+    calls,
+    restore() {
+      globalThis.fetch = originalFetch;
+      delete process.env.VERCEL_ENV;
+      delete process.env.KV_REST_API_URL;
+      delete process.env.KV_REST_API_TOKEN;
+    }
+  };
+}
 
 test('targetsClientMessage: TARGETS_WRITE_FAILED → stable generic', () => {
   const err = new Error(TARGETS_WRITE_FAILED_MSG);
@@ -43,7 +118,6 @@ test('targetsClientMessage: response-parse / JSON SyntaxError → generic unavai
 });
 
 test('targetsClientMessage: getHabitsStrict throw → generic unavailable', () => {
-  // habits.js cmd uses `store ${status}` (no colon+body); migration path has its own text.
   assert.equal(
     targetsClientMessage(new Error('store 503')),
     TARGETS_STORAGE_UNAVAILABLE_MSG
@@ -62,100 +136,222 @@ test('targetsClientMessage: TARGETS_CORRUPT → generic unavailable', () => {
   assert.ok(!targetsClientMessage(err).includes('unparseable'));
 });
 
-// Mirrors api/targets.js status rails without importing the Mastra-backed handler.
-function targetsPostErrorStatus(err) {
-  if (err?.code === 'TARGETS_BUSY') return { status: 409, error: err.message };
-  return { status: 500, error: targetsClientMessage(err) };
-}
-
-test('POST error rails: validation stays 400 with applyTargetDecision message', () => {
-  const result = applyTargetDecision({
-    habits: [{ name: 'Caffeine', emoji: '☕', label: 'Caf', goal: 5 }],
-    targets: { proposals: [], history: [], rejected: [] },
-    id: 'missing',
-    decision: 'approve'
-  });
-  assert.ok(result.error);
-  // Handler: if (result.error) res.status(400).json({ error: result.error })
-  const status = 400;
-  assert.equal(status, 400);
-  assert.match(result.error, /no longer pending/i);
-  assert.notEqual(result.error, TARGETS_STORAGE_UNAVAILABLE_MSG);
-});
-
-test('POST error rails: bad decision string stays 400', () => {
-  const result = applyTargetDecision({
-    habits: [{ name: 'Caffeine', emoji: '☕', label: 'Caf', goal: 5 }],
-    targets: {
-      proposals: [{ id: 'p1', name: 'Caffeine', from: 5, to: 6, reason: 'try' }],
-      history: [],
-      rejected: []
-    },
-    id: 'p1',
-    decision: 'maybe'
-  });
-  assert.equal(result.error, 'Decision must be "approve" or "dismiss".');
-});
-
-test('POST error rails: TARGETS_BUSY → HTTP 409 (message preserved)', async () => {
+test('targetsHttpError: TARGETS_BUSY → 409', () => {
   const err = new Error('Another targets update is in progress.');
   err.code = 'TARGETS_BUSY';
-  const res = targetsPostErrorStatus(err);
+  const res = targetsHttpError(err);
   assert.equal(res.status, 409);
   assert.match(res.error, /in progress/i);
-  assert.notEqual(res.error, TARGETS_STORAGE_UNAVAILABLE_MSG);
 });
 
-test('POST error rails: transport / parse / strict-read → HTTP 500 generic', () => {
-  for (const err of [
-    Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }),
-    new SyntaxError('Unexpected end of JSON input'),
-    new Error('store 503'),
-    new Error('habits migration: key unreadable after CAS miss'),
-    Object.assign(new Error('habits:targets value is unparseable'), { code: 'TARGETS_CORRUPT' }),
-    new Error('store 500: ACL denied secret-token-xyz')
-  ]) {
-    const res = targetsPostErrorStatus(err);
-    assert.equal(res.status, 500, String(err.message));
-    assert.equal(res.error, TARGETS_STORAGE_UNAVAILABLE_MSG, String(err.message));
-    assert.ok(!res.error.includes('fetch'));
-    assert.ok(!res.error.includes('ACL'));
-    assert.ok(!res.error.includes('503'));
-    assert.ok(!res.error.includes('unparseable'));
-  }
+test('targetsHttpError: TARGETS_COOLDOWN → 429', () => {
+  const err = new Error(TARGETS_COOLDOWN_MSG);
+  err.code = 'TARGETS_COOLDOWN';
+  err.doc = { proposals: [], history: [], lastRunAt: 99 };
+  const res = targetsHttpError(err);
+  assert.equal(res.status, 429);
+  assert.equal(res.error, TARGETS_COOLDOWN_MSG);
+  assert.equal(res.doc.lastRunAt, 99);
 });
 
-test('POST error rails: TARGETS_WRITE_FAILED → HTTP 500 write-failed message', () => {
+test('targetsHttpError: TARGETS_WRITE_FAILED → 500 write-failed message', () => {
   const err = new Error(TARGETS_WRITE_FAILED_MSG);
   err.code = 'TARGETS_WRITE_FAILED';
-  const res = targetsPostErrorStatus(err);
+  const res = targetsHttpError(err);
   assert.equal(res.status, 500);
   assert.equal(res.error, TARGETS_WRITE_FAILED_MSG);
 });
 
-test('withTargetsLock contention surfaces TARGETS_BUSY (handler → 409)', async () => {
-  const state = {};
-  const LOCK_KEY = 'habits:targets:lock';
-  const RELEASE_LUA =
-    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (_url, opts) => {
-    const args = JSON.parse(opts.body);
-    if (args[0] === 'SET' && args[1] === LOCK_KEY) {
-      if (state[LOCK_KEY] != null) return { ok: true, json: async () => ({ result: null }) };
-      state[LOCK_KEY] = args[2];
-      return { ok: true, json: async () => ({ result: 'OK' }) };
-    }
-    if (args[0] === 'EVAL') {
-      assert.equal(args[1], RELEASE_LUA);
-      if (state[args[3]] === args[4]) delete state[args[3]];
-      return { ok: true, json: async () => ({ result: 1 }) };
-    }
-    throw new Error(`unexpected redis ${JSON.stringify(args)}`);
+test('targetsHttpError: transport / parse / corrupt → 500 generic', () => {
+  for (const err of [
+    Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }),
+    new SyntaxError('Unexpected end of JSON input'),
+    new Error('store 503'),
+    Object.assign(new Error('habits:targets value is unparseable'), { code: 'TARGETS_CORRUPT' }),
+    new Error('store 500: ACL denied secret-token-xyz')
+  ]) {
+    const res = targetsHttpError(err);
+    assert.equal(res.status, 500, String(err.message));
+    assert.equal(res.error, TARGETS_STORAGE_UNAVAILABLE_MSG, String(err.message));
+  }
+});
+
+test('handler GET: returns view without run', async () => {
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({
+      proposals: [{ id: 'p1', name: 'Exercise', from: 1, to: 2, reason: 'try' }],
+      history: [{ name: 'Caffeine', from: 5, to: 4, direction: 'down', reason: 'ease', via: 'auto' }],
+      rejected: [],
+      lastRunAt: 42,
+      model: 'glm'
+    })
   };
+  const mock = installRedis(state);
+  try {
+    const res = mkRes();
+    await targetsHandler({ method: 'GET', query: {}, headers: {} }, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.proposals.length, 1);
+    assert.equal(res.body.lastRunAt, 42);
+    assert.ok(Array.isArray(res.body.lines));
+  } finally {
+    mock.restore();
+  }
+});
+
+test('handler POST: validation stays 400 with applyTargetDecision message', async () => {
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({ proposals: [], history: [], rejected: [] }),
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Caffeine', emoji: '☕', label: 'Caf', goal: 5, origin: 'human' }
+    ])
+  };
+  const mock = installRedis(state);
+  try {
+    const res = mkRes();
+    await targetsHandler(
+      { method: 'POST', query: {}, headers: {}, body: { id: 'missing', decision: 'approve' } },
+      res
+    );
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.error, /no longer pending/i);
+    assert.notEqual(res.body.error, TARGETS_STORAGE_UNAVAILABLE_MSG);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('handler POST: bad decision string stays 400', async () => {
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({
+      proposals: [{ id: 'p1', name: 'Caffeine', from: 5, to: 6, reason: 'try' }],
+      history: [],
+      rejected: []
+    }),
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Caffeine', emoji: '☕', label: 'Caf', goal: 5, origin: 'human' }
+    ])
+  };
+  const mock = installRedis(state);
+  try {
+    const res = mkRes();
+    await targetsHandler(
+      { method: 'POST', query: {}, headers: {}, body: { id: 'p1', decision: 'maybe' } },
+      res
+    );
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.error, 'Decision must be "approve" or "dismiss".');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('handler POST: TARGETS_BUSY → HTTP 409', async () => {
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({
+      proposals: [{ id: 'p1', name: 'Caffeine', from: 5, to: 6, reason: 'try' }],
+      history: [],
+      rejected: []
+    }),
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Caffeine', emoji: '☕', label: 'Caf', goal: 5, origin: 'human' }
+    ])
+  };
+  const mock = installRedis(state);
+  try {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const held = withTargetsLock(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 40));
+      return 'ok';
+    });
+    await gate;
+    const res = mkRes();
+    await targetsHandler(
+      { method: 'POST', query: {}, headers: {}, body: { id: 'p1', decision: 'dismiss' } },
+      res
+    );
+    assert.equal(res.statusCode, 409);
+    assert.match(res.body.error, /in progress/i);
+    assert.equal(await held, 'ok');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('handler POST: store throw → HTTP 500 generic (no leak)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => 'ACL denied secret' });
   process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
+  delete process.env.HABIT_KEY;
+  try {
+    const res = mkRes();
+    await targetsHandler(
+      { method: 'POST', query: {}, headers: {}, body: { id: 'p1', decision: 'approve' } },
+      res
+    );
+    assert.equal(res.statusCode, 500);
+    assert.equal(res.body.error, TARGETS_STORAGE_UNAVAILABLE_MSG);
+    assert.ok(!JSON.stringify(res.body).includes('ACL'));
+    assert.ok(!JSON.stringify(res.body).includes('secret'));
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('handler GET ?run=1: cooldown under lock → HTTP 429', async () => {
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({
+      proposals: [],
+      history: [],
+      rejected: [],
+      lastRunAt: Date.now(),
+      model: ''
+    })
+  };
+  const mock = installRedis(state);
+  // Fail-open keyOk (no HABIT_KEY); zaiKey must be present for the run path.
+  process.env.ZAI_API_KEY = 'test-not-a-real-key';
+  try {
+    const res = mkRes();
+    await targetsHandler({ method: 'GET', query: { run: '1' }, headers: {} }, res);
+    assert.equal(res.statusCode, 429);
+    assert.match(res.body.error, /half a minute/i);
+    assert.ok(res.body.lastRunAt > 0);
+  } finally {
+    delete process.env.ZAI_API_KEY;
+    mock.restore();
+  }
+});
+
+test('handler GET ?run=1: keyOk refuses when HABIT_KEY set without header', async () => {
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({ proposals: [], history: [], rejected: [], lastRunAt: 0 })
+  };
+  const mock = installRedis(state);
+  process.env.HABIT_KEY = 'unit-test-secret-key';
+  process.env.ZAI_API_KEY = 'test-not-a-real-key';
+  try {
+    const res = mkRes();
+    await targetsHandler({ method: 'GET', query: { run: '1' }, headers: {} }, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.error, 'Unauthorized');
+  } finally {
+    delete process.env.HABIT_KEY;
+    delete process.env.ZAI_API_KEY;
+    mock.restore();
+  }
+});
+
+test('withTargetsLock contention surfaces TARGETS_BUSY (handler → 409)', async () => {
+  const state = {};
+  const mock = installRedis(state);
   try {
     let release;
     const gate = new Promise((r) => { release = r; });
@@ -170,14 +366,11 @@ test('withTargetsLock contention surfaces TARGETS_BUSY (handler → 409)', async
       (err) => err && err.code === 'TARGETS_BUSY'
     );
     assert.equal(await held, 'ok');
-    const mapped = targetsPostErrorStatus(
+    const mapped = targetsHttpError(
       Object.assign(new Error('Another targets update is in progress.'), { code: 'TARGETS_BUSY' })
     );
     assert.equal(mapped.status, 409);
   } finally {
-    globalThis.fetch = originalFetch;
-    delete process.env.VERCEL_ENV;
-    delete process.env.KV_REST_API_URL;
-    delete process.env.KV_REST_API_TOKEN;
+    mock.restore();
   }
 });

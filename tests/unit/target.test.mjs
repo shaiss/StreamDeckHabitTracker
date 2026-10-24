@@ -121,6 +121,47 @@ test('sanitize: no-op, unknown habit, missing reason, and duplicates are dropped
   assert.deepEqual(queue, []);
 });
 
+test('sanitize: booleans/null/objects never coerce via Number() into targets', () => {
+  // Number(true) === 1 — without a typeof gate, `{ to: true }` would auto-lower.
+  const { auto, queue } = sanitizeTargetChanges(
+    [
+      { name: 'Caffeine', to: true, reason: 'bool true must not become 1' },
+      { name: 'Caffeine', to: false, reason: 'bool false must not become 0' },
+      { name: 'Caffeine', to: null, reason: 'null' },
+      { name: 'Caffeine', to: { n: 3 }, reason: 'object' },
+      { name: 'Caffeine', to: [3], reason: 'array' },
+      { name: 'Caffeine', to: '4', reason: 'digit string is ok' }
+    ],
+    { habits: HABITS, now: 4100 }
+  );
+  assert.equal(auto.length, 1);
+  assert.equal(auto[0].to, 4);
+  assert.deepEqual(queue, []);
+});
+
+test('sanitize: expectedTargets drops changes when live goal moved mid-pass', () => {
+  // Model reasoned over Caffeine@5; human approved a raise to 6 while it ran.
+  const habits = [
+    { name: 'Caffeine', emoji: '☕', label: 'Caffeine', goal: 6 },
+    { name: 'Exercise', emoji: '🏃', label: 'Exercise', goal: 1 }
+  ];
+  const { auto, queue } = sanitizeTargetChanges(
+    [
+      { name: 'Caffeine', to: 4, reason: 'stale down vs approved raise' },
+      { name: 'Exercise', to: 2, reason: 'still matches snapshot' }
+    ],
+    {
+      habits,
+      now: 4200,
+      expectedTargets: { caffeine: 5, exercise: 1 }
+    }
+  );
+  assert.deepEqual(auto, [], 'stale caffeine down discarded');
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].name, 'Exercise');
+  assert.equal(queue[0].to, 2);
+});
+
 test('sanitize: a dismissed (name:to) is never queued again', () => {
   const { queue } = sanitizeTargetChanges(
     [{ name: 'Exercise', to: 2, reason: 'try again' }],

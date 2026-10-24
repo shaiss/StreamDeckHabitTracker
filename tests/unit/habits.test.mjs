@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   validateHabits,
   isPreviousSeed,
+  migratePreviousSeed,
   PREVIOUS_SEED,
   seedHabits,
   getHabits,
@@ -84,6 +85,29 @@ test('isPreviousSeed matches the pre-Code eight-entry catalog (origin extras ok)
     isPreviousSeed(PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }))),
     true
   );
+});
+
+test('migratePreviousSeed appends Code and preserves goals/origin', () => {
+  const prev = PREVIOUS_SEED.map((h, i) => ({
+    ...h,
+    origin: 'human',
+    ...(i === 2 ? { goal: { target: 4, setBy: 'coach', reason: 'hitting it', floor: 2 } } : {}),
+    ...(i === 4 ? { goal: 3 } : {})
+  }));
+  assert.ok(isPreviousSeed(prev));
+  const next = migratePreviousSeed(prev);
+  assert.equal(next.length, seedHabits().length);
+  assert.equal(next[8].name, 'Code');
+  assert.equal(next[2].name, 'Eat');
+  assert.deepEqual(next[2].goal, {
+    target: 4,
+    setBy: 'coach',
+    reason: 'hitting it',
+    floor: 2
+  });
+  assert.equal(next[2].origin, 'human');
+  assert.equal(next[4].goal, 3);
+  assert.equal(next[8].goal, undefined, 'new Code entry has no inherited goal');
 });
 
 test('isPreviousSeed rejects custom catalogs (length, order, name, emoji, label)', () => {
@@ -190,7 +214,11 @@ function evalCas(args, currentRaw) {
 }
 
 test('getHabits maps previous seed to current seed with zero Redis writes (#127)', async () => {
-  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prev = PREVIOUS_SEED.map((h, i) => ({
+    ...h,
+    origin: 'human',
+    ...(i === 0 ? { goal: 2 } : {})
+  }));
   const prevRaw = JSON.stringify(prev);
   let redisValue = prevRaw;
   await withRedis({
@@ -199,6 +227,7 @@ test('getHabits maps previous seed to current seed with zero Redis writes (#127)
     const list = await getHabits();
     assert.deepEqual(list.map((h) => h.name), seedHabits().map((h) => h.name));
     assert.equal(list[8].name, 'Code');
+    assert.equal(list[0].goal, 2, 'in-memory map keeps stored goals');
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], 'GET');
     assert.ok(!calls.some((c) => WRITE_CMDS.has(String(c[0]).toUpperCase())));
@@ -286,7 +315,7 @@ test('getHabitsStrict migrates persisted previous seed to the Code catalog once'
     }
     if (args[0] === 'EVAL') {
       const result = evalCas(args, redisValue);
-      assert.deepEqual(JSON.parse(args[5]), seedHabits());
+      assert.deepEqual(JSON.parse(args[5]).map((h) => h.name), seedHabits().map((h) => h.name));
       if (result === 'OK') redisValue = args[5];
       return { ok: true, json: async () => ({ result }) };
     }
@@ -303,7 +332,44 @@ test('getHabitsStrict migrates persisted previous seed to the Code catalog once'
     assert.equal(calls[0][0], 'GET');
     assert.equal(calls[1][0], 'EVAL');
     assert.equal(calls.length, 2);
-    assert.deepEqual(JSON.parse(redisValue), seedHabits());
+    assert.deepEqual(JSON.parse(redisValue).map((h) => h.name), seedHabits().map((h) => h.name));
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict migration preserves goals on the previous eight', async () => {
+  const prev = PREVIOUS_SEED.map((h, i) => ({
+    ...h,
+    origin: 'human',
+    ...(i === 5 ? { goal: { target: 2, setBy: 'human', ceil: 5 } } : {})
+  }));
+  let redisValue = JSON.stringify(prev);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    if (args[0] === 'GET') {
+      return { ok: true, json: async () => ({ result: redisValue }) };
+    }
+    if (args[0] === 'EVAL') {
+      const result = evalCas(args, redisValue);
+      if (result === 'OK') redisValue = args[5];
+      return { ok: true, json: async () => ({ result }) };
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    process.env.VERCEL_ENV = 'production';
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    const list = await getHabitsStrict();
+    assert.equal(list[5].name, 'Cannabis');
+    assert.deepEqual(list[5].goal, { target: 2, setBy: 'human', ceil: 5 });
+    assert.equal(JSON.parse(redisValue)[5].goal.target, 2);
+    assert.equal(list[8].name, 'Code');
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.VERCEL_ENV;
