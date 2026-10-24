@@ -337,6 +337,15 @@ test('findKeyLinkHandoffs flags HTML-escaped, mid-string concat, and URLSearchPa
     'ok || `/api/log?x=1' + AK + '${k}`',
     'v ?? `?habit=Water' + amp + K + '=${k}`',
     'await `?habit=Water' + AK + '${k}`',
+    // Single-line template &key= forms the opener-restricted rule misses
+    // (tagged / JSX / bare { / nested / bang / export default / throw)
+    'tag`?habit=Water' + AK + '${k}`',
+    'const el = <>{`?habit=Water' + AK + '${k}`}</>',
+    '{`?habit=Water' + AK + '${k}`}',
+    'const u = `outer ${`?habit=Water' + AK + '${k}`}`',
+    '!`?habit=Water' + AK + '${k}`',
+    'export default `?habit=Water' + AK + '${k}`',
+    'throw `?habit=Water' + AK + '${k}`',
     // URLSearchParams writers (USP-like receivers + assigned locals)
     "searchParams.set('" + K + "', secret)",
     'q.set("' + K + '", key)',
@@ -358,6 +367,17 @@ test('findKeyLinkHandoffs flags HTML-escaped, mid-string concat, and URLSearchPa
   for (const s of bad) {
     assert.ok(findKeyLinkHandoffs(s).length > 0, 'missed handoff: ' + s);
   }
+});
+
+test('URLSearchParams key init is not ReDoS on long comma lists', () => {
+  // Nested [^{}]*?, * comma quantifiers blew up; 40 commas must stay fast.
+  const commas = ','.repeat(40);
+  const s = 'new URLSearchParams({' + commas + '})';
+  const t0 = performance.now();
+  const hits = findKeyLinkHandoffs(s);
+  const ms = performance.now() - t0;
+  assert.deepEqual(hits, [], 'false positive on comma-only init');
+  assert.ok(ms < 50, 'ReDoS: ' + ms.toFixed(1) + 'ms for 40 commas');
 });
 
 test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {

@@ -219,11 +219,14 @@ const KEY_LINK_RULES = [
   { name: 'concat ?key=', re: /(['"`])[^'"`\n]*\?key=\1\s*\+/g },
   { name: 'concat &key=', re: /(['"`])[^'"`\n]*&(?:amp;)?key=\1\s*\+/g },
   // `...?key=${` / `...&key=${` / `...&amp;key=${`
-  // Template &key= allows newlines inside the literal (#121 review). Opener
-  // must look like a real template start (`=`, `(`, `+`, `&&`/`||`/`??`,
-  // `await`, …) so a prior closing backtick cannot span into later prose;
-  // ?key= stays single-line.
+  // Single-line &key= (base behavior) union multiline-with-opener: the
+  // single-line rule catches tagged/JSX/nested/bang/export/throw forms that
+  // the opener list would miss; the multiline rule allows newlines inside a
+  // real template start without spanning past a closing backtick. Do not
+  // widen the opener list to "fix" those — that regression is why both
+  // rules stay. ?key= stays single-line.
   { name: 'template ?key=', re: /`[^`\n]*\?key=\$\{/g },
+  { name: 'template &key=', re: /`[^`\n]*&(?:amp;)?key=\$\{/g },
   {
     name: 'template &key=',
     re: /(?:^|[=(+,[?:|&]|(?:return|await|yield)\s*|=>\s*)\s*`[^`]*&(?:amp;)?key=\$\{/g
@@ -237,9 +240,11 @@ const KEY_LINK_RULES = [
   { name: 'searchParams.append key', re: new RegExp(String.raw`\b${USP_WRITER_RECEIVER}\s*\.\s*append\s*\(\s*['"]key['"]\s*,`, 'g') },
   // new URLSearchParams({ key }) / ({ key: v }) / ({ "key": v }) — property
   // name only (after `{` or `,`), not values like `{ habit: key }`.
+  // Repeated segment is [^{},]* (no comma) so nested comma quantifiers cannot
+  // ReDoS on long comma-only inputs.
   {
     name: 'URLSearchParams key init',
-    re: /URLSearchParams\s*\(\s*\{(?:[^{}]*?,)*\s*(?:['"]key['"]|\bkey)\s*[,}:]/g
+    re: /URLSearchParams\s*\(\s*\{(?:[^{},]*,)*\s*(?:['"]key['"]|\bkey)\s*[,}:]/g
   }
 ];
 
