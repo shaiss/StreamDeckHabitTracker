@@ -2,7 +2,7 @@
 // The mock is stateful and runs the REAL roster decision logic (lib/roster.js)
 // behind /api/roster, so these tests cover the wiring between the two rather
 // than a hand-written stub of it.
-// Requires: npm i playwright-core --no-save, and Chromium at CHROME_PATH or
+// Requires: npm ci (playwright-core pinned), and Chromium at CHROME_PATH or
 // the repo default (/opt/pw-browsers/chromium).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,6 +11,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { documentHeaders } from './document-headers.mjs';
 import { sanitizeProposals, applyDecision, restoreFromArchive, normalizeRoster } from '../../lib/roster.js';
 import {
   sanitizeTargetChanges,
@@ -127,7 +128,8 @@ before(async () => {
     }
     const p = join(ROOT, url === '/' ? 'index.html' : url);
     if (existsSync(p)) {
-      res.writeHead(200, { 'Content-Type': MIME[extname(p)] || 'application/octet-stream' });
+      const type = MIME[extname(p)] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': type, ...(extname(p) === '.html' ? documentHeaders() : {}) });
       res.end(readFileSync(p));
     } else { res.writeHead(404); res.end(); }
   });

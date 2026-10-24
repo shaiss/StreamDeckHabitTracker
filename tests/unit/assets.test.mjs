@@ -35,11 +35,11 @@ test('no page requests /_vercel/insights (Web Analytics is disabled)', () => {
 
 test('nav.js and deck.html have no analytics inject/track wiring', () => {
   const nav = readFileSync(join(PUBLIC, 'nav.js'), 'utf8');
-  const deck = readFileSync(join(PUBLIC, 'deck.html'), 'utf8');
+  const deck = readFileSync(join(PUBLIC, 'deck.html'), 'utf8') + readFileSync(join(PUBLIC, 'deck.js'), 'utf8');
   assert.ok(!nav.includes('script.js'), 'nav.js must not inject insights script');
   assert.ok(!nav.includes('window.va'), 'nav.js must not stub window.va');
-  assert.ok(!deck.includes('virtual_deck_tap'), 'deck.html must not fire virtual_deck_tap');
-  assert.ok(!deck.includes("window.va("), 'deck.html must not call window.va');
+  assert.ok(!deck.includes('virtual_deck_tap'), 'deck must not fire virtual_deck_tap');
+  assert.ok(!deck.includes("window.va("), 'deck must not call window.va');
 });
 
 test('every seed habit has a committed /icons/animated/<name>.gif', () => {
@@ -75,7 +75,7 @@ test('static local asset paths referenced by pages exist under public/', () => {
   // deck.html builds habit GIF URLs dynamically ('/icons/animated/' + name +
   // '.gif'); the seed-habit test above covers that. Catch any other hardcoded
   // string concatenations that still point at a concrete missing file.
-  const deck = readFileSync(join(PUBLIC, 'deck.html'), 'utf8');
+  const deck = readFileSync(join(PUBLIC, 'deck.js'), 'utf8');
   for (const lit of deck.matchAll(/['"`](\/icons\/animated\/[^'"`]+\.gif)['"`]/g)) {
     if (!existsSync(join(PUBLIC, lit[1].slice(1)))) {
       missing.push(`deck.html → ${lit[1]}`);

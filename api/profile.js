@@ -3,10 +3,11 @@
 // Lean single-user settings: timezone, name, free-text "about me" the coach
 // reads on every pass, and coachNav — the tri-state navigation consent
 // (off | nudge-only | may-navigate, issue #54; unknown values normalize to
-// off). HABIT_KEY (if set) gates writes via ?key=.
+// off). HABIT_KEY (if set) gates writes via the x-habit-key header (?key= still accepted, #112).
 import { getProfile, setProfile, isConfigured } from '../lib/store.js';
 import { isValidTz, HOME_TZ } from '../lib/tz.js';
 import { normalizeConsent } from '../lib/takeover.js';
+import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -33,9 +34,8 @@ export default async function handler(req, res) {
       return;
     }
 
-    const secret = process.env.HABIT_KEY;
     const body = req.method === 'POST' ? (typeof req.body === 'object' && req.body ? req.body : {}) : q;
-    if (secret && body.key !== secret && q.key !== secret) {
+    if (!keyOk(req, body)) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }

@@ -4,14 +4,14 @@
 import { isConfigured } from '../../lib/store.js';
 import { zaiKey } from '../../lib/ai.js';
 import { morningPass, rosterPass, targetPass, coachPagePass } from '../../lib/coach.js';
+import { keyOk } from '../../lib/habit-key.js';
 
 export function authorized(req) {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && req.headers?.authorization === `Bearer ${cronSecret}`) return true;
   const q = req.query || {};
   if (q.run === '1') {
-    const habitKey = process.env.HABIT_KEY;
-    return !habitKey || q.key === habitKey;
+    return keyOk(req);
   }
   // No CRON_SECRET configured: accept the (unauthenticated) cron call.
   return !cronSecret;

@@ -15,6 +15,7 @@ import { scoreSuggestions } from '../lib/scorer.js';
 import { computeToday } from '../lib/today.js';
 import { nudgePass } from '../lib/coach.js';
 import { isBlocked } from '../lib/beacon.js';
+import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -84,8 +85,7 @@ export default async function handler(req, res) {
     // caller could forge "the hardware is live" (the plugin sends ?key= too when
     // the env var is set). `plugin` is still attacker-shaped when HABIT_KEY is
     // unset — it's stripped of markup here and escaped again at render.
-    const secret = process.env.HABIT_KEY;
-    if (q.deck && (!secret || q.key === secret)) {
+    if (q.deck && keyOk(req)) {
       waitUntil(
         setDeckState({
           at: Date.now(),

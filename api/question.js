@@ -11,11 +11,13 @@
 import { getQuestions, getSlots, isConfigured } from '../lib/store.js';
 import { dismissQuestion } from '../lib/coach.js';
 import { openQuestion, scoreQuestions } from '../lib/question.js';
+import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-habit-key');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') {
     res.status(204).end();
@@ -30,8 +32,7 @@ export default async function handler(req, res) {
 
     if (q.dismiss === '1') {
       // A write, so it honors HABIT_KEY like /api/log and the nudge dismissal.
-      const secret = process.env.HABIT_KEY;
-      if (secret && q.key !== secret) {
+      if (!keyOk(req)) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }

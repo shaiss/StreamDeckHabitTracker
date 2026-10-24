@@ -20,23 +20,25 @@ to this repo — **every push to the default branch deploys production**).
 ## Commands
 
 ```bash
-# One-time per machine (tool deps are intentionally NOT in package.json —
-# runtime deps are kept lean on purpose so Vercel's build stays trivial, but
-# they are NOT just @vercel/functions: the coach runs on the Vercel AI SDK
-# (generateText + tool()), so @vercel/functions, ai, @ai-sdk/openai-compatible,
-# and zod are all load-bearing runtime deps and belong in package.json; do not
-# prune them. (Mastra was dropped — decision #66 / PR #96.)
-# esbuild + @elgato/streamdeck are BUILD-time deps of the Stream Deck plugin —
-# the SDK is bundled into bin/plugin.js, never installed at runtime):
-npm i playwright-core pngjs gifenc esbuild @elgato/streamdeck --no-save
+# Install (runtime deps + exact plugin/tool pins in devDependencies — #108).
+# Pins: esbuild@0.28.2, @elgato/streamdeck@3.0.2, ws@8.22.0 (overrides),
+# playwright-core@1.64.1, pngjs@7.0.0, gifenc@1.0.3. Runtime deps stay in
+# dependencies (@vercel/functions, ai, @ai-sdk/openai-compatible, zod) — do
+# not prune them. (Mastra was dropped — decision #66 / PR #96.) The SDK is
+# bundled into bin/plugin.js, never needed at Vercel runtime. Clean
+# `npm ci` + `npm run build:plugin` is byte-reproducible on the current
+# tree; see tools/build-plugin.mjs for the #95 / 7911a44 hash caveat.
+npm ci
 
 # Regenerate still icons (icons/) and animated GIFs (icons/animated/):
 node tools/make-icons.mjs
 node tools/make-animations.mjs
 
 # Rebuild the Stream Deck plugin package into public/downloads/ (renders
-# manifest images, bundles src/ -> bin/plugin.js, zips). Bundle-only rebuild:
-# node tools/bundle-plugin.mjs
+# manifest images, bundles src/ -> bin/plugin.js, zips). Reproducible
+# bundle-only rebuild (no image re-render):
+#   npm run build:plugin
+# Full rebuild with images:
 node tools/build-plugin.mjs
 
 # Regenerate the bundled profile (single-user build: 15-key, plugin flavor,
@@ -224,8 +226,8 @@ Source is `src/` (plain ESM, no TypeScript, no property inspector):
 
 Taps push a **chain** of rechecks (2/5/9/15/25s) because the reactive coach pass
 runs in the background after `/api/log` answers — one recheck often lands before
-the swap exists. The poll tags itself `?deck=<version>&keys=N` (plus `?key=` when
-`HABIT_KEY` is set); `api/slots.js` records that as `habits:deck` so
+the swap exists. The poll tags itself `?deck=<version>&keys=N` (plus the
+`x-habit-key` header when `HABIT_KEY` is set — never in the URL); `api/slots.js` records that as `habits:deck` so
 `/api/health` and the dashboard can say whether a *physical* deck is live (the
 only way to tell a dead plugin from a dead backend). That heartbeat is the **one
 write on an otherwise read-only, open-CORS endpoint**, so it honors the same
@@ -290,7 +292,9 @@ gitignored scratch, `public/downloads/` is the published copy).
   the *viewer's* timezone by design.
 - Env vars bind at deploy time — after adding one in Vercel, a redeploy (any
   push) is required before functions see it.
-- The optional `HABIT_KEY` env var gates writes (`?key=`); regenerate profiles
-  with `--key=...` if it's ever set.
+- The optional `HABIT_KEY` env var gates writes via the `x-habit-key` header
+  (`lib/habit-key.js`). Callers: web prompt → sessionStorage; plugin → Property
+  Inspector global settings. Never commit a key or hand out `?key=` links — see
+  `docs/habit-key.md`.
 - Model replies are parsed with `extractJson` (first `{`…last `}`) — GLM often
   wraps JSON in fences; never assume clean JSON.
