@@ -329,11 +329,17 @@ test('findKeyLinkHandoffs flags HTML-escaped, mid-string concat, and URLSearchPa
     "const u = base + '/api/log?x=1" + AK + "' + k",
     "const u = base + '?habit=Water" + amp + K + "=' + secret",
     'const u = `/api/log?habit=Water' + amp + K + '=${k}`',
-    // URLSearchParams writers
+    // Multiline template: newline before &key=${…} still counts
+    'const u = `?habit=Water\n' + AK + '${secret}`',
+    'const u = `/api/log?habit=Water\n' + amp + K + '=${k}`',
+    // URLSearchParams writers (USP-like receivers + assigned locals)
     "searchParams.set('" + K + "', secret)",
     'q.set("' + K + '", key)',
     "params.append('" + K + "', secret)",
     'url.searchParams.append("' + K + '", v)',
+    "const sp = new URLSearchParams();\nsp.set('" + K + "', secret)",
+    'let qs = new URLSearchParams();\nqs.append("' + K + '", v)',
+    // Initializer property names (shorthand + quoted)
     'new URLSearchParams({ ' + K + ': secret })',
     'new URLSearchParams({' + K + ':secret})',
     'new URLSearchParams({ ' + K + ' })',
@@ -371,7 +377,18 @@ test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {
     "q.set('habit', h.name)",
     "q.set('hkey', idx)",
     "q.append('keys', n)",
-    "q.set('keyboard', 1)"
+    "q.set('keyboard', 1)",
+    // Non-USP .set/.append('key', …) — not a URL handoff
+    "localStorage.set('" + K + "', value)",
+    "map.set('" + K + "', v)",
+    "headers.set('" + K + "', secret)",
+    "cache.append('" + K + "', v)",
+    // Initializer values named/stringed "key" are not a key= param
+    'new URLSearchParams({ habit: ' + K + ' })',
+    'new URLSearchParams({ habit: "' + K + '" })',
+    "new URLSearchParams({ habit: '" + K + "' })",
+    // Template &key= must not span past a closing backtick into later prose
+    'const a = `?habit=Water`;\nconst b = x; // ' + AK + '${nope} outside template'
   ];
   for (const s of ok) {
     assert.deepEqual(findKeyLinkHandoffs(s), [], 'false positive: ' + s);
