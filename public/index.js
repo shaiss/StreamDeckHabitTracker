@@ -230,9 +230,16 @@ import { esc } from '/escape.js';
       window.HabitKey.postJson('/api/profile', body).then(async (r) => {
         const j = await r.json();
         if (j.ok) {
+          // Always adopt the server's consent tokens. A name/tz/about-only
+          // Save can CAS-retry against a fresher Autonomy write and return a
+          // newer coachNavSeq — leaving loaded* stale would make the next
+          // consent change send an obsolete navSeq (#95 Entelligence).
+          loadedCoachNavSeq = Math.max(0, Number(j.coachNavSeq) || loadedCoachNavSeq);
           if (body.coachNav !== undefined) {
             loadedCoachNav = j.coachNav || body.coachNav;
-            loadedCoachNavSeq = Math.max(0, Number(j.coachNavSeq) || loadedCoachNavSeq + 1);
+          } else {
+            loadedCoachNav = j.coachNav || loadedCoachNav;
+            document.getElementById('setCoachNav').value = loadedCoachNav;
           }
           st.textContent = 'Saved — the coach will use this on its next pass.';
         } else if (r.status === 409 && j.coachNavSeq !== undefined) {

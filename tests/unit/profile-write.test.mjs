@@ -146,8 +146,13 @@ test('unsequenced first-write retry after NX loss preserves winner consent', () 
     applyProfileWrite(store, { coachNav: 'off', navSeq: 1 }, { now: 1 }).ok,
     true
   );
-  // Simulate B having already read null, then applyProfileWrite retries:
-  const retried = applyProfileWrite(store, { name: 'Ada' }, { now: 2 });
+  // B already observed raw=null; SET NX against the live store must lose.
+  const lost = applyProfileWriteFrom(store, null, { name: 'Ada' }, { now: 2 });
+  assert.equal(lost.ok, false);
+  assert.equal(lost.status, 409);
+  assert.equal(parseProfileRaw(store.raw).name, undefined, 'NX loser must not write');
+  // API-style retry: reread live profile and apply name only.
+  const retried = applyProfileWrite(store, { name: 'Ada' }, { now: 3 });
   assert.equal(retried.ok, true);
   const doc = parseProfileRaw(store.raw);
   assert.equal(doc.coachNav, 'off');
@@ -221,6 +226,25 @@ test('dashboard Save omits coachNav unless the select changed (drift)', () => {
   assert.doesNotMatch(
     js,
     /JSON\.stringify\(\{\s*name:[\s\S]*coachNav:\s*document\.getElementById\('setCoachNav'\)/
+  );
+});
+
+test('dashboard Save resyncs consent tokens after every successful profile write (drift)', () => {
+  // Name-only Saves can CAS-retry onto a fresher Autonomy write; the 200 body
+  // carries the live coachNav/coachNavSeq and must update loaded* so the next
+  // consent change does not send a stale navSeq (#95 Entelligence).
+  const js = readFileSync(new URL('../../public/index.js', import.meta.url), 'utf8');
+  const okBranch = js.match(/if \(j\.ok\) \{([\s\S]*?)\} else if \(r\.status === 409/);
+  assert.ok(okBranch, 'successful Save branch missing');
+  const body = okBranch[1];
+  assert.match(body, /loadedCoachNavSeq\s*=\s*Math\.max\(0,\s*Number\(j\.coachNavSeq\)/);
+  assert.match(body, /body\.coachNav\s*!==\s*undefined/);
+  assert.match(body, /loadedCoachNav\s*=\s*j\.coachNav\s*\|\|\s*loadedCoachNav/);
+  assert.match(body, /getElementById\('setCoachNav'\)\.value\s*=\s*loadedCoachNav/);
+  // Select rewrite is only for Saves that did not intentionally send coachNav.
+  assert.match(
+    body,
+    /if \(body\.coachNav !== undefined\) \{[\s\S]*?\} else \{[\s\S]*?setCoachNav[\s\S]*?\}/
   );
 });
 

@@ -315,12 +315,23 @@ test('Autonomy Toggle: three modes share idle frame + violet ⚙; only the label
   assert.equal(autonomyOf('off').label, 'MANUAL');
   assert.equal(autonomyOf('nudge-only').label, 'ASSISTED');
   assert.equal(autonomyOf('may-navigate').label, 'AUTO');
-  for (const c of ['off', 'nudge-only', 'may-navigate']) {
-    const svg = at(c);
+  const manual = at('off');
+  const assist = at('nudge-only');
+  const auto = at('may-navigate');
+  for (const [svg, label] of [[manual, 'MANUAL'], [assist, 'ASSISTED'], [auto, 'AUTO']]) {
     assert.match(svg, /data-state-frame="idle"/);
     assert.ok(svg.includes(AUTONOMY_GLYPH));
-    assert.match(svg, new RegExp('>' + autonomyOf(c).label + '<'));
+    assert.match(svg, new RegExp('>' + label + '<'));
   }
+  // Modes differ only in the short label — interior recipe is shared.
+  assert.equal(stripFrame(manual).replace(/>MANUAL</g, '>X<'),
+    stripFrame(assist).replace(/>ASSISTED</g, '>X<'));
+  assert.equal(stripFrame(assist).replace(/>ASSISTED</g, '>X<'),
+    stripFrame(auto).replace(/>AUTO</g, '>X<'));
+  const haloStop = (svg) => (svg.match(/<radialGradient[\s\S]*?stop-color="(#[0-9a-f]+)"/i) || [])[1];
+  assert.equal(haloStop(manual), '#7f47e1', 'MANUAL interior is hue 262 violet');
+  assert.equal(haloStop(assist), haloStop(manual));
+  assert.equal(haloStop(auto), haloStop(manual));
 });
 
 test('Attention Beacon: interior stays violet coach across idle/wait/blocked (#75)', () => {

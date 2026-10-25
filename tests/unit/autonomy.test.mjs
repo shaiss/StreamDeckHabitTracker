@@ -403,6 +403,79 @@ test('plugin profiles reserve one Autonomy key regardless of pageCount', () => {
   // Explicit --slots must share the remaining-capacity ceiling (CodeRabbit #95).
   assert.match(gen, /Math\.min\(4, wanted, remaining\)/,
     'explicit --slots must cap by remaining page-0 capacity');
+  // Cell reservation before habit fill (#95 Entelligence) — capacity math alone
+  // does not stop place() from consuming Autonomy's cell with habits.
+  assert.match(gen, /__reservedSticky/);
+  assert.match(gen, /placeSticky\(\s*['"]autonomy['"]/);
+});
+
+test('mini + 9 habits still places Autonomy (reserved before habit fill) (#95)', async () => {
+  // Entelligence #95: habits filled first and consumed every Mini cell, so
+  // place() logged "dropped the Autonomy key". Pre-reserved sticky cells must
+  // keep Autonomy even when habits overflow.
+  const dir = mkdtempSync(join(tmpdir(), 'ht-auto-reserve-'));
+  const outfile = join(dir, 'Repro.streamDeckProfile');
+  const nine = Array.from({ length: 9 }, (_, i) => ({
+    name: 'H' + i, label: 'H' + i, emoji: '•'
+  }));
+  const server = createServer((req, res) => {
+    if (req.url?.startsWith('/api/habits')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ habits: nine }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const runGenerate = () => new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        join(ROOT, 'tools/generate.mjs'),
+        `http://127.0.0.1:${port}/api/log`,
+        '--plugin', '--model=mini', '--static',
+        `--outfile=${outfile}`, '--name=Repro'
+      ],
+      { cwd: ROOT }
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+  try {
+    const r = await runGenerate();
+    assert.equal(r.status, 0, `generate failed: ${r.stderr || r.stdout}`);
+    assert.doesNotMatch(r.stderr + r.stdout, /dropped the Autonomy key/);
+    assert.match(r.stderr + r.stdout, /dropped habit key/,
+      'overflowing habits should be the ones displaced');
+
+    const listing = spawnSync('unzip', ['-Z1', outfile], { encoding: 'utf8' });
+    assert.equal(listing.status, 0, listing.stderr);
+    const page0Path = listing.stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .find((n) => /\/Profiles\/[A-F0-9-]+\/manifest\.json$/i.test(n));
+    assert.ok(page0Path, 'page-0 manifest missing from profile zip');
+    const page0 = spawnSync('unzip', ['-p', outfile, page0Path], { encoding: 'utf8' });
+    assert.equal(page0.status, 0, page0.stderr);
+    const actions = JSON.parse(page0.stdout).Controllers[0].Actions || {};
+    const uuids = Object.values(actions).map((a) => a.UUID);
+    assert.ok(uuids.includes('com.shaiss.habit-tracker.autonomy'),
+      'Autonomy key must survive habit overflow on Mini');
+    assert.equal(
+      Object.values(actions).filter((a) => a.__reservedSticky).length,
+      0,
+      'sticky placeholders must be overwritten with real actions'
+    );
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('explicit --slots on mini+pages=2 does not drop Coach or Autonomy (#95)', async () => {

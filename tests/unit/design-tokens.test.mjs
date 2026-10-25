@@ -300,15 +300,37 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   // Autonomy Toggle (#94 / §3.5): sticky key parity — idle frame, violet ⚙.
   assert.ok(deck.includes('.autonomyface') || deck.includes('autonomyface'),
     'virtual deck must have an autonomy face class');
-  assert.ok(deck.includes('data-autonomy'), 'virtual deck must place the page-0 autonomy key');
+  // Placement assignment (not the querySelector alone — that would still pass
+  // if the page-0 key were removed; #95 Entelligence).
+  assert.ok(
+    /autonomy\.dataset\.autonomy\s*=\s*['"]1['"]/.test(deck),
+    'virtual deck must assign data-autonomy on the constructed page-0 key'
+  );
   assert.ok(deck.includes("label: 'MANUAL'") && deck.includes("label: 'ASSISTED'") && deck.includes("label: 'AUTO'"),
     'virtual deck embeds the three short mode labels');
   assert.ok(plugin.includes("com.shaiss.habit-tracker.autonomy"),
     'plugin registers the autonomy action');
   assert.ok(plugin.includes('cycleConsent') && plugin.includes('autonomyOf'),
     'plugin drives the sticky key from lib/takeover.js helpers');
-  assert.ok(plugin.includes("setKeyFrame(k, 'idle')") || plugin.includes("setKeyFrame(k, \"idle\")"),
-    'autonomy face keeps the calm idle frame');
+  // Idle frame must live inside renderAutonomy — a sibling setKeyFrame(k,'idle')
+  // elsewhere in the plugin must not satisfy this guard (#95 Entelligence).
+  const autonomyFn = plugin.match(/function renderAutonomy\s*\(\s*k\s*\)\s*\{/);
+  assert.ok(autonomyFn, 'plugin must define renderAutonomy(k)');
+  const fnStart = autonomyFn.index;
+  let depth = 0;
+  let fnEnd = -1;
+  for (let i = plugin.indexOf('{', fnStart); i < plugin.length; i++) {
+    const ch = plugin[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) { fnEnd = i; break; }
+    }
+  }
+  assert.ok(fnEnd > fnStart, 'renderAutonomy body bounds');
+  const autonomyBody = plugin.slice(fnStart, fnEnd + 1);
+  assert.match(autonomyBody, /setKeyFrame\(\s*k\s*,\s*['"]idle['"]\s*\)/,
+    'renderAutonomy must pin the calm idle frame');
 
   // The base gradient under every key face.
   for (const stop of ['#141827', '#0a0c13']) {
