@@ -1,8 +1,12 @@
 import { esc } from '/escape.js';
+    // Prefer HabitKey.fetch so a stored ht_/HABIT_KEY is sent even when the
+    // viewer is signed out of Clerk (HabitAuth.authFetch alone omits it).
     const apiFetch = (url, opts) =>
-      (window.HabitAuth && window.HabitAuth.authFetch)
-        ? window.HabitAuth.authFetch(url, opts)
-        : fetch(url, opts);
+      window.HabitKey
+        ? window.HabitKey.fetch(url, opts)
+        : (window.HabitAuth && window.HabitAuth.authFetch)
+          ? window.HabitAuth.authFetch(url, opts)
+          : fetch(url, opts);
     const EMOJI = { Pee:"🚽", Poop:"💩", Eat:"🍽", Drink:"💧", Exercise:"🏃" };
     const emojiFor = (h, e) => e || EMOJI[h] || "•";
     // Habit names, notes, and emoji come from the log — /api/log accepts

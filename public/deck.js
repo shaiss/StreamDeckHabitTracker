@@ -495,12 +495,23 @@
       const tz = new Date().getTimezoneOffset(); // minutes; UTC-5 → 300
       const url = '/api/slots?tz=' + tz;
       // HabitKey.fetch adds x-habit-key and layers HabitAuth Bearer when present.
+      // A revoked ht_ is rejected without Clerk fallthrough, and /api/slots still
+      // answers 200 with authRequired — clear the dead key and retry Clerk-only.
       const go = window.HabitKey
         ? window.HabitKey.fetch(url)
         : (window.HabitAuth && window.HabitAuth.authFetch)
           ? window.HabitAuth.authFetch(url)
           : fetch(url);
-      go.then((r) => r.json()).then((j) => {
+      go.then((r) => r.json()).then(async (j) => {
+        const signedIn = window.HabitAuth && typeof window.HabitAuth.isSignedIn === 'function'
+          && window.HabitAuth.isSignedIn();
+        if (j && j.authRequired && signedIn && window.HabitKey && window.HabitKey.get()) {
+          window.HabitKey.clear();
+          const r2 = await window.HabitAuth.authFetch(url);
+          j = await r2.json();
+        }
+        return j;
+      }).then((j) => {
         habits = j.habits || habits;
         slots = j.slots || slots;
         coachPage = j.coachPage || [];

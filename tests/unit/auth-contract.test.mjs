@@ -281,9 +281,14 @@ test('documented write routes no longer AND keyOk with withUser', async () => {
       r + ' must still call a unified auth helper'
     );
   }
+  // Strip comments so a leftover `requireOwnerAuth(req, res)` in a comment
+  // cannot satisfy the contract (Entelligence NIT).
+  const stripComments = (s) => s
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
   for (const r of ['api/cron/morning.js', 'api/cron/daily.js']) {
-    const src = readFileSync(join(root, r), 'utf8');
-    assert.match(src, /requireOwnerAuth\s*\(/, r);
+    const src = stripComments(readFileSync(join(root, r), 'utf8'));
+    assert.match(src, /await\s+requireOwnerAuth\s*\(\s*req\s*,\s*res\s*\)/, r);
     assert.doesNotMatch(src, /keyOk\s*\(/, r);
   }
 });
