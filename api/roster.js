@@ -6,7 +6,6 @@ import { rosterPass, ROSTER_COOLDOWN_MS } from '../lib/coach.js';
 import { normalizeRoster, applyDecision, restoreFromArchive } from '../lib/roster.js';
 import { handleOptions, optionalAuth, withUser, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
-import { keyOk } from '../lib/habit-key.js';
 
 const view = (doc) => ({
   proposals: doc.proposals,
@@ -29,10 +28,6 @@ export default async function handler(req, res) {
 
     if (req.method !== 'POST') {
       if (q.run === '1') {
-        if (!keyOk(req)) {
-          res.status(401).json({ error: 'Unauthorized' });
-          return;
-        }
         await withUser(req, res, async () => {
           const current = normalizeRoster(await getRoster());
           if (!zaiKey()) {
@@ -60,10 +55,6 @@ export default async function handler(req, res) {
     }
 
     const body = typeof req.body === 'object' && req.body ? req.body : {};
-    if (!keyOk(req, body)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
     await withUser(req, res, async () => {
       const [habits, roster] = await Promise.all([getHabits(), getRoster()]);
       const result = body.restore
@@ -89,7 +80,7 @@ export default async function handler(req, res) {
       }
       await setRoster(result.roster);
       res.status(200).json({ ok: true, applied: result.applied, habits: saved, ...view(result.roster) });
-    });
+    }, { body });
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }

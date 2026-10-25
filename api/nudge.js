@@ -12,7 +12,6 @@ import { SUPPRESS_MS } from '../lib/takeover.js';
 import { scoreNudges } from '../lib/scorer.js';
 import { handleOptions, optionalAuth, withUser, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
-import { keyOk } from '../lib/habit-key.js';
 
 const RUN_COOLDOWN_MS = 30_000;
 
@@ -29,10 +28,6 @@ export default async function handler(req, res) {
     }
 
     if (q.dismiss === '1') {
-      if (!keyOk(req)) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
       await withUser(req, res, async () => {
         const doc = await getSlots();
         const n = parseInt(q.slot, 10);
@@ -56,10 +51,6 @@ export default async function handler(req, res) {
     if (q.suppress === '1' || q.takeover === '1') {
       if (req.method !== 'POST') {
         res.status(405).json({ error: 'POST required.' });
-        return;
-      }
-      if (!keyOk(req)) {
-        res.status(401).json({ error: 'Unauthorized' });
         return;
       }
       await withUser(req, res, async () => {
@@ -89,10 +80,6 @@ export default async function handler(req, res) {
 
     const running = req.method === 'POST' || q.run === '1';
     if (running) {
-      if (!keyOk(req)) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
       await withUser(req, res, async () => {
         if (!zaiKey()) {
           res.status(503).json({ error: 'No AI key set.' });

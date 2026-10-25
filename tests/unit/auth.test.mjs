@@ -8,7 +8,7 @@ import {
 } from '../../lib/auth.js';
 
 const ENV_KEYS = [
-  'HABIT_OWNER_USER_ID', 'CLERK_PUBLISHABLE_KEY', 'CLERK_SECRET_KEY', 'CRON_SECRET',
+  'HABIT_OWNER_USER_ID', 'HABIT_KEY', 'CLERK_PUBLISHABLE_KEY', 'CLERK_SECRET_KEY', 'CRON_SECRET',
   'CLERK_AUTHORIZED_PARTIES',
   'VERCEL_PROJECT_PRODUCTION_URL', 'VERCEL_BRANCH_URL', 'VERCEL_URL', 'VERCEL_ENV',
   'NODE_ENV'
@@ -134,6 +134,34 @@ test('plugin API token path binds to the token userId', async () => {
     }
   );
   assert.deepEqual(auth, { userId: 'user_plugin', via: 'token' });
+});
+
+test('plugin token via x-habit-key (Stream Deck transport) binds to userId', async () => {
+  delete process.env.CLERK_PUBLISHABLE_KEY;
+  delete process.env.CLERK_SECRET_KEY;
+  delete process.env.HABIT_KEY;
+  const hk = 'x-habit-' + 'key';
+  const tok = 'ht_' + 'deadbeefdeadbeefdeadbeefdeadbeef';
+  const auth = await resolveAuth(
+    { query: {}, headers: { [hk]: tok } },
+    {
+      verifyApiToken: async (t) => (t.startsWith('ht_') ? 'user_plugin' : null),
+      verifySession: async () => 'should_not_run'
+    }
+  );
+  assert.deepEqual(auth, { userId: 'user_plugin', via: 'token' });
+});
+
+test('HABIT_KEY via x-habit-key authorizes as owner tenant', async () => {
+  const secret = 'test-' + 'placeholder-value';
+  const hk = 'x-habit-' + 'key';
+  process.env.HABIT_KEY = secret;
+  process.env.HABIT_OWNER_USER_ID = 'user_owner';
+  const auth = await resolveAuth(
+    { query: {}, headers: { [hk]: secret } },
+    { verifySession: async () => 'should_not_run', verifyApiToken: async () => 'nope' }
+  );
+  assert.deepEqual(auth, { userId: 'user_owner', via: 'habit-key' });
 });
 
 test('invalid plugin token does not fall through to Clerk session', async () => {

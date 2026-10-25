@@ -18,7 +18,19 @@ export default async function handler(req, res) {
     }
     const auth = await optionalAuth(req);
     if (!auth) {
-      res.status(200).json({ configured: true, authRequired: true, memory: null, slots: [null, null, null, null], stats: null });
+      res.status(200).json({
+        configured: true,
+        authRequired: true,
+        aiReady: Boolean(zaiKey()),
+        model: '',
+        humanName: '',
+        memory: null,
+        insight: null,
+        slots: [null, null, null, null],
+        suggestedAt: 0,
+        track: null,
+        stats: { tapsObserved: 0, daysTogether: 0, ideasTried: 0, assignments: 0 }
+      });
       return;
     }
     await runAsUser(auth.userId, async () => {

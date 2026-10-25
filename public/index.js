@@ -235,7 +235,9 @@ import { esc } from '/escape.js';
         return;
       }
       try {
-        const j = await apiFetch('/api/token').then((r) => r.json());
+        const r = await apiFetch('/api/token');
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
         const tokens = j.tokens || [];
         list.innerHTML = tokens.length
           ? tokens.map((t) =>

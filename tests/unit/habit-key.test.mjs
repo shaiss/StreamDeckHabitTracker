@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { keyOk, presentedKeys, redactKey, KEY_HEADER } from '../../lib/habit-key.js';
+import { keyOk, presentedKeys, redactKey, KEY_HEADER, habitKeyMatches } from '../../lib/habit-key.js';
 import { resolveKey, keyedInit, keyAllowedFor, KEY_ORIGINS } from '../../streamdeck-plugin/src/habit-key.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -46,28 +46,46 @@ test('redactKey strips key material from loggable strings', () => {
   assert.ok(!redactKey('x-habit-key: ' + S).includes(S));
 });
 
-test('every gated route uses keyOk — no raw ?key= compares left', () => {
+test('write routes use unified withUser/optionalAuth — no keyOk AND-gate', () => {
   const files = [...readdirSync(join(ROOT, 'api')).filter((f) => f.endsWith('.js')).map((f) => 'api/' + f),
     'api/cron/morning.js'];
-  const gated = ['log', 'habits', 'roster', 'profile', 'suggest', 'nudge', 'question', 'slots', 'coachpage',
-    'experiment', 'cron/morning'].map((n) => 'api/' + n + '.js');
+  const userWrites = ['log', 'habits', 'roster', 'profile', 'suggest', 'nudge', 'question',
+    'coachpage', 'experiment'].map((n) => 'api/' + n + '.js');
   for (const f of files) {
     const src = read(f);
     assert.doesNotMatch(src, /\.key\s*[!=]==?\s*(secret|habitKey)/, f + ' still compares the key by hand');
   }
-  for (const f of gated) assert.match(read(f), /keyOk\(req/, f + ' must gate with keyOk');
+  for (const f of userWrites) {
+    const src = read(f);
+    assert.doesNotMatch(src, /keyOk\s*\(/, f + ' must not AND keyOk before withUser');
+    assert.match(src, /withUser\s*\(|optionalAuth\s*\(/, f + ' must use unified auth helper');
+  }
+  // Cron keeps keyOk as a CRON_SECRET alternative (owner tooling), not an AND with Clerk.
+  assert.match(read('api/cron/morning.js'), /keyOk\(req/);
+  assert.match(read('api/slots.js'), /optionalAuth\s*\(/);
+  assert.doesNotMatch(read('api/slots.js'), /keyOk\s*\(/);
 });
 
 test('CORS preflight allows the x-habit-key header where OPTIONS is answered', () => {
   // Routes may set the header inline or via setCors() in lib/auth.js (Clerk merge).
   const authCors = read('lib/auth.js');
-  assert.match(authCors, /x-habit-key/);
+  assert.match(
+    authCors,
+    /setHeader\(\s*['"]Access-Control-Allow-Headers['"],\s*['"][^'"]*\bx-habit-key\b[^'"]*['"]\s*\)/
+  );
   for (const f of ['api/log.js', 'api/nudge.js', 'api/question.js', 'api/coachpage.js']) {
     const src = read(f);
     const inline = /Access-Control-Allow-Headers', 'Content-Type, x-habit-key'/.test(src);
-    const viaSetCors = /setCors\(/.test(src) && /x-habit-key/.test(authCors);
+    const viaSetCors = /setCors\(/.test(src);
     assert.ok(inline || viaSetCors, f + ' must allow x-habit-key (inline or setCors)');
   }
+});
+
+test('habitKeyMatches: unset secret never grants; set secret must match', () => {
+  assert.equal(habitKeyMatches({ headers: {}, query: {} }, null, ''), false);
+  assert.equal(habitKeyMatches({ headers: {}, query: {} }, null, undefined), false);
+  assert.equal(habitKeyMatches({ headers: { [KEY_HEADER]: S }, query: {} }, null, S), true);
+  assert.equal(habitKeyMatches({ headers: { [KEY_HEADER]: 'nope' }, query: {} }, null, S), false);
 });
 
 // ---- plugin ---------------------------------------------------------------

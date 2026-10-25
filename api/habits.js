@@ -6,7 +6,6 @@ import { scoreSuggestions } from '../lib/scorer.js';
 import { BASE_HABITS } from '../lib/ai.js';
 import { handleOptions, optionalAuth, withUser, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
-import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   if (handleOptions(req, res, 'GET, POST, OPTIONS')) return;
@@ -78,10 +77,6 @@ export default async function handler(req, res) {
     }
 
     const body = typeof req.body === 'object' && req.body ? req.body : {};
-    if (!keyOk(req, body)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
     await withUser(req, res, async () => {
       const err = validateHabits(body.habits);
       if (err) {
@@ -90,7 +85,7 @@ export default async function handler(req, res) {
       }
       const habits = await saveHabits(body.habits);
       res.status(200).json({ ok: true, habits });
-    });
+    }, { body });
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }

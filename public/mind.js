@@ -16,10 +16,14 @@ import { esc } from '/escape.js';
 
     apiFetch('/api/mind').then(r=>r.json()).then(m => {
       if (!m.configured) { document.getElementById('tagline').textContent = 'Storage not connected yet.'; return; }
+      if (m.authRequired) {
+        document.getElementById('tagline').textContent = 'Sign in to see what the coach has learned.';
+        return;
+      }
       const s = m.stats || {};
       document.getElementById('tagline').textContent =
         (m.humanName ? `Learning ${m.humanName}` : 'Learning its human') +
-        ` for ${s.daysTogether} day${s.daysTogether===1?'':'s'} · thinking with ${m.model}`;
+        ` for ${s.daysTogether} day${s.daysTogether===1?'':'s'} · thinking with ${m.model || '—'}`;
 
       // growth tiles
       const tr = m.track?.overall || { offered: 0, landed: 0, hitRate: 0 };

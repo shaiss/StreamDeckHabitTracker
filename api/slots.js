@@ -14,7 +14,6 @@ import { nudgePass } from '../lib/coach.js';
 import { isBlocked } from '../lib/beacon.js';
 import { handleOptions, optionalAuth, hasExplicitCredential, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
-import { keyOk } from '../lib/habit-key.js';
 
 function publicPayload() {
   const habits = BASE_HABITS.map((h) => ({ name: h.name, emoji: h.emoji, label: h.label }));
@@ -94,13 +93,14 @@ export default async function handler(req, res) {
       res.status(200).json(out);
 
       // Heartbeat + nudgePass are GET side-effects. Cookie-only Clerk sessions
-      // must not authorize them (cross-site GET). Plugin sends ?key=; dashboard
-      // authFetch sends Authorization: Bearer.
+      // must not authorize them (cross-site GET). Plugin sends ht_ as
+      // x-habit-key; dashboard authFetch sends Authorization: Bearer.
       if (!hasExplicitCredential(req)) return;
 
-      // Heartbeat is the one write on this open-CORS GET — HABIT_KEY (if set)
-      // plus an explicit credential (ht_ / Bearer), never cookie-only.
-      if (q.deck && keyOk(req)) {
+      // Heartbeat is the one write on this open-CORS GET — requires an
+      // explicit credential (ht_ / HABIT_KEY / Bearer), never cookie-only.
+      // Auth already scoped the tenant via optionalAuth above.
+      if (q.deck) {
         const uid = auth.userId;
         waitUntil(
           runAsUser(uid, () =>

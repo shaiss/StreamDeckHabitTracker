@@ -8,7 +8,6 @@ import { listItems, storeExperiment, getExperiment } from '../lib/dataset.js';
 import { getHabits } from '../lib/habits.js';
 import { handleOptions, optionalAuth, withUser, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
-import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
@@ -29,10 +28,7 @@ export default async function handler(req, res) {
       });
       return;
     }
-    if (!keyOk(req)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+    // CI sends x-habit-key: $HABIT_KEY → owner tenant via unified auth.
     await withUser(req, res, async () => {
       if (!zaiKey() || !isConfigured()) {
         res.status(503).json({ error: 'AI or storage not configured.' });

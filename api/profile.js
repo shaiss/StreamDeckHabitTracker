@@ -5,7 +5,6 @@ import { isValidTz, HOME_TZ } from '../lib/tz.js';
 import { normalizeConsent } from '../lib/takeover.js';
 import { handleOptions, optionalAuth, withUser, setCors } from '../lib/auth.js';
 import { runAsUser } from '../lib/scope.js';
-import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   if (handleOptions(req, res, 'GET, POST, OPTIONS')) return;
@@ -49,10 +48,6 @@ export default async function handler(req, res) {
     }
 
     const body = req.method === 'POST' ? (typeof req.body === 'object' && req.body ? req.body : {}) : q;
-    if (!keyOk(req, body)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
     await withUser(req, res, async () => {
       const prev = (await getProfile()) || {};
       const next = { ...prev, updatedAt: Date.now() };
@@ -72,7 +67,7 @@ export default async function handler(req, res) {
         ok: true, tz: next.tz || '', name: next.name || '', about: next.about || '',
         coachNav: normalizeConsent(next.coachNav)
       });
-    });
+    }, { body });
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }
