@@ -60,8 +60,11 @@ test('write routes use unified withUser/optionalAuth — no keyOk AND-gate', () 
     assert.doesNotMatch(src, /keyOk\s*\(/, f + ' must not AND keyOk before withUser');
     assert.match(src, /withUser\s*\(|optionalAuth\s*\(/, f + ' must use unified auth helper');
   }
-  // Cron keeps keyOk as a CRON_SECRET alternative (owner tooling), not an AND with Clerk.
-  assert.match(read('api/cron/morning.js'), /keyOk\(req/);
+  // Cron uses requireOwnerAuth alone (CRON_SECRET OR owner Clerk/ht_) — no keyOk AND-gate.
+  assert.match(read('api/cron/morning.js'), /requireOwnerAuth\s*\(/);
+  assert.doesNotMatch(read('api/cron/morning.js'), /keyOk\s*\(/);
+  assert.match(read('api/cron/daily.js'), /requireOwnerAuth\s*\(/);
+  assert.doesNotMatch(read('api/cron/daily.js'), /keyOk\s*\(/);
   assert.match(read('api/slots.js'), /optionalAuth\s*\(/);
   assert.doesNotMatch(read('api/slots.js'), /keyOk\s*\(/);
 });

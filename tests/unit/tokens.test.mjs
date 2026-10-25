@@ -120,10 +120,10 @@ test('STORAGE_REST_API_* credentials are enough for token ops', async () => {
 });
 
 test('createApiToken deletes meta when SADD fails (no orphan credential)', async () => {
-  const ops = [];
+  const calls = [];
   mock.method(global, 'fetch', async (_url, init) => {
     const args = JSON.parse(init.body);
-    ops.push(args[0]);
+    calls.push(args);
     if (args[0] === 'SET') return { ok: true, json: async () => ({ result: 'OK' }) };
     if (args[0] === 'SADD') return { ok: false, text: async () => 'boom' };
     if (args[0] === 'DEL') return { ok: true, json: async () => ({ result: 1 }) };
@@ -131,7 +131,29 @@ test('createApiToken deletes meta when SADD fails (no orphan credential)', async
   });
   const { createApiToken } = await loadTokens();
   await assert.rejects(() => createApiToken('user_c'), /store/);
-  assert.deepEqual(ops, ['SET', 'SADD', 'DEL']);
+  assert.deepEqual(calls.map((c) => c[0]), ['SET', 'SADD', 'DEL']);
+  const setKey = calls.find((c) => c[0] === 'SET')[1];
+  const delKey = calls.find((c) => c[0] === 'DEL')[1];
+  assert.equal(delKey, setKey, 'cleanup must DEL the same meta key SET wrote');
+  assert.match(String(setKey), /habits:apitoken:/);
+});
+
+test('safeEqualHex uses timingSafeEqual (same-length mismatch is false)', async () => {
+  const { safeEqualHex } = await loadTokens();
+  assert.equal(safeEqualHex('abcd', 'abcd'), true);
+  assert.equal(safeEqualHex('abcd', 'abce'), false);
+  assert.equal(safeEqualHex('abc', 'abcd'), false);
+  assert.equal(safeEqualHex(null, 'abcd'), false);
+  const { readFileSync } = await import('node:fs');
+  const { join, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../../lib/tokens.js'),
+    'utf8'
+  );
+  assert.match(src, /timingSafeEqual/);
+  assert.match(src, /safeEqualHex\(meta\.hash,\s*hash\)/);
+  assert.doesNotMatch(src, /meta\.hash\s*===\s*hash|hash\s*===\s*meta\.hash/);
 });
 
 test('verify compares stored hash in constant-time path (mismatch → null)', async () => {
@@ -152,4 +174,16 @@ test('verify compares stored hash in constant-time path (mismatch → null)', as
   });
   const { verifyApiToken } = await loadTokens();
   assert.equal(await verifyApiToken('ht_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'), null);
+});
+
+test('revokeApiToken treats JSON null metadata as missing', async () => {
+  mock.method(global, 'fetch', async (_url, init) => {
+    const args = JSON.parse(init.body);
+    if (args[0] === 'GET') {
+      return { ok: true, json: async () => ({ result: 'null' }) };
+    }
+    return { ok: true, json: async () => ({ result: null }) };
+  });
+  const { revokeApiToken } = await loadTokens();
+  assert.equal(await revokeApiToken('user_a', 'deadbeef'), false);
 });

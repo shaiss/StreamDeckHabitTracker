@@ -144,10 +144,14 @@ import { esc } from '/escape.js';
       });
     }
 
+    // HabitKey.fetch sends stored ht_/HABIT_KEY and layers Clerk Bearer via
+    // HabitAuth.authFetch — token-only users must not fall back to bare authFetch.
     const apiFetch = (url, opts) =>
-      (window.HabitAuth && window.HabitAuth.authFetch)
-        ? window.HabitAuth.authFetch(url, opts)
-        : fetch(url, opts);
+      window.HabitKey
+        ? window.HabitKey.fetch(url, opts)
+        : (window.HabitAuth && window.HabitAuth.authFetch)
+          ? window.HabitAuth.authFetch(url, opts)
+          : fetch(url, opts);
 
     function load(keepStatus) {
       return Promise.all([
@@ -171,7 +175,9 @@ import { esc } from '/escape.js';
     });
 
     document.getElementById('saveBtn').addEventListener('click', async () => {
-      if (window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
+      // Server accepts ht_/HABIT_KEY OR Clerk; do not require Clerk when a key is stored.
+      const hasKey = window.HabitKey && typeof window.HabitKey.get === 'function' && window.HabitKey.get();
+      if (!hasKey && window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
       const habits = [...rowsEl.querySelectorAll('.hrow')].map(el => {
         const g = parseInt(el.querySelector('.goal').value, 10);
         return {

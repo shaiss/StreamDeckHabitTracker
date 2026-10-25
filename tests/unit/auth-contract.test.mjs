@@ -226,6 +226,25 @@ test('extractApiKey: ht_ from x-habit-key; non-ht_ header ignored', () => {
   );
 });
 
+test('extractApiKey: opts.body.key when req.body is absent', () => {
+  assert.equal(
+    extractApiKey({ query: {}, headers: {} }, { key: HT_USER }),
+    HT_USER
+  );
+  assert.equal(
+    extractApiKey({ query: {}, headers: {}, body: undefined }, { key: HT_USER }),
+    HT_USER
+  );
+});
+
+test('resolveAuth: ht_ in opts.body alone authenticates', async () => {
+  const auth = await resolveAuth(
+    { method: 'POST', query: {}, headers: {} },
+    { ...opts, body: { key: HT_USER } }
+  );
+  assert.deepEqual(auth, { userId: 'user_plugin', via: 'token' });
+});
+
 test('hasExplicitCredential: ht_ header, HABIT_KEY, or Bearer', () => {
   assert.equal(hasExplicitCredential({ query: {}, headers: { [HK]: HT_USER } }), true);
   assert.equal(hasExplicitCredential({ query: {}, headers: { [HK]: SECRET } }), true);
@@ -256,5 +275,15 @@ test('documented write routes no longer AND keyOk with withUser', async () => {
   for (const r of routes) {
     const src = readFileSync(join(root, r), 'utf8');
     assert.doesNotMatch(src, /if\s*\(\s*!keyOk/, r);
+    assert.match(
+      src,
+      /withUser\s*\(|optionalAuth\s*\(|requireAuth\s*\(|requireOwnerAuth\s*\(/,
+      r + ' must still call a unified auth helper'
+    );
+  }
+  for (const r of ['api/cron/morning.js', 'api/cron/daily.js']) {
+    const src = readFileSync(join(root, r), 'utf8');
+    assert.match(src, /requireOwnerAuth\s*\(/, r);
+    assert.doesNotMatch(src, /keyOk\s*\(/, r);
   }
 });

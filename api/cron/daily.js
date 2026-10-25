@@ -3,17 +3,14 @@ import { isConfigured } from '../../lib/store.js';
 import { zaiKey } from '../../lib/ai.js';
 import { dailyDigest } from '../../lib/coach.js';
 import { ownerUserId, runAsUser } from '../../lib/scope.js';
-import { requireOwnerAuth, isCronBearer } from '../../lib/auth.js';
-import { keyOk } from '../../lib/habit-key.js';
+import { requireOwnerAuth } from '../../lib/auth.js';
 
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   try {
+    // requireOwnerAuth alone: CRON_SECRET bearer OR owner Clerk/ht_ (OR-gate).
+    // Do not AND HABIT_KEY — that rejected valid owner tokens when HABIT_KEY is set.
     if (!(await requireOwnerAuth(req, res))) return;
-    if (!isCronBearer(req) && !keyOk(req)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
 
     const owner = ownerUserId();
     if (!owner) {

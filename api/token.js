@@ -18,10 +18,10 @@ export default async function handler(req, res) {
       res.status(503).json({ error: 'Storage not connected.' });
       return;
     }
-    // Token minting requires a Clerk session — reject plugin-token auth so a
-    // stolen deck key cannot mint more keys for the same userId.
+    // Token management is Clerk-session only — reject ht_ tokens and HABIT_KEY
+    // so a stolen deck key / deployment secret cannot mint or revoke tokens.
     await withUser(req, res, async (auth) => {
-      if (auth.via === 'token') {
+      if (auth.via !== 'clerk') {
         res.status(403).json({ error: 'Sign in on the web to manage API tokens.' });
         return;
       }

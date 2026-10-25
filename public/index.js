@@ -230,6 +230,9 @@ import { esc } from '/escape.js';
     async function refreshTokens() {
       const list = document.getElementById('tokenList');
       if (!list) return;
+      if (window.HabitAuth && typeof window.HabitAuth.init === 'function') {
+        await window.HabitAuth.init();
+      }
       if (!window.HabitAuth || !window.HabitAuth.isSignedIn()) {
         list.innerHTML = '<li>Sign in to manage tokens.</li>';
         return;
@@ -248,13 +251,28 @@ import { esc } from '/escape.js';
           : '<li>No tokens yet.</li>';
         list.querySelectorAll('[data-revoke]').forEach((btn) => {
           btn.addEventListener('click', async () => {
-            await apiFetch('/api/token?hash=' + encodeURIComponent(btn.dataset.revoke), { method: 'DELETE' });
-            refreshTokens();
+            const st = document.getElementById('tokenStatus');
+            try {
+              const rr = await apiFetch('/api/token?hash=' + encodeURIComponent(btn.dataset.revoke), { method: 'DELETE' });
+              const jj = await rr.json().catch(() => ({}));
+              if (!rr.ok) throw new Error(jj.error || ('HTTP ' + rr.status));
+              if (st) st.textContent = 'Token revoked.';
+              refreshTokens();
+            } catch (e) {
+              if (st) st.textContent = e.message || 'Revoke failed';
+            }
           });
         });
       } catch {
         list.innerHTML = '<li>Could not load tokens.</li>';
       }
+    }
+    // Settings may open before Clerk finishes loading — refresh once ready.
+    if (window.HabitAuth && typeof window.HabitAuth.onReady === 'function') {
+      window.HabitAuth.onReady(() => {
+        const panelEl = document.getElementById('settings');
+        if (panelEl && panelEl.classList.contains('open')) refreshTokens();
+      });
     }
     document.getElementById('mintToken')?.addEventListener('click', async () => {
       if (window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;

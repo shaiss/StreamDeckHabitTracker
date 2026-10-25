@@ -5,6 +5,10 @@
     // sessionStorage; habit-key.js repeats that scrub.
     const keyed = (url, init) => window.HabitKey.fetch(url, init);
     async function gateAuth() {
+      // OR-gate mirrors the server: stored ht_/HABIT_KEY OR Clerk session.
+      if (window.HabitKey && typeof window.HabitKey.get === 'function' && window.HabitKey.get()) {
+        return true;
+      }
       if (!window.HabitAuth) return true; // tests without auth.js
       const ok = await window.HabitAuth.ensureSignedIn();
       if (!ok) {
@@ -490,9 +494,12 @@
       // the dashboard), so living key faces read the right day (#32).
       const tz = new Date().getTimezoneOffset(); // minutes; UTC-5 → 300
       const url = '/api/slots?tz=' + tz;
-      const go = (window.HabitAuth && window.HabitAuth.authFetch)
-        ? window.HabitAuth.authFetch(url)
-        : fetch(url);
+      // HabitKey.fetch adds x-habit-key and layers HabitAuth Bearer when present.
+      const go = window.HabitKey
+        ? window.HabitKey.fetch(url)
+        : (window.HabitAuth && window.HabitAuth.authFetch)
+          ? window.HabitAuth.authFetch(url)
+          : fetch(url);
       go.then((r) => r.json()).then((j) => {
         habits = j.habits || habits;
         slots = j.slots || slots;

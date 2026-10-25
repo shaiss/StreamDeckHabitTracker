@@ -11,6 +11,8 @@
   let ready = false;
   let readyPromise = null;
   let signInHost = null;
+  let initError = null;
+  const readyListeners = [];
 
   function ensureHost() {
     if (signInHost) return signInHost;
@@ -57,9 +59,24 @@
     const host = ensureHost();
     host.removeAttribute('hidden');
     const mount = document.getElementById('habit-auth-sign-in');
-    if (clerk && mount && !mount.dataset.mounted) {
-      mount.dataset.mounted = '1';
-      clerk.mountSignIn(mount);
+    const msg = host.querySelector('.habit-auth-msg');
+    if (clerk && mount) {
+      if (msg) {
+        msg.textContent = 'Sign in to log habits and sync your Stream Deck.';
+      }
+      if (!mount.dataset.mounted) {
+        mount.dataset.mounted = '1';
+        clerk.mountSignIn(mount);
+      }
+    } else if (mount) {
+      // Init failed or Clerk unset — do not leave an empty dialog.
+      mount.innerHTML = '';
+      delete mount.dataset.mounted;
+      if (msg) {
+        msg.textContent = initError
+          ? 'Sign-in is unavailable (Clerk failed to load). Refresh the page, or use a Stream Deck API token / HabitDeck key for this tab.'
+          : 'Sign-in is not configured on this deployment. Use a Stream Deck API token or HabitDeck key for this tab.';
+      }
     }
   }
 
@@ -107,25 +124,50 @@
     return clerk;
   }
 
+  function notifyReady() {
+    ready = true;
+    const pending = readyListeners.splice(0);
+    for (const fn of pending) {
+      try { fn(); } catch { /* listener errors must not break auth */ }
+    }
+  }
+
+  /** Register a callback once Clerk init settles (success or failure). */
+  function onReady(fn) {
+    if (typeof fn !== 'function') return () => {};
+    if (ready) {
+      try { fn(); } catch { /* ignore */ }
+      return () => {};
+    }
+    readyListeners.push(fn);
+    return () => {
+      const i = readyListeners.indexOf(fn);
+      if (i >= 0) readyListeners.splice(i, 1);
+    };
+  }
+
   async function init() {
     if (readyPromise) return readyPromise;
     readyPromise = (async () => {
       if (MOCK) {
-        ready = true;
+        notifyReady();
         return;
       }
       try {
         const cfg = await fetch('/api/auth/config').then((r) => r.json());
         if (!cfg.publishableKey) {
-          ready = true; // fail closed on writes; pages still render
+          initError = null;
+          notifyReady(); // fail closed on writes; pages still render
           return;
         }
         await loadClerk(cfg.publishableKey);
-        ready = true;
+        initError = null;
+        notifyReady();
         mountNavChip();
       } catch (err) {
         console.warn('HabitAuth init failed', err);
-        ready = true;
+        initError = err;
+        notifyReady();
       }
     })();
     return readyPromise;
@@ -202,12 +244,17 @@
 
   const api = {
     init,
+    onReady,
     isSignedIn,
     getToken,
     ensureSignedIn,
     authFetch,
     showSignIn,
-    hideSignIn
+    hideSignIn,
+    /** True after init settles; false while Clerk CDN/config is still loading. */
+    get ready() { return ready; },
+    /** Last init failure (if any); null when Clerk loaded or was never configured. */
+    get initError() { return initError; }
   };
   global.HabitAuth = api;
 
