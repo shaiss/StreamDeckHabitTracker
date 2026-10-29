@@ -9,7 +9,7 @@
 // than silently losing the change. Retirement is soft; see lib/roster.js.
 // HABIT_KEY (if set) gates writes via x-habit-key, ?key=, or body.key (lib/habit-key.js).
 import { isConfigured, getRoster, setRoster, withTargetsLock } from '../lib/store.js';
-import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
+import { getHabitsStrict, saveHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
 import { rosterPass, ROSTER_COOLDOWN_MS } from '../lib/coach.js';
 import { normalizeRoster, applyDecision, restoreFromArchive } from '../lib/roster.js';
@@ -62,45 +62,49 @@ export default async function handler(req, res) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const [habits, roster] = await Promise.all([getHabits(), getRoster()]);
-    const result = body.restore
-      ? restoreFromArchive({ habits, roster, name: String(body.restore) })
-      : applyDecision({
-          habits,
-          roster,
-          id: String(body.id || ''),
-          decision: String(body.decision || '')
-        });
+    // Same rail as POST /api/targets: read + decide + write under withTargetsLock
+    // so a concurrent target-pass MSET cannot land goals that this path then
+    // overwrites with a pre-lock habits snapshot (or vice versa). Soft
+    // getHabits() is never used here — a Redis blip must not seed-fallback and
+    // wipe a custom roster. Contended lock → 409 TARGETS_BUSY.
+    let saved;
+    let result;
+    try {
+      await withTargetsLock(async () => {
+        const [habits, roster] = await Promise.all([getHabitsStrict(), getRoster()]);
+        result = body.restore
+          ? restoreFromArchive({ habits, roster, name: String(body.restore) })
+          : applyDecision({
+              habits,
+              roster,
+              id: String(body.id || ''),
+              decision: String(body.decision || '')
+            });
+        if (result.error) return;
+        // Defense in depth: the coach influenced this list, so it has to pass
+        // the same validation a hand-edited save does before it can land.
+        saved = habits;
+        if (result.habits !== habits) {
+          const err = validateHabits(result.habits);
+          if (err) {
+            result = { error: err };
+            return;
+          }
+          saved = await saveHabits(result.habits);
+        }
+        await setRoster(result.roster);
+      });
+    } catch (lockErr) {
+      const mapped = targetsHttpError(lockErr);
+      if (mapped.status === 409) {
+        res.status(409).json({ error: mapped.error });
+        return;
+      }
+      throw lockErr;
+    }
     if (result.error) {
       res.status(400).json({ error: result.error });
       return;
-    }
-    // Defense in depth: the coach influenced this list, so it has to pass the
-    // same validation a hand-edited save does before it can land. Habit writes
-    // share withTargetsLock with commitTargetPass so a target-pass MSET cannot
-    // overwrite an approved roster change (or vice versa).
-    let saved = habits;
-    if (result.habits !== habits) {
-      const err = validateHabits(result.habits);
-      if (err) {
-        res.status(400).json({ error: err });
-        return;
-      }
-      try {
-        await withTargetsLock(async () => {
-          saved = await saveHabits(result.habits);
-          await setRoster(result.roster);
-        });
-      } catch (lockErr) {
-        const mapped = targetsHttpError(lockErr);
-        if (mapped.status === 409) {
-          res.status(409).json({ error: mapped.error });
-          return;
-        }
-        throw lockErr;
-      }
-    } else {
-      await setRoster(result.roster);
     }
     res.status(200).json({ ok: true, applied: result.applied, habits: saved, ...view(result.roster) });
   } catch (err) {
