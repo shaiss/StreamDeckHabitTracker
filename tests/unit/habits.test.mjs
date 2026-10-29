@@ -10,7 +10,9 @@ import {
   getHabitsStrict,
   saveHabits
 } from '../../lib/habits.js';
+import { withTargetsLock } from '../../lib/store.js';
 import habitsHandler from '../../api/habits.js';
+import rosterHandler from '../../api/roster.js';
 
 test('accepts a clean list with origins', () => {
   assert.equal(validateHabits([
@@ -525,5 +527,224 @@ test('getHabitsStrict: CAS miss + unreadable key throws (does not serve seed)', 
     delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+// --- withTargetsLock serialization for habit / roster writes (#93 review) ---
+const HABITS_KEY = 'habits:config';
+const LOCK_KEY = 'habits:targets:lock';
+const ROSTER_KEY = 'habits:roster';
+const RELEASE_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+const RENEW_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], tonumber(ARGV[2])) else return 0 end";
+
+function installLockAwareRedis(state) {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    const op = args[0];
+    if (op === 'GET') {
+      return { ok: true, json: async () => ({ result: state[args[1]] ?? null }) };
+    }
+    if (op === 'SET') {
+      const key = args[1];
+      if (args.includes('NX') && state[key] != null) {
+        return { ok: true, json: async () => ({ result: null }) };
+      }
+      state[key] = args[2];
+      return { ok: true, json: async () => ({ result: 'OK' }) };
+    }
+    if (op === 'EVAL') {
+      const lua = args[1];
+      if (lua === RELEASE_LUA) {
+        if (state[args[3]] === args[4]) delete state[args[3]];
+        return { ok: true, json: async () => ({ result: 1 }) };
+      }
+      if (lua === RENEW_LUA) {
+        return { ok: true, json: async () => ({ result: state[args[3]] === args[4] ? 1 : 0 }) };
+      }
+      throw new Error(`unexpected EVAL ${lua}`);
+    }
+    throw new Error(`unexpected redis ${JSON.stringify(args)}`);
+  };
+  process.env.VERCEL_ENV = 'production';
+  process.env.KV_REST_API_URL = 'https://example.test';
+  process.env.KV_REST_API_TOKEN = 'test';
+  delete process.env['HABIT_' + 'KEY'];
+  return {
+    calls,
+    restore() {
+      globalThis.fetch = originalFetch;
+      delete process.env.VERCEL_ENV;
+      delete process.env.KV_REST_API_URL;
+      delete process.env.KV_REST_API_TOKEN;
+    }
+  };
+}
+
+test('POST /api/habits takes withTargetsLock (SET NX) before saveHabits', async () => {
+  const state = {
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' }
+    ])
+  };
+  const mock = installLockAwareRedis(state);
+  try {
+    const list = [
+      { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+      { name: 'Stretch', emoji: '🧘', label: 'Stretch', origin: 'coach' }
+    ];
+    const res = mkRes();
+    await habitsHandler(
+      { method: 'POST', query: {}, headers: {}, body: { habits: list } },
+      res
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.habits.length, 2);
+    const nx = mock.calls.find((c) => c[0] === 'SET' && c[1] === LOCK_KEY && c.includes('NX'));
+    assert.ok(nx, 'expected SET NX on habits:targets:lock');
+    const cfg = mock.calls.find((c) => c[0] === 'SET' && c[1] === HABITS_KEY && !c.includes('NX'));
+    assert.ok(cfg, 'expected SET habits:config under the lock');
+    assert.equal(state[LOCK_KEY], undefined, 'lock released');
+    assert.deepEqual(JSON.parse(state[HABITS_KEY]).map((h) => h.name), ['Pee', 'Stretch']);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('POST /api/habits: TARGETS_BUSY → HTTP 409 (no habits:config write)', async () => {
+  const prior = JSON.stringify([
+    { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' }
+  ]);
+  const state = { [HABITS_KEY]: prior };
+  const mock = installLockAwareRedis(state);
+  try {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const held = withTargetsLock(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 40));
+      return 'ok';
+    });
+    await gate;
+    const res = mkRes();
+    await habitsHandler(
+      {
+        method: 'POST',
+        query: {},
+        headers: {},
+        body: {
+          habits: [
+            { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+            { name: 'Lost', emoji: '❌', label: 'Lost', origin: 'human' }
+          ]
+        }
+      },
+      res
+    );
+    assert.equal(res.statusCode, 409);
+    assert.match(res.body.error, /in progress/i);
+    assert.equal(state[HABITS_KEY], prior, 'contended save must not overwrite roster');
+    assert.ok(!mock.calls.some((c) => c[0] === 'SET' && c[1] === HABITS_KEY && !c.includes('NX')));
+    assert.equal(await held, 'ok');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('POST /api/roster approve: TARGETS_BUSY → HTTP 409 (habits unchanged)', async () => {
+  const habits = [
+    { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+    { name: 'Eat', emoji: '🍽', label: 'Eat', origin: 'human' }
+  ];
+  const prior = JSON.stringify(habits);
+  const state = {
+    [HABITS_KEY]: prior,
+    [ROSTER_KEY]: JSON.stringify({
+      proposals: [{
+        id: 'r1',
+        kind: 'add',
+        name: 'Stretch',
+        emoji: '🧘',
+        label: 'Stretch',
+        origin: 'coach',
+        reason: 'sit',
+        createdAt: 1
+      }],
+      archive: [],
+      rejected: [],
+      lastRunAt: 0,
+      model: ''
+    })
+  };
+  const mock = installLockAwareRedis(state);
+  try {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const held = withTargetsLock(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 40));
+      return 'ok';
+    });
+    await gate;
+    const res = mkRes();
+    await rosterHandler(
+      { method: 'POST', query: {}, headers: {}, body: { id: 'r1', decision: 'approve' } },
+      res
+    );
+    assert.equal(res.statusCode, 409);
+    assert.match(res.body.error, /in progress/i);
+    assert.equal(state[HABITS_KEY], prior);
+    assert.equal(await held, 'ok');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('POST /api/roster approve takes withTargetsLock then persists habits+roster', async () => {
+  const state = {
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+      { name: 'Eat', emoji: '🍽', label: 'Eat', origin: 'human' }
+    ]),
+    [ROSTER_KEY]: JSON.stringify({
+      proposals: [{
+        id: 'r1',
+        kind: 'add',
+        name: 'Stretch',
+        emoji: '🧘',
+        label: 'Stretch',
+        origin: 'coach',
+        reason: 'sit',
+        createdAt: 1
+      }],
+      archive: [],
+      rejected: [],
+      lastRunAt: 0,
+      model: ''
+    })
+  };
+  const mock = installLockAwareRedis(state);
+  try {
+    const res = mkRes();
+    await rosterHandler(
+      { method: 'POST', query: {}, headers: {}, body: { id: 'r1', decision: 'approve' } },
+      res
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+    assert.ok(mock.calls.some((c) => c[0] === 'SET' && c[1] === LOCK_KEY && c.includes('NX')));
+    assert.deepEqual(
+      JSON.parse(state[HABITS_KEY]).map((h) => h.name),
+      ['Pee', 'Eat', 'Stretch']
+    );
+    assert.equal(JSON.parse(state[ROSTER_KEY]).proposals.length, 0);
+    assert.equal(state[LOCK_KEY], undefined);
+  } finally {
+    mock.restore();
   }
 });
