@@ -218,7 +218,9 @@ beforeEach(() => {
         throw err;
       }
       if (providerMode === 'error') {
-        throw new Error(providerErrorMessage);
+        const err = new Error(providerErrorMessage);
+        err.status = 502;
+        throw err;
       }
       return new Response(
         JSON.stringify({
@@ -290,7 +292,17 @@ test('experiment route: chat AbortError → lock released and cooldown NOT stamp
 test('experiment route: per-run provider failure stores enum, not raw error text (#133)', async () => {
   const { EXPERIMENT_RUN_ERROR } = await import('../../lib/experiment-guard.js');
   providerMode = 'error';
-  const res = await callExperiment({ models: 'glm-4.7-flash', n: '1' });
+  const logs = [];
+  const origError = console.error;
+  console.error = (...args) => {
+    logs.push(args);
+  };
+  let res;
+  try {
+    res = await callExperiment({ models: 'glm-4.7-flash', n: '1' });
+  } finally {
+    console.error = origError;
+  }
   assert.equal(res.statusCode, 200);
   assert.ok(Array.isArray(res.body?.runs));
   assert.ok(res.body.runs.length >= 1);
@@ -303,6 +315,21 @@ test('experiment route: per-run provider failure stores enum, not raw error text
   assert.ok(stored);
   assert.equal(stored.runs[0].error, EXPERIMENT_RUN_ERROR);
   assert.ok(!JSON.stringify(stored).includes(providerErrorMessage));
+
+  // Server log: fixed marker + safe metadata only — never err.message / body text.
+  const runLogs = logs.filter((a) => a[0] === 'experiment run:' && a[1] === EXPERIMENT_RUN_ERROR);
+  assert.ok(runLogs.length >= 1, 'must log provider_error marker');
+  for (const entry of runLogs) {
+    const meta = entry[2];
+    assert.equal(typeof meta, 'object');
+    assert.equal(meta.model, 'glm-4.7-flash');
+    assert.equal(meta.status, 502);
+    assert.ok('name' in meta);
+    const blob = JSON.stringify(entry);
+    assert.ok(!blob.includes(providerErrorMessage));
+    assert.ok(!blob.includes('sk-live'));
+    assert.ok(!blob.includes('leaked secret'));
+  }
 });
 
 test('experiment route: unkeyed GET returns stored enum only (no raw error text) (#133)', async () => {

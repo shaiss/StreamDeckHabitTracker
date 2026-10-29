@@ -57,6 +57,17 @@ test('api/experiment.js logs unexpected failures server-side without changing th
   assert.doesNotMatch(experimentSrc, /console\.error\([^)]*\berr\b\s*\)/);
 });
 
+test('api/experiment.js per-run provider log uses fixed marker + safe metadata only', () => {
+  assert.match(experimentSrc, /function logProviderRunFailure\(/);
+  assert.match(experimentSrc, /logProviderRunFailure\(model,\s*err\)/);
+  assert.match(
+    experimentSrc,
+    /console\.error\('experiment run:',\s*EXPERIMENT_RUN_ERROR,\s*\{\s*model,\s*status,\s*name\s*\}\)/
+  );
+  // Must not log err.message on the per-run path (provider body can be in message).
+  assert.doesNotMatch(experimentSrc, /logExperimentError\('experiment run:'/);
+});
+
 test('chat forwards AbortSignal to the provider fetch', async () => {
   const ctrl = new AbortController();
   let sawSignal;

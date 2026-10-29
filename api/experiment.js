@@ -30,6 +30,16 @@ function logExperimentError(label, err) {
   console.error(label, name, msg);
 }
 
+/**
+ * Per-run provider failure log — fixed marker + safe metadata only.
+ * Never logs err.message (lib/ai.js embeds up to 300 chars of provider body).
+ */
+function logProviderRunFailure(model, err) {
+  const status = Number.isFinite(err?.status) ? err.status : null;
+  const name = err?.name || 'Error';
+  console.error('experiment run:', EXPERIMENT_RUN_ERROR, { model, status, name });
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -106,8 +116,8 @@ export default async function handler(req, res) {
               return { model, kind: it.input.kind, itemAt: it.at, quality: scoreOutput(raw, { parseOk, fixedNames }), error: null };
             } catch (err) {
               if (signal.aborted || err?.name === 'AbortError') throw err;
-              // Never persist raw provider text — GET is unkeyed + CORS * (#133).
-              logExperimentError('experiment run:', err);
+              // Never persist or log raw provider text — GET is unkeyed + CORS * (#133).
+              logProviderRunFailure(model, err);
               return {
                 model, kind: it.input.kind, itemAt: it.at,
                 quality: scoreOutput(null, { parseOk: false, fixedNames }),
