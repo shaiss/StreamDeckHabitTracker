@@ -22,7 +22,7 @@ import question from '../../api/question.js';
 import morning from '../../api/cron/morning.js';
 import daily from '../../api/cron/daily.js';
 import token from '../../api/token.js';
-import { requireOwnerAuth } from '../../lib/auth.js';
+import { requireOwnerAuth, resolveAuth } from '../../lib/auth.js';
 
 const ENV_KEYS = [
   'HABIT_OWNER_USER_ID', 'HABIT_KEY', 'CRON_SECRET',
@@ -161,6 +161,71 @@ test('HABIT_KEY alone cannot manage /api/token (Clerk-only)', async () => {
   );
   assert.equal(res.out.statusCode, 403);
   assert.match(String(res.out.body?.error || ''), /Sign in/i);
+});
+
+// Same opts api/token.js passes to withUser: ht_ never verifies, mutations need
+// an explicit credential, reads may use cookie/Bearer Clerk alone.
+const tokenRouteOpts = (verifySession, mutation) => ({
+  verifyApiToken: async () => null,
+  verifySession,
+  mutation
+});
+
+test('token-route auth: Clerk alone can list (no stored ht_ header)', async () => {
+  const auth = await resolveAuth(
+    { method: 'GET', query: {}, headers: { authorization: 'Bearer sess_clerk' } },
+    tokenRouteOpts(async () => 'user_owner', false)
+  );
+  assert.deepEqual(auth, { userId: 'user_owner', via: 'clerk' });
+});
+
+test('token-route auth: Clerk alone can mint and revoke (mutation)', async () => {
+  for (const method of ['POST', 'DELETE']) {
+    const auth = await resolveAuth(
+      { method, query: method === 'DELETE' ? { hash: 'abc' } : {}, headers: { authorization: 'Bearer sess_clerk' } },
+      tokenRouteOpts(async () => 'user_owner', true)
+    );
+    assert.deepEqual(auth, { userId: 'user_owner', via: 'clerk' }, method);
+  }
+});
+
+test('token-route auth: stored ht_ + Clerk cannot manage (ht_ wins, verify refused)', async () => {
+  // What apiFetch/HabitKey.fetch would send: x-habit-key ht_ plus Clerk Bearer.
+  // api/token.js sets verifyApiToken → null, so resolveAuth returns null (401)
+  // and never falls through to Clerk — list/mint/revoke all fail.
+  const hk = 'x-habit-' + 'key';
+  for (const [method, mutation] of [['GET', false], ['POST', true], ['DELETE', true]]) {
+    const auth = await resolveAuth(
+      {
+        method,
+        query: method === 'DELETE' ? { hash: 'abc' } : {},
+        headers: { authorization: 'Bearer sess_clerk', [hk]: HT_OWNER }
+      },
+      tokenRouteOpts(async () => 'user_owner', mutation)
+    );
+    assert.equal(auth, null, method + ' must not fall through to Clerk when ht_ is present');
+  }
+});
+
+test('dashboard token management uses Clerk-only transport (not apiFetch)', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
+  const index = readFileSync(join(root, 'public/index.js'), 'utf8');
+  // Dedicated Clerk transport — never HabitKey.fetch for /api/token.
+  assert.match(index, /const tokenFetch\s*=\s*\(url,\s*opts\)\s*=>/);
+  assert.match(index, /HabitAuth\.authFetch/);
+  const tokenSection = index.slice(index.indexOf('async function refreshTokens'));
+  assert.ok(tokenSection.includes("tokenFetch('/api/token')"), 'list must use tokenFetch');
+  assert.ok(tokenSection.includes("tokenFetch('/api/token?hash="), 'revoke must use tokenFetch');
+  assert.ok(tokenSection.includes("tokenFetch('/api/token',"), 'mint must use tokenFetch');
+  assert.doesNotMatch(tokenSection, /apiFetch\s*\(\s*['"`]\/api\/token/);
+  // No other public page talks to /api/token.
+  for (const f of ['public/deck.js', 'public/habits.js', 'public/mind.js', 'public/habit-key.js']) {
+    assert.doesNotMatch(readFileSync(join(root, f), 'utf8'), /\/api\/token/);
+  }
+  // Server still refuses non-Clerk credentials (do not loosen).
+  const apiTok = readFileSync(join(root, 'api/token.js'), 'utf8');
+  assert.match(apiTok, /auth\.via\s*!==\s*['"]clerk['"]/);
+  assert.match(apiTok, /verifyApiToken:\s*async\s*\(\)\s*=>\s*null/);
 });
 
 test('owner ht_ reaches cron morning without HABIT_KEY AND-gate', async () => {

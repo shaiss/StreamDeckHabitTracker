@@ -7,6 +7,14 @@ import { esc } from '/escape.js';
         : (window.HabitAuth && window.HabitAuth.authFetch)
           ? window.HabitAuth.authFetch(url, opts)
           : fetch(url, opts);
+    // /api/token is Clerk-session only (api/token.js refuses ht_ and HABIT_KEY).
+    // Never route through apiFetch/HabitKey.fetch — a stored deck token would be
+    // sent first, win auth precedence, and 401/403 (or clear the stored key on
+    // HabitKey's 401 retry).
+    const tokenFetch = (url, opts) =>
+      (window.HabitAuth && window.HabitAuth.authFetch)
+        ? window.HabitAuth.authFetch(url, opts)
+        : fetch(url, opts);
     const EMOJI = { Pee:"🚽", Poop:"💩", Eat:"🍽", Drink:"💧", Exercise:"🏃" };
     const emojiFor = (h, e) => e || EMOJI[h] || "•";
     // Habit names, notes, and emoji come from the log — /api/log accepts
@@ -246,7 +254,7 @@ import { esc } from '/escape.js';
         return;
       }
       try {
-        const r = await apiFetch('/api/token');
+        const r = await tokenFetch('/api/token');
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
         const tokens = j.tokens || [];
@@ -261,7 +269,7 @@ import { esc } from '/escape.js';
           btn.addEventListener('click', async () => {
             const st = document.getElementById('tokenStatus');
             try {
-              const rr = await apiFetch('/api/token?hash=' + encodeURIComponent(btn.dataset.revoke), { method: 'DELETE' });
+              const rr = await tokenFetch('/api/token?hash=' + encodeURIComponent(btn.dataset.revoke), { method: 'DELETE' });
               const jj = await rr.json().catch(() => ({}));
               if (!rr.ok) throw new Error(jj.error || ('HTTP ' + rr.status));
               if (st) st.textContent = 'Token revoked.';
@@ -288,7 +296,7 @@ import { esc } from '/escape.js';
       const once = document.getElementById('tokenOnce');
       st.textContent = 'Creating…';
       try {
-        const r = await apiFetch('/api/token', {
+        const r = await tokenFetch('/api/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ label: 'Stream Deck' })
