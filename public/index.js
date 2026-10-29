@@ -239,7 +239,10 @@ import { esc } from '/escape.js';
             loadedCoachNav = j.coachNav || body.coachNav;
           } else {
             loadedCoachNav = j.coachNav || loadedCoachNav;
-            document.getElementById('setCoachNav').value = loadedCoachNav;
+            // Name-only Save: do not clobber a consent edit made while this
+            // request was in flight — next Save will include coachNav then.
+            const sel = document.getElementById('setCoachNav');
+            if (sel.value === coachNav) sel.value = loadedCoachNav;
           }
           st.textContent = 'Saved — the coach will use this on its next pass.';
         } else if (r.status === 409 && j.coachNavSeq !== undefined) {

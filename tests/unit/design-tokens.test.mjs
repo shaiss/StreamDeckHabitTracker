@@ -300,11 +300,13 @@ test('the virtual deck still mirrors the plugin key faces', () => {
   // Autonomy Toggle (#94 / §3.5): sticky key parity — idle frame, violet ⚙.
   assert.ok(deck.includes('.autonomyface') || deck.includes('autonomyface'),
     'virtual deck must have an autonomy face class');
-  // Placement assignment (not the querySelector alone — that would still pass
-  // if the page-0 key were removed; #95 Entelligence).
-  assert.ok(
-    /autonomy\.dataset\.autonomy\s*=\s*['"]1['"]/.test(deck),
-    'virtual deck must assign data-autonomy on the constructed page-0 key'
+  // Placement must sit on the page-0 construction path immediately after
+  // `const autonomy = keyEl(...)` — a dead assignment elsewhere in deck.js
+  // must not satisfy this guard (#95 Entelligence).
+  assert.match(
+    deck,
+    /const autonomy = keyEl\(\{[\s\S]*?\}\);\s*autonomy\.dataset\.autonomy\s*=\s*['"]1['"]/,
+    'virtual deck must assign data-autonomy immediately after constructing the page-0 key'
   );
   assert.ok(deck.includes("label: 'MANUAL'") && deck.includes("label: 'ASSISTED'") && deck.includes("label: 'AUTO'"),
     'virtual deck embeds the three short mode labels');

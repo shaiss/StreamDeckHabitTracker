@@ -240,11 +240,16 @@ test('dashboard Save resyncs consent tokens after every successful profile write
   assert.match(body, /loadedCoachNavSeq\s*=\s*Math\.max\(0,\s*Number\(j\.coachNavSeq\)/);
   assert.match(body, /body\.coachNav\s*!==\s*undefined/);
   assert.match(body, /loadedCoachNav\s*=\s*j\.coachNav\s*\|\|\s*loadedCoachNav/);
-  assert.match(body, /getElementById\('setCoachNav'\)\.value\s*=\s*loadedCoachNav/);
-  // Select rewrite is only for Saves that did not intentionally send coachNav.
+  // Intentional consent Save must not rewrite the select; name-only else
+  // branch rewrites only when the select still matches the click-time value
+  // (preserve edits made while Save was pending — #95 Entelligence).
+  const coachNavIf = body.match(/if \(body\.coachNav !== undefined\) \{([\s\S]*?)\} else \{/);
+  assert.ok(coachNavIf, 'consent intentional / name-only branches missing');
+  assert.doesNotMatch(coachNavIf[1], /setCoachNav/,
+    'intentional consent Save must not rewrite the select');
   assert.match(
     body,
-    /if \(body\.coachNav !== undefined\) \{[\s\S]*?\} else \{[\s\S]*?setCoachNav[\s\S]*?\}/
+    /\} else \{[\s\S]*?getElementById\('setCoachNav'\)[\s\S]*?\.value\s*===\s*coachNav[\s\S]*?\}/
   );
 });
 
