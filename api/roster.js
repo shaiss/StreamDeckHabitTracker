@@ -9,12 +9,13 @@
 // than silently losing the change. Retirement is soft; see lib/roster.js.
 // HABIT_KEY gates writes via x-habit-key / ?key= / body.key (lib/habit-key.js).
 // Production fails closed when the secret is unset (#112).
-import { isConfigured, getRoster, setRoster } from '../lib/store.js';
+import { isConfigured, getRoster, setRoster, withTargetsLock } from '../lib/store.js';
 import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
 import { rosterPass, ROSTER_COOLDOWN_MS } from '../lib/coach.js';
 import { normalizeRoster, applyDecision, restoreFromArchive } from '../lib/roster.js';
 import { keyDenied } from '../lib/habit-key.js';
+import { targetsHttpError } from '../lib/target.js';
 
 const view = (doc) => ({
   proposals: doc.proposals,
@@ -76,7 +77,9 @@ export default async function handler(req, res) {
       return;
     }
     // Defense in depth: the coach influenced this list, so it has to pass the
-    // same validation a hand-edited save does before it can land.
+    // same validation a hand-edited save does before it can land. Habit writes
+    // share withTargetsLock with commitTargetPass so a target-pass MSET cannot
+    // overwrite an approved roster change (or vice versa).
     let saved = habits;
     if (result.habits !== habits) {
       const err = validateHabits(result.habits);
@@ -84,9 +87,22 @@ export default async function handler(req, res) {
         res.status(400).json({ error: err });
         return;
       }
-      saved = await saveHabits(result.habits);
+      try {
+        await withTargetsLock(async () => {
+          saved = await saveHabits(result.habits);
+          await setRoster(result.roster);
+        });
+      } catch (lockErr) {
+        const mapped = targetsHttpError(lockErr);
+        if (mapped.status === 409) {
+          res.status(409).json({ error: mapped.error });
+          return;
+        }
+        throw lockErr;
+      }
+    } else {
+      await setRoster(result.roster);
     }
-    await setRoster(result.roster);
     res.status(200).json({ ok: true, applied: result.applied, habits: saved, ...view(result.roster) });
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
