@@ -242,10 +242,11 @@ test('finishExperimentRun: stale owner token must not delete a newer lock (#134)
   assert.equal(cmd._store.has(key), false);
 });
 
-test('finishExperimentRun: always releases owned lock even when cooldown SET would throw', async () => {
+test('finishExperimentRun: keeps the lock when cooldown SET throws (fail closed)', async () => {
   const base = memoryCmd();
   let setCoolFails = false;
-  const cmd = async (args) => {
+  const cmd = async (args, opts) => {
+    void opts;
     if (setCoolFails && String(args[0]).toUpperCase() === 'SET' && String(args[1]).includes('cooldown')) {
       throw new Error('redis blip');
     }
@@ -261,16 +262,18 @@ test('finishExperimentRun: always releases owned lock even when cooldown SET wou
     () => finishExperimentRun({ ok: true, token: claimed.token, now: NOW, cmd }),
     /redis blip/
   );
-  // Lock must still be gone despite the cooldown write failing.
-  const relock = await claimExperimentRun({ now: NOW + 10, cmd: base });
-  assert.equal(relock.ok, true);
+  // Lock must remain so the next claim cannot immediately bypass the cooldown.
+  const blocked = await claimExperimentRun({ now: NOW + 10, cmd: base });
+  assert.equal(blocked.ok, false);
+  assert.ok(blocked.retryAfterSec >= 1);
 });
 
 test('claimExperimentRun: releases lock if cooldown GET throws (and release failure does not mask)', async () => {
   const base = memoryCmd();
   let coolGetFails = false;
   let releaseFails = false;
-  const cmd = async (args) => {
+  const cmd = async (args, opts) => {
+    void opts;
     const op = String(args[0] || '').toUpperCase();
     const key = String(args[1] || '');
     if (coolGetFails && op === 'GET' && key.includes('cooldown')) {
@@ -296,4 +299,44 @@ test('claimExperimentRun: releases lock if cooldown GET throws (and release fail
   coolGetFails = true;
   releaseFails = true;
   await assert.rejects(() => claimExperimentRun({ now: NOW + 30, cmd }), /cooldown GET boom/);
+});
+
+test('claimExperimentRun: cooldown rejection still returns 429 when unlock EVAL fails', async () => {
+  const base = memoryCmd();
+  const first = await claimExperimentRun({ now: NOW, cmd: base });
+  assert.equal(first.ok, true);
+  await finishExperimentRun({ ok: true, token: first.token, now: NOW, cmd: base });
+
+  let releaseFails = false;
+  const cmd = async (args, opts) => {
+    void opts;
+    const op = String(args[0] || '').toUpperCase();
+    if (releaseFails && op === 'EVAL') {
+      throw new Error('EVAL boom');
+    }
+    return base(args);
+  };
+  releaseFails = true;
+  const blocked = await claimExperimentRun({ now: NOW + 1_000, cmd });
+  assert.equal(blocked.ok, false, 'must reject with cooldown, not throw');
+  assert.ok(blocked.retryAfterSec >= 1);
+  assert.ok(blocked.retryAfterSec <= Math.ceil(EXPERIMENT_COOLDOWN_MS / 1000));
+});
+
+test('claimExperimentRun: forwards AbortSignal to redis cmd opts', async () => {
+  const ctrl = new AbortController();
+  const seen = [];
+  const base = memoryCmd();
+  const cmd = async (args, opts = {}) => {
+    seen.push({ op: String(args[0]).toUpperCase(), signal: opts.signal });
+    return base(args);
+  };
+  const r = await claimExperimentRun({ now: NOW, cmd, signal: ctrl.signal });
+  assert.equal(r.ok, true);
+  assert.ok(seen.length >= 2, 'SET lock + GET cooldown');
+  assert.equal(seen[0].op, 'SET');
+  assert.equal(seen[0].signal, ctrl.signal);
+  assert.equal(seen[1].op, 'GET');
+  assert.equal(seen[1].signal, ctrl.signal);
+  await finishExperimentRun({ ok: false, token: r.token, now: NOW + 1, cmd: base });
 });
