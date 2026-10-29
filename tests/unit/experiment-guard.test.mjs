@@ -1,4 +1,6 @@
 // #122: /api/experiment model allowlist + run lock/cooldown.
+// #134: lock release is token-checked compare-and-delete.
+// #133: dedupe models; length-cap unknown names in 400 echo.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -6,6 +8,8 @@ import {
   EXPERIMENT_COOLDOWN_MS,
   EXPERIMENT_LOCK_TTL_SEC,
   EXPERIMENT_RUN_TIMEOUT_MS,
+  EXPERIMENT_MODEL_ECHO_MAX,
+  EXPERIMENT_RUN_ERROR,
   experimentAllowlist,
   parseExperimentModels,
   claimExperimentRun,
@@ -14,7 +18,10 @@ import {
 
 const NOW = 1_700_000_000_000;
 
-/** Minimal Redis stand-in: SET NX EX / GET / DEL with TTL bookkeeping. */
+const RELEASE_IF_OWNER_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+
+/** Minimal Redis stand-in: SET NX EX / GET / DEL / EVAL (compare-and-delete). */
 function memoryCmd() {
   const store = new Map(); // key -> { value, expAt }
   const cmd = async (args) => {
@@ -49,6 +56,20 @@ function memoryCmd() {
       const had = store.delete(args[1]);
       return had ? 1 : 0;
     }
+    if (op === 'EVAL') {
+      const script = String(args[1]);
+      const numKeys = Number(args[2]);
+      const key = args[3];
+      const token = String(args[4]);
+      assert.equal(numKeys, 1);
+      assert.equal(script, RELEASE_IF_OWNER_LUA);
+      const cur = store.get(key);
+      if (cur && cur.expAt <= cmd._now) store.delete(key);
+      const held = store.get(key);
+      if (!held || held.value !== token) return 0;
+      store.delete(key);
+      return 1;
+    }
     throw new Error('unsupported op ' + op);
   };
   cmd._now = NOW;
@@ -56,10 +77,19 @@ function memoryCmd() {
   return cmd;
 }
 
+function lockKeyOf(cmd) {
+  for (const k of cmd._store.keys()) {
+    if (String(k).includes('experiment:lock')) return k;
+  }
+  return null;
+}
+
 test('allowlist includes the current default model pair', () => {
   assert.deepEqual([...EXPERIMENT_ALLOWED_MODELS], ['glm-5.2', 'glm-4.7-flash']);
   assert.ok(EXPERIMENT_COOLDOWN_MS >= 30_000);
   assert.ok(EXPERIMENT_LOCK_TTL_SEC * 1000 >= EXPERIMENT_COOLDOWN_MS);
+  assert.equal(EXPERIMENT_RUN_ERROR, 'provider_error');
+  assert.ok(EXPERIMENT_MODEL_ECHO_MAX >= 16);
 });
 
 test('run timeout stays comfortably below the lock lease', () => {
@@ -106,16 +136,38 @@ test('parseExperimentModels: preferred ZAI_MODEL override is admitted', () => {
   assert.deepEqual(r.models, ['custom-glm', 'glm-4.7-flash']);
 });
 
-test('parseExperimentModels: caps at 3 models', () => {
+test('parseExperimentModels: dedupes names (first wins) before the max cap', () => {
   const r = parseExperimentModels('glm-5.2,glm-4.7-flash,glm-5.2,glm-4.7-flash');
   assert.equal(r.ok, true);
-  assert.equal(r.models.length, 3);
+  assert.deepEqual(r.models, ['glm-5.2', 'glm-4.7-flash']);
 });
 
-test('claimExperimentRun: first claim wins; second is blocked with retryAfter', async () => {
+test('parseExperimentModels: caps at 3 unique models', () => {
+  // preferred override admits a third distinct name so the cap is testable.
+  const r = parseExperimentModels('glm-5.2,glm-4.7-flash,custom-a,custom-b', {
+    preferred: 'custom-a',
+    max: 3
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.models, ['glm-5.2', 'glm-4.7-flash', 'custom-a']);
+});
+
+test('parseExperimentModels: length-caps unknown model names in the 400 echo', () => {
+  const long = 'x'.repeat(EXPERIMENT_MODEL_ECHO_MAX + 25);
+  const r = parseExperimentModels(long);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /Unknown model/);
+  assert.ok(!r.error.includes(long), 'full overlong name must not appear in the echo');
+  assert.ok(r.error.includes(long.slice(0, EXPERIMENT_MODEL_ECHO_MAX)));
+  assert.ok(r.error.length < long.length + 80);
+});
+
+test('claimExperimentRun: first claim wins with a token; second is blocked with retryAfter', async () => {
   const cmd = memoryCmd();
   const a = await claimExperimentRun({ now: NOW, cmd });
   assert.equal(a.ok, true);
+  assert.equal(typeof a.token, 'string');
+  assert.ok(a.token.length >= 8);
   const b = await claimExperimentRun({ now: NOW + 1000, cmd });
   assert.equal(b.ok, false);
   assert.ok(b.retryAfterSec >= 1);
@@ -124,8 +176,9 @@ test('claimExperimentRun: first claim wins; second is blocked with retryAfter', 
 
 test('claimExperimentRun: cooldown blocks after a successful finish', async () => {
   const cmd = memoryCmd();
-  assert.equal((await claimExperimentRun({ now: NOW, cmd })).ok, true);
-  await finishExperimentRun({ ok: true, now: NOW, cmd });
+  const claimed = await claimExperimentRun({ now: NOW, cmd });
+  assert.equal(claimed.ok, true);
+  await finishExperimentRun({ ok: true, token: claimed.token, now: NOW, cmd });
 
   const blocked = await claimExperimentRun({ now: NOW + 1_000, cmd });
   assert.equal(blocked.ok, false);
@@ -134,18 +187,59 @@ test('claimExperimentRun: cooldown blocks after a successful finish', async () =
 
   const after = await claimExperimentRun({ now: NOW + EXPERIMENT_COOLDOWN_MS + 1, cmd });
   assert.equal(after.ok, true);
-  await finishExperimentRun({ ok: true, now: NOW + EXPERIMENT_COOLDOWN_MS + 1, cmd });
+  await finishExperimentRun({
+    ok: true,
+    token: after.token,
+    now: NOW + EXPERIMENT_COOLDOWN_MS + 1,
+    cmd
+  });
 });
 
 test('finishExperimentRun: lock is released on error so a retry can claim', async () => {
   const cmd = memoryCmd();
-  assert.equal((await claimExperimentRun({ now: NOW, cmd })).ok, true);
-  await finishExperimentRun({ ok: false, now: NOW + 500, cmd });
+  const claimed = await claimExperimentRun({ now: NOW, cmd });
+  assert.equal(claimed.ok, true);
+  await finishExperimentRun({ ok: false, token: claimed.token, now: NOW + 500, cmd });
 
   // No cooldown stamp on failure — immediate re-claim must succeed.
   const again = await claimExperimentRun({ now: NOW + 600, cmd });
   assert.equal(again.ok, true);
-  await finishExperimentRun({ ok: false, now: NOW + 700, cmd });
+  await finishExperimentRun({ ok: false, token: again.token, now: NOW + 700, cmd });
+});
+
+test('finishExperimentRun: token-checked release deletes only when the token matches', async () => {
+  const cmd = memoryCmd();
+  const claimed = await claimExperimentRun({ now: NOW, cmd });
+  assert.equal(claimed.ok, true);
+  const key = lockKeyOf(cmd);
+  assert.ok(key);
+  assert.equal(cmd._store.get(key).value, claimed.token);
+
+  await finishExperimentRun({ ok: false, token: claimed.token, now: NOW + 1, cmd });
+  assert.equal(cmd._store.has(key), false, 'matching token must DEL the lock');
+});
+
+test('finishExperimentRun: stale owner token must not delete a newer lock (#134)', async () => {
+  const cmd = memoryCmd();
+  const first = await claimExperimentRun({ now: NOW, cmd });
+  assert.equal(first.ok, true);
+  const key = lockKeyOf(cmd);
+
+  // Simulate lock TTL expiry + a second run claiming ownership.
+  cmd._store.delete(key);
+  const second = await claimExperimentRun({ now: NOW + 100_000, cmd });
+  assert.equal(second.ok, true);
+  assert.notEqual(second.token, first.token);
+  assert.equal(cmd._store.get(key).value, second.token);
+
+  // Stale finish from the first run must leave the second lock intact.
+  await finishExperimentRun({ ok: false, token: first.token, now: NOW + 100_001, cmd });
+  assert.equal(cmd._store.has(key), true);
+  assert.equal(cmd._store.get(key).value, second.token);
+
+  // Owner finish still clears it.
+  await finishExperimentRun({ ok: true, token: second.token, now: NOW + 100_002, cmd });
+  assert.equal(cmd._store.has(key), false);
 });
 
 test('finishExperimentRun: keeps the lock when cooldown SET throws (fail closed)', async () => {
@@ -161,19 +255,23 @@ test('finishExperimentRun: keeps the lock when cooldown SET throws (fail closed)
   cmd._now = base._now;
   cmd._store = base._store;
 
-  assert.equal((await claimExperimentRun({ now: NOW, cmd })).ok, true);
+  const claimed = await claimExperimentRun({ now: NOW, cmd });
+  assert.equal(claimed.ok, true);
   setCoolFails = true;
-  await assert.rejects(() => finishExperimentRun({ ok: true, now: NOW, cmd }), /redis blip/);
+  await assert.rejects(
+    () => finishExperimentRun({ ok: true, token: claimed.token, now: NOW, cmd }),
+    /redis blip/
+  );
   // Lock must remain so the next claim cannot immediately bypass the cooldown.
   const blocked = await claimExperimentRun({ now: NOW + 10, cmd: base });
   assert.equal(blocked.ok, false);
   assert.ok(blocked.retryAfterSec >= 1);
 });
 
-test('claimExperimentRun: releases lock if cooldown GET throws (and DEL failure does not mask)', async () => {
+test('claimExperimentRun: releases lock if cooldown GET throws (and release failure does not mask)', async () => {
   const base = memoryCmd();
   let coolGetFails = false;
-  let delFails = false;
+  let releaseFails = false;
   const cmd = async (args, opts) => {
     void opts;
     const op = String(args[0] || '').toUpperCase();
@@ -181,8 +279,8 @@ test('claimExperimentRun: releases lock if cooldown GET throws (and DEL failure 
     if (coolGetFails && op === 'GET' && key.includes('cooldown')) {
       throw new Error('cooldown GET boom');
     }
-    if (delFails && op === 'DEL' && key.includes('lock')) {
-      throw new Error('DEL boom');
+    if (releaseFails && op === 'EVAL') {
+      throw new Error('EVAL boom');
     }
     return base(args);
   };
@@ -195,30 +293,30 @@ test('claimExperimentRun: releases lock if cooldown GET throws (and DEL failure 
   coolGetFails = false;
   const again = await claimExperimentRun({ now: NOW + 10, cmd: base });
   assert.equal(again.ok, true);
-  await finishExperimentRun({ ok: false, now: NOW + 20, cmd: base });
+  await finishExperimentRun({ ok: false, token: again.token, now: NOW + 20, cmd: base });
 
-  // If DEL also fails, the original cooldown error must still surface.
+  // If ownership release also fails, the original cooldown error must still surface.
   coolGetFails = true;
-  delFails = true;
+  releaseFails = true;
   await assert.rejects(() => claimExperimentRun({ now: NOW + 30, cmd }), /cooldown GET boom/);
 });
 
-test('claimExperimentRun: cooldown rejection still returns 429 when unlock DEL fails', async () => {
+test('claimExperimentRun: cooldown rejection still returns 429 when unlock EVAL fails', async () => {
   const base = memoryCmd();
-  assert.equal((await claimExperimentRun({ now: NOW, cmd: base })).ok, true);
-  await finishExperimentRun({ ok: true, now: NOW, cmd: base });
+  const first = await claimExperimentRun({ now: NOW, cmd: base });
+  assert.equal(first.ok, true);
+  await finishExperimentRun({ ok: true, token: first.token, now: NOW, cmd: base });
 
-  let delFails = false;
+  let releaseFails = false;
   const cmd = async (args, opts) => {
     void opts;
     const op = String(args[0] || '').toUpperCase();
-    const key = String(args[1] || '');
-    if (delFails && op === 'DEL' && key.includes('lock')) {
-      throw new Error('DEL boom');
+    if (releaseFails && op === 'EVAL') {
+      throw new Error('EVAL boom');
     }
     return base(args);
   };
-  delFails = true;
+  releaseFails = true;
   const blocked = await claimExperimentRun({ now: NOW + 1_000, cmd });
   assert.equal(blocked.ok, false, 'must reject with cooldown, not throw');
   assert.ok(blocked.retryAfterSec >= 1);
@@ -240,5 +338,5 @@ test('claimExperimentRun: forwards AbortSignal to redis cmd opts', async () => {
   assert.equal(seen[0].signal, ctrl.signal);
   assert.equal(seen[1].op, 'GET');
   assert.equal(seen[1].signal, ctrl.signal);
-  await finishExperimentRun({ ok: false, now: NOW + 1, cmd: base });
+  await finishExperimentRun({ ok: false, token: r.token, now: NOW + 1, cmd: base });
 });

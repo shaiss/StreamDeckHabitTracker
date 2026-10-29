@@ -29,9 +29,13 @@ let savedEnv;
 let savedFetch;
 let redis;
 let providerCalls;
-let providerMode; // 'ok' | 'abort'
+let providerMode; // 'ok' | 'abort' | 'error'
+let providerErrorMessage;
 
-/** Minimal Redis-over-REST stand-in (SET NX EX / GET / DEL / LRANGE). */
+const RELEASE_IF_OWNER_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+
+/** Minimal Redis-over-REST stand-in (SET NX EX / GET / DEL / EVAL / LRANGE). */
 function memoryRedis() {
   const store = new Map(); // key -> { kind:'string'|'list', value, expAt }
   const api = {
@@ -44,10 +48,10 @@ function memoryRedis() {
         expAt: Infinity
       });
     },
-    holdLock(startedAt = api._now) {
+    holdLock(token = 'held-by-other-run') {
       store.set('habits:experiment:lock', {
         kind: 'string',
-        value: String(startedAt),
+        value: String(token),
         expAt: api._now + 90_000
       });
     },
@@ -57,6 +61,15 @@ function memoryRedis() {
     cooldownStamped() {
       const cur = store.get('habits:experiment:cooldown');
       return Boolean(cur && cur.kind === 'string' && cur.value);
+    },
+    latestExperiment() {
+      const cur = store.get('habits:experiment:latest');
+      if (!cur || cur.kind !== 'string') return null;
+      try {
+        return JSON.parse(cur.value);
+      } catch {
+        return null;
+      }
     },
     async apply(args) {
       const op = String(args[0] || '').toUpperCase();
@@ -89,6 +102,19 @@ function memoryRedis() {
       if (op === 'DEL') {
         const had = store.delete(key);
         return had ? 1 : 0;
+      }
+      if (op === 'EVAL') {
+        const script = String(args[1]);
+        const numKeys = Number(args[2]);
+        const lockKey = args[3];
+        const token = String(args[4]);
+        assert.equal(numKeys, 1);
+        assert.equal(script, RELEASE_IF_OWNER_LUA);
+        purge(lockKey);
+        const cur = store.get(lockKey);
+        if (!cur || cur.kind !== 'string' || cur.value !== token) return 0;
+        store.delete(lockKey);
+        return 1;
       }
       if (op === 'LRANGE') {
         purge(key);
@@ -167,6 +193,7 @@ beforeEach(() => {
   redis.seedDataset([sampleDatasetItem()]);
   providerCalls = 0;
   providerMode = 'ok';
+  providerErrorMessage = 'z.ai leaked secret sk-live-DO-NOT-ECHO and stack';
   savedFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
     const u = String(url);
@@ -188,6 +215,11 @@ beforeEach(() => {
       if (providerMode === 'abort') {
         const err = new Error('provider aborted');
         err.name = 'AbortError';
+        throw err;
+      }
+      if (providerMode === 'error') {
+        const err = new Error(providerErrorMessage);
+        err.status = 502;
         throw err;
       }
       return new Response(
@@ -255,6 +287,82 @@ test('experiment route: chat AbortError → lock released and cooldown NOT stamp
     false,
     'cooldown must not be stamped when the run fails (succeeded stays false)'
   );
+});
+
+test('experiment route: per-run provider failure stores enum, not raw error text (#133)', async () => {
+  const { EXPERIMENT_RUN_ERROR } = await import('../../lib/experiment-guard.js');
+  providerMode = 'error';
+  const logs = [];
+  const origError = console.error;
+  console.error = (...args) => {
+    logs.push(args);
+  };
+  let res;
+  try {
+    res = await callExperiment({ models: 'glm-4.7-flash', n: '1' });
+  } finally {
+    console.error = origError;
+  }
+  assert.equal(res.statusCode, 200);
+  assert.ok(Array.isArray(res.body?.runs));
+  assert.ok(res.body.runs.length >= 1);
+  for (const run of res.body.runs) {
+    assert.equal(run.error, EXPERIMENT_RUN_ERROR);
+    assert.ok(!String(JSON.stringify(run)).includes(providerErrorMessage));
+    assert.ok(!String(JSON.stringify(run)).includes('sk-live'));
+  }
+  const stored = redis.latestExperiment();
+  assert.ok(stored);
+  assert.equal(stored.runs[0].error, EXPERIMENT_RUN_ERROR);
+  assert.ok(!JSON.stringify(stored).includes(providerErrorMessage));
+
+  // Server log: fixed marker + safe metadata only — never err.message / body text.
+  const runLogs = logs.filter((a) => a[0] === 'experiment run:' && a[1] === EXPERIMENT_RUN_ERROR);
+  assert.ok(runLogs.length >= 1, 'must log provider_error marker');
+  for (const entry of runLogs) {
+    const meta = entry[2];
+    assert.equal(typeof meta, 'object');
+    assert.equal(meta.model, 'glm-4.7-flash');
+    assert.equal(meta.status, 502);
+    assert.ok('name' in meta);
+    const blob = JSON.stringify(entry);
+    assert.ok(!blob.includes(providerErrorMessage));
+    assert.ok(!blob.includes('sk-live'));
+    assert.ok(!blob.includes('leaked secret'));
+  }
+});
+
+test('experiment route: unkeyed GET returns stored enum only (no raw error text) (#133)', async () => {
+  const { EXPERIMENT_RUN_ERROR } = await import('../../lib/experiment-guard.js');
+  providerMode = 'error';
+  await callExperiment({ models: 'glm-4.7-flash', n: '1' });
+
+  const { default: handler } = await import('../../api/experiment.js');
+  const req = { method: 'GET', headers: {}, query: {} };
+  const res = mkRes();
+  await handler(req, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['access-control-allow-origin'], '*');
+  assert.ok(Array.isArray(res.body?.runs));
+  for (const run of res.body.runs) {
+    assert.equal(run.error, EXPERIMENT_RUN_ERROR);
+  }
+  const blob = JSON.stringify(res.body);
+  assert.ok(!blob.includes(providerErrorMessage));
+  assert.ok(!blob.includes('sk-live'));
+  assert.ok(!blob.includes('leaked secret'));
+});
+
+test('experiment route: overlong unknown model is length-capped in the 400 echo (#133)', async () => {
+  const { EXPERIMENT_MODEL_ECHO_MAX } = await import('../../lib/experiment-guard.js');
+  const long = 'evil-' + 'm'.repeat(EXPERIMENT_MODEL_ECHO_MAX + 40);
+  const res = await callExperiment({ models: long });
+  assert.equal(res.statusCode, 400);
+  const err = String(res.body?.error || '');
+  assert.match(err, /Unknown model/);
+  assert.ok(!err.includes(long), 'full overlong name must not be echoed');
+  assert.ok(err.includes(long.slice(0, EXPERIMENT_MODEL_ECHO_MAX)));
+  assert.equal(providerCalls, 0);
 });
 
 test('experiment route: cooldown SET failure → 500, lock kept, no silent success', async () => {

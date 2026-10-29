@@ -19,7 +19,8 @@ import {
   parseExperimentModels,
   claimExperimentRun,
   finishExperimentRun,
-  EXPERIMENT_RUN_TIMEOUT_MS
+  EXPERIMENT_RUN_TIMEOUT_MS,
+  EXPERIMENT_RUN_ERROR
 } from '../lib/experiment-guard.js';
 
 /** Safe server log: name + short message only (no stacks, secrets, or response bodies). */
@@ -27,6 +28,16 @@ function logExperimentError(label, err) {
   const name = err?.name || 'Error';
   const msg = String(err?.message || err).slice(0, 200);
   console.error(label, name, msg);
+}
+
+/**
+ * Per-run provider failure log — fixed marker + safe metadata only.
+ * Never logs err.message (lib/ai.js embeds up to 300 chars of provider body).
+ */
+function logProviderRunFailure(model, err) {
+  const status = Number.isFinite(err?.status) ? err.status : null;
+  const name = err?.name || 'Error';
+  console.error('experiment run:', EXPERIMENT_RUN_ERROR, { model, status, name });
 }
 
 export default async function handler(req, res) {
@@ -66,6 +77,7 @@ export default async function handler(req, res) {
     const runTimer = setTimeout(() => runController.abort(), EXPERIMENT_RUN_TIMEOUT_MS);
     let lockOwned = false;
     let lockHandled = false;
+    let lockToken;
     try {
       const signal = runController.signal;
       const claim = await claimExperimentRun({ signal });
@@ -78,6 +90,7 @@ export default async function handler(req, res) {
         return;
       }
       lockOwned = true;
+      lockToken = claim.token;
 
       // All calls in parallel; per-call failure counts against that model.
       // AbortError (run deadline) is not swallowed into a per-model score —
@@ -103,10 +116,12 @@ export default async function handler(req, res) {
               return { model, kind: it.input.kind, itemAt: it.at, quality: scoreOutput(raw, { parseOk, fixedNames }), error: null };
             } catch (err) {
               if (signal.aborted || err?.name === 'AbortError') throw err;
+              // Never persist or log raw provider text — GET is unkeyed + CORS * (#133).
+              logProviderRunFailure(model, err);
               return {
                 model, kind: it.input.kind, itemAt: it.at,
                 quality: scoreOutput(null, { parseOk: false, fixedNames }),
-                error: String(err?.message || err).slice(0, 160)
+                error: EXPERIMENT_RUN_ERROR
               };
             }
           })
@@ -145,7 +160,7 @@ export default async function handler(req, res) {
       // fails, finishExperimentRun leaves the lock until TTL (fail closed) and
       // we surface 500 — never a silent "success" with no cooldown.
       try {
-        await finishExperimentRun({ ok: true, signal });
+        await finishExperimentRun({ ok: true, token: lockToken, signal });
       } catch (err) {
         lockHandled = true;
         logExperimentError('finishExperimentRun failed:', err);
@@ -157,8 +172,8 @@ export default async function handler(req, res) {
     } finally {
       clearTimeout(runTimer);
       if (lockOwned && !lockHandled) {
-        // No aborted signal — cleanup after the deadline must still DEL.
-        await finishExperimentRun({ ok: false }).catch((err) => {
+        // No aborted signal — cleanup after the deadline must still release.
+        await finishExperimentRun({ ok: false, token: lockToken }).catch((err) => {
           logExperimentError('finishExperimentRun failed:', err);
         });
       }
