@@ -60,21 +60,25 @@ export default async function handler(req, res) {
       return;
     }
 
-    const claim = await claimExperimentRun();
-    if (!claim.ok) {
-      res.setHeader('Retry-After', String(claim.retryAfterSec));
-      res.status(429).json({
-        error: 'Experiment just ran — try again shortly.',
-        retryAfter: claim.retryAfterSec
-      });
-      return;
-    }
-
-    let succeeded = false;
+    // Deadline covers claim Redis ops too — a stalled lock/cooldown must not
+    // burn the whole Vercel maxDuration with no abort path.
     const runController = new AbortController();
     const runTimer = setTimeout(() => runController.abort(), EXPERIMENT_RUN_TIMEOUT_MS);
+    let lockOwned = false;
+    let lockHandled = false;
     try {
       const signal = runController.signal;
+      const claim = await claimExperimentRun({ signal });
+      if (!claim.ok) {
+        res.setHeader('Retry-After', String(claim.retryAfterSec));
+        res.status(429).json({
+          error: 'Experiment just ran — try again shortly.',
+          retryAfter: claim.retryAfterSec
+        });
+        return;
+      }
+      lockOwned = true;
+
       // All calls in parallel; per-call failure counts against that model.
       // AbortError (run deadline) is not swallowed into a per-model score —
       // it fails the whole run so we do not store a truncated result.
@@ -137,13 +141,27 @@ export default async function handler(req, res) {
 
       const doc = { at: Date.now(), items: items.length, models: summary, productionAvgComposite: productionAvg, runs };
       await storeExperiment(doc, { signal });
-      succeeded = true;
+      // Stamp cooldown before telling the client we succeeded. If the stamp
+      // fails, finishExperimentRun leaves the lock until TTL (fail closed) and
+      // we surface 500 — never a silent "success" with no cooldown.
+      try {
+        await finishExperimentRun({ ok: true, signal });
+      } catch (err) {
+        lockHandled = true;
+        logExperimentError('finishExperimentRun failed:', err);
+        res.status(500).json({ error: 'Experiment failed.' });
+        return;
+      }
+      lockHandled = true;
       res.status(200).json(doc);
     } finally {
       clearTimeout(runTimer);
-      await finishExperimentRun({ ok: succeeded }).catch((err) => {
-        logExperimentError('finishExperimentRun failed:', err);
-      });
+      if (lockOwned && !lockHandled) {
+        // No aborted signal — cleanup after the deadline must still DEL.
+        await finishExperimentRun({ ok: false }).catch((err) => {
+          logExperimentError('finishExperimentRun failed:', err);
+        });
+      }
     }
   } catch (err) {
     logExperimentError('experiment failed:', err);

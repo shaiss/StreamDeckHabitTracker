@@ -31,6 +31,24 @@ test('api/experiment.js bounds the run with AbortSignal and clears the timer', (
   );
 });
 
+test('api/experiment.js starts the abort deadline before claimExperimentRun', () => {
+  const abortAt = experimentSrc.indexOf('new AbortController');
+  const claimAt = experimentSrc.indexOf('claimExperimentRun(');
+  assert.ok(abortAt >= 0 && claimAt >= 0, 'both sites present');
+  assert.ok(abortAt < claimAt, 'AbortController must be created before claim Redis ops');
+  assert.match(experimentSrc, /claimExperimentRun\(\{\s*signal\s*\}\)/);
+});
+
+test('api/experiment.js fails closed when cooldown stamp fails (no silent 200)', () => {
+  // Successful path stamps cooldown before res.status(200); stamp failure → 500.
+  assert.match(experimentSrc, /await finishExperimentRun\(\{\s*ok:\s*true,\s*signal\s*\}\)/);
+  const finishOkAt = experimentSrc.indexOf('finishExperimentRun({ ok: true');
+  const ok200At = experimentSrc.indexOf("res.status(200).json(doc)");
+  assert.ok(finishOkAt >= 0 && ok200At >= 0);
+  assert.ok(finishOkAt < ok200At, 'cooldown stamp must precede the success response');
+  assert.match(experimentSrc, /lockHandled\s*=\s*true/);
+});
+
 test('api/experiment.js logs unexpected failures server-side without changing the 500 body', () => {
   assert.match(experimentSrc, /logExperimentError\('experiment failed:'/);
   assert.match(experimentSrc, /logExperimentError\('finishExperimentRun failed:'/);

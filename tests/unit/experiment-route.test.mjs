@@ -256,3 +256,22 @@ test('experiment route: chat AbortError → lock released and cooldown NOT stamp
     'cooldown must not be stamped when the run fails (succeeded stays false)'
   );
 });
+
+test('experiment route: cooldown SET failure → 500, lock kept, no silent success', async () => {
+  const origApply = redis.apply.bind(redis);
+  redis.apply = async (args) => {
+    const op = String(args[0] || '').toUpperCase();
+    const key = String(args[1] || '');
+    // Only the cooldown stamp (not lock NX or experiment:latest).
+    if (op === 'SET' && key.includes('experiment:cooldown')) {
+      throw new Error('cooldown SET boom');
+    }
+    return origApply(args);
+  };
+  const res = await callExperiment({ models: 'glm-4.7-flash', n: '1' });
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.body?.error, 'Experiment failed.');
+  assert.ok(providerCalls >= 1, 'run completed before cooldown stamp');
+  assert.equal(redis.cooldownStamped(), false, 'cooldown must not land');
+  assert.equal(redis.lockHeld(), true, 'lock retained until TTL when stamp fails');
+});
