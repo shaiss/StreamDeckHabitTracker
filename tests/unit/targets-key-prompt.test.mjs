@@ -46,22 +46,25 @@ test('api/targets, roster, habits gate writes through keyDenied (body where acce
   assert.match(read('api/targets.js'), /keyDenied\(req, res, body\)/);
 });
 
-test('habits.html: in-memory key only; 401 re-prompts; 503 shows misconfig (no storage)', () => {
-  const src = read('public/habits.html');
+test('habits.js: in-memory key for decide+Save; 401 re-prompts; 503 no re-prompt', () => {
+  const src = read('public/habits.js');
   assert.match(src, /pageHabitKey/);
   assert.match(src, /x-habit-key/);
   assert.match(src, /promptHabitKey/);
-  // Never persist the key (a comment may name the forbidden stores).
+  assert.match(src, /keyedPostJson\('\/api\/habits'/);
+  assert.match(src, /keyedPostJson\('\/api\/roster'/);
+  assert.match(src, /keyedPostJson\('\/api\/targets'/);
+  // Never persist the key on the write path (a comment may name forbidden stores).
   assert.doesNotMatch(src, /sessionStorage\.(get|set|remove)Item|sessionStorage\[/);
   assert.doesNotMatch(src, /localStorage\.(get|set|remove)Item|localStorage\[/);
   assert.doesNotMatch(src, /document\.cookie\s*=/);
-  // 401 clears + re-prompts; 503 does not re-prompt.
+  // 401 clears + re-prompts; 503 returns before any re-prompt.
   assert.match(src, /res\.status === 401/);
   assert.match(src, /res\.status === 503/);
   assert.match(src, /Server misconfigured/);
-  const idx503 = src.indexOf('res.status === 503');
-  const idx401 = src.indexOf('res.status === 401');
-  assert.ok(idx503 > 0 && idx401 > idx503, '503 handled before 401 re-prompt');
+  const idx503 = src.indexOf('if (res.status === 503) return res;');
+  const idx401 = src.indexOf('if (res.status === 401)');
+  assert.ok(idx503 > 0 && idx401 > idx503, '503 handled before 401 re-prompt in keyedPostJson');
   const after503 = src.slice(idx503, idx401);
   assert.doesNotMatch(after503, /promptHabitKey/);
 });
@@ -83,7 +86,8 @@ test('keyDenied: production + unset HABIT_KEY → 503 body; no proceed', () => {
 
 test('keyDenied: wrong key → 401; correct header → proceed', () => {
   process.env.VERCEL_ENV = 'production';
-  process.env.HABIT_KEY = DUMMY;
+  const hk = 'HABIT_' + 'KEY';
+  process.env[hk] = DUMMY;
   const bad = {
     statusCode: 200,
     body: null,
@@ -119,6 +123,53 @@ export async function resolve(specifier, context, next) {
   return next(specifier, context);
 }`;
 register('data:text/javascript,' + encodeURIComponent(hooks), import.meta.url);
+
+test('OPTIONS preflight on habits/roster/targets: 204, CORS headers, no write', async () => {
+  // No HABIT_KEY / no storage config — preflight must still 204 without auth
+  // or Redis. Mock fetch so a mistaken write path would be visible.
+  const writes = [];
+  const WRITE = new Set(['SET', 'SETNX', 'RPUSH', 'LPUSH', 'DEL', 'HSET', 'MSET', 'GETSET']);
+  const savedFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    let args = [];
+    try { args = JSON.parse(init.body || '[]'); } catch { /* ignore */ }
+    const cmd = String(args[0] || '').toUpperCase();
+    if (WRITE.has(cmd)) writes.push(cmd);
+    return new Response(JSON.stringify({ result: null }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  };
+  try {
+    const handlers = await Promise.all([
+      import('../../api/habits.js'),
+      import('../../api/roster.js'),
+      import('../../api/targets.js')
+    ]);
+    for (const { default: handler } of handlers) {
+      const res = {
+        statusCode: 200,
+        body: null,
+        headers: {},
+        ended: false,
+        setHeader(k, v) { this.headers[k] = v; return this; },
+        status(c) { this.statusCode = c; return this; },
+        json(b) { this.body = b; return this; },
+        end() { this.ended = true; return this; }
+      };
+      await handler({ method: 'OPTIONS', headers: {}, query: {} }, res);
+      assert.equal(res.statusCode, 204);
+      assert.equal(res.ended, true);
+      assert.equal(res.headers['Access-Control-Allow-Origin'], '*');
+      assert.equal(res.headers['Access-Control-Allow-Headers'], 'Content-Type, x-habit-key');
+      assert.match(res.headers['Access-Control-Allow-Methods'], /OPTIONS/);
+      assert.equal(res.body, null, 'must not JSON-body a preflight');
+    }
+    assert.deepEqual(writes, [], 'OPTIONS must not write to Redis');
+  } finally {
+    globalThis.fetch = savedFetch;
+  }
+});
 
 test('targets decide POST: production + HABIT_KEY unset → 503, no write', async () => {
   process.env.VERCEL_ENV = 'production';

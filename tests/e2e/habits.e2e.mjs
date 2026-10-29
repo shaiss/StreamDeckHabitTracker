@@ -2,7 +2,7 @@
 // The mock is stateful and runs the REAL roster decision logic (lib/roster.js)
 // behind /api/roster, so these tests cover the wiring between the two rather
 // than a hand-written stub of it.
-// Requires: npm i playwright-core --no-save, and Chromium at CHROME_PATH or
+// Requires: npm ci (playwright-core pinned), and Chromium at CHROME_PATH or
 // the repo default (/opt/pw-browsers/chromium).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,6 +11,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { documentHeaders } from './document-headers.mjs';
 import { sanitizeProposals, applyDecision, restoreFromArchive, normalizeRoster } from '../../lib/roster.js';
 import {
   sanitizeTargetChanges,
@@ -26,10 +27,12 @@ const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript
 
 let server, browser, page, port;
 const posted = [];
-// When set, /api/targets POST requires matching x-habit-key (#111).
+// When set, keyed POSTs (/api/targets, /api/habits) require matching x-habit-key (#111).
 let requiredTargetsKey = null;
-// When true, /api/targets POST answers 503 (production HABIT_KEY unset — issue 112).
+let requiredHabitsKey = null;
+// When true, keyed POSTs answer 503 (production HABIT_KEY unset — issue 112).
 let targetsMisconfigured = false;
+let habitsMisconfigured = false;
 // Dialog policy for window.prompt HABIT_KEY asks (mutable per test).
 let dialogMode = 'dismiss'; // 'dismiss' | 'accept'
 let dialogAcceptValue = 'test-habit-key-111-dummy';
@@ -76,10 +79,38 @@ before(async () => {
     const url = req.url.split('?')[0];
     if (url === '/api/habits' && req.method === 'POST') {
       readBody(req, (body) => {
+        if (habitsMisconfigured) {
+          return json(res, 503, { error: 'Server misconfigured: HABIT_KEY is not set.' });
+        }
+        if (requiredHabitsKey) {
+          const hdr = req.headers['x-habit-key'];
+          const got = Array.isArray(hdr) ? hdr[0] : hdr;
+          if (got !== requiredHabitsKey) {
+            return json(res, 401, { error: 'Unauthorized' });
+          }
+        }
         posted.push(body);
         habits = body.habits;
         json(res, 200, { ok: true, habits });
       });
+      return;
+    }
+    if (url === '/api/habits' && req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, x-habit-key',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+      });
+      res.end();
+      return;
+    }
+    if ((url === '/api/roster' || url === '/api/targets') && req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, x-habit-key',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+      });
+      res.end();
       return;
     }
     if (url === '/api/habits') {
@@ -144,7 +175,8 @@ before(async () => {
     }
     const p = join(ROOT, url === '/' ? 'index.html' : url);
     if (existsSync(p)) {
-      res.writeHead(200, { 'Content-Type': MIME[extname(p)] || 'application/octet-stream' });
+      const type = MIME[extname(p)] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': type, ...(extname(p) === '.html' ? documentHeaders() : {}) });
       res.end(readFileSync(p));
     } else { res.writeHead(404); res.end(); }
   });
@@ -471,4 +503,85 @@ test('targets decide 503 shows misconfig and does not re-prompt (issue 112)', as
   });
   targetsMisconfigured = false;
   dialogMode = 'dismiss';
+});
+
+test('Save sends x-habit-key and succeeds when key required (#111)', async () => {
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredHabitsKey = DUMMY;
+  dialogMode = 'accept';
+  dialogAcceptValue = DUMMY;
+  posted.length = 0;
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('#saveBtn');
+  await settled('Saved');
+  assert.ok(posted.length >= 1, 'Save must POST habits');
+  requiredHabitsKey = null;
+  dialogMode = 'dismiss';
+});
+
+test('Save 401 re-prompts once then retries with new key (#111)', async () => {
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredHabitsKey = DUMMY;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    if (prompts === 1) await d.accept('wrong-key-not-secret');
+    else await d.accept(DUMMY);
+  });
+  posted.length = 0;
+  const before = habits.length;
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('#saveBtn');
+  await settled('Saved');
+  assert.equal(prompts, 2, 'wrong key → 401 → re-prompt');
+  assert.ok(posted.length >= 1, 'retry Save must land');
+  assert.equal(habits.length, before);
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  requiredHabitsKey = null;
+  dialogMode = 'dismiss';
+});
+
+test('Save 503 shows misconfig and does not re-prompt (issue 112)', async () => {
+  habitsMisconfigured = true;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    await d.accept('test-habit-key-111-dummy');
+  });
+  posted.length = 0;
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('#saveBtn');
+  await settled('Server misconfigured');
+  assert.equal(posted.length, 0, 'no write on 503');
+  assert.equal(prompts, 1, '503 must not clear/re-prompt');
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  habitsMisconfigured = false;
+  dialogMode = 'dismiss';
+});
+
+test('OPTIONS /api/habits preflight returns 204 with CORS headers (no write)', async () => {
+  posted.length = 0;
+  const res = await fetch(`http://127.0.0.1:${port}/api/habits`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://example.test',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'content-type,x-habit-key'
+    }
+  });
+  assert.equal(res.status, 204);
+  assert.equal(res.headers.get('access-control-allow-origin'), '*');
+  assert.match(res.headers.get('access-control-allow-headers') || '', /x-habit-key/i);
+  assert.match(res.headers.get('access-control-allow-methods') || '', /POST/);
+  assert.equal(posted.length, 0);
 });

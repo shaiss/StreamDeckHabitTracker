@@ -18,21 +18,31 @@ on:
   schedule:
     - cron: "0 12 * * 1" # Mondays 12:00 UTC
 
+# Least privilege (#115): this job never checks out the repo, never writes
+# packages/PRs/issues, and only curls the live deployment with HABIT_KEY from
+# env. An empty grant means GITHUB_TOKEN is useless if it ever leaks into logs.
+permissions: {}
+
 jobs:
   experiment:
     runs-on: ubuntu-latest
+    # Typical runs ~1m; one outlier ~11m (slow model / queue). curl --max-time
+    # 120 plus runner overhead — 15m is comfortable headroom.
+    timeout-minutes: 15
     steps:
       - name: Run experiment on the live deployment
         env:
           BASE: https://stream-deck-habit-tracker.vercel.app
           MODELS: ${{ github.event.inputs.models || 'glm-5.2,glm-4.7-flash' }}
           N: ${{ github.event.inputs.n || '3' }}
+          # Secret enters only via env (never ${{ secrets.* }} inside run:).
           HABIT_KEY: ${{ secrets.HABIT_KEY }}
         run: |
           URL="$BASE/api/experiment?run=1&models=$MODELS&n=$N"
-          if [ -n "$HABIT_KEY" ]; then URL="$URL&key=$HABIT_KEY"; fi
           echo "Running: $BASE/api/experiment (models=$MODELS n=$N)"
-          RESP=$(curl -sS --max-time 120 "$URL")
+          # The key rides in the x-habit-key header, never the URL (Cipher M2).
+          # Passed via env so the secret is not expanded into the script text.
+          RESP=$(curl -sS --max-time 120 -H "x-habit-key: $HABIT_KEY" "$URL")
           echo "$RESP" | jq .models
           echo "$RESP" | jq -e '.models' > /dev/null || { echo "::error::Experiment failed: $RESP"; exit 1; }
 

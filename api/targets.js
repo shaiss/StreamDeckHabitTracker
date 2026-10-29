@@ -10,12 +10,13 @@
 import { isConfigured, getTargets, setTargets, setHabitsAndTargets, withTargetsLock } from '../lib/store.js';
 import { getHabitsStrict, prepareHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
-import { targetPass, TARGET_COOLDOWN_MS } from '../lib/coach.js';
+import { targetPass } from '../lib/coach.js';
 import {
   normalizeTargets,
   applyTargetDecision,
   formatTargetLine,
   targetsClientMessage,
+  targetsHttpError,
   TARGETS_WRITE_FAILED_MSG
 } from '../lib/target.js';
 import { keyDenied } from '../lib/habit-key.js';
@@ -38,8 +39,14 @@ function wrapTargetsWriteError(op, err) {
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-habit-key');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
   try {
     if (!isConfigured()) {
       res.status(503).json({ error: 'Storage not connected.' });
@@ -58,17 +65,32 @@ export default async function handler(req, res) {
         res.status(503).json({ error: 'No AI key set — add ZAI_API_KEY in Vercel, then redeploy.' });
         return;
       }
-      if (Date.now() - current.lastRunAt < TARGET_COOLDOWN_MS) {
-        res.status(429).json({ error: 'Just ran — try again in half a minute.', ...view(current) });
-        return;
+      // Cooldown is claimed under withTargetsLock inside targetPass (not here)
+      // so concurrent ?run=1 cannot all pass a pre-check and each spend a model
+      // call. TARGETS_COOLDOWN / TARGETS_BUSY map via targetsHttpError.
+      try {
+        const doc = await targetPass();
+        res.status(200).json({
+          autoApplied: doc.autoApplied,
+          queued: doc.queued,
+          parseError: doc.parseError || undefined,
+          ...view(doc)
+        });
+      } catch (err) {
+        const mapped = targetsHttpError(err);
+        if (mapped.status === 429) {
+          res.status(429).json({
+            error: mapped.error,
+            ...view(normalizeTargets(mapped.doc || current))
+          });
+          return;
+        }
+        if (mapped.status === 409) {
+          res.status(409).json({ error: mapped.error });
+          return;
+        }
+        throw err;
       }
-      const doc = await targetPass();
-      res.status(200).json({
-        autoApplied: doc.autoApplied,
-        queued: doc.queued,
-        parseError: doc.parseError || undefined,
-        ...view(doc)
-      });
       return;
     }
 
@@ -111,8 +133,9 @@ export default async function handler(req, res) {
         }
       });
     } catch (err) {
-      if (err?.code === 'TARGETS_BUSY') {
-        res.status(409).json({ error: err.message });
+      const mapped = targetsHttpError(err);
+      if (mapped.status === 409) {
+        res.status(409).json({ error: mapped.error });
         return;
       }
       throw err;
@@ -131,6 +154,9 @@ export default async function handler(req, res) {
   } catch (err) {
     // Log the real failure; clients only ever see a stable generic 500 body.
     console.error('[api/targets] error:', err?.message || err);
-    res.status(500).json({ error: targetsClientMessage(err) });
+    const mapped = targetsHttpError(err);
+    res.status(mapped.status === 500 ? 500 : mapped.status).json({
+      error: mapped.status === 500 ? targetsClientMessage(err) : mapped.error
+    });
   }
 }

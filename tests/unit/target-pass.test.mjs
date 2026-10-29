@@ -4,13 +4,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withTargetsLock, getTargets, setTargets, setHabitsAndTargets } from '../../lib/store.js';
-import { readTargetsForPass, commitTargetPass } from '../../lib/target-pass.js';
+import {
+  readTargetsForPass,
+  commitTargetPass,
+  claimTargetRun,
+  TARGET_COOLDOWN_MS
+} from '../../lib/target-pass.js';
 
 const TARGETS_KEY = 'habits:targets';
 const HABITS_KEY = 'habits:config';
 const LOCK_KEY = 'habits:targets:lock';
 const RELEASE_LUA =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+const RENEW_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], tonumber(ARGV[2])) else return 0 end";
 
 function isHabitsTargetsMset(args) {
   return args[0] === 'MSET'
@@ -55,6 +62,14 @@ function installRedisMock(state, { failAtomic = false } = {}) {
         const token = args[4];
         if (state[key] === token) {
           delete state[key];
+          return { ok: true, json: async () => ({ result: 1 }) };
+        }
+        return { ok: true, json: async () => ({ result: 0 }) };
+      }
+      if (lua === RENEW_LUA) {
+        const key = args[3];
+        const token = args[4];
+        if (state[key] === token) {
           return { ok: true, json: async () => ({ result: 1 }) };
         }
         return { ok: true, json: async () => ({ result: 0 }) };
@@ -317,6 +332,105 @@ test('commitTargetPass: re-read under lock drops a raise already approved by POS
     assert.equal(stored.proposals.length, 0);
     assert.equal(stored.history[0].via, 'approve');
     assert.deepEqual(stored.rejected, ['caffeine:6']);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('commitTargetPass: expectedTargets discards downs after a concurrent human raise', async () => {
+  // Model saw Caffeine@5 and proposed 4; human approved 5→6 while the model ran.
+  // Without the snapshot check, sanitize would auto-apply 6→4 and undo the raise.
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({
+      proposals: [],
+      history: [{ name: 'Caffeine', from: 5, to: 6, via: 'approve' }],
+      rejected: [],
+      lastRunAt: 1,
+      model: '',
+      engine: ''
+    }),
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Caffeine', emoji: '☕', label: 'Caffeine', goal: 6, origin: 'human' }
+    ])
+  };
+  const mock = installRedisMock(state);
+  try {
+    const doc = await commitTargetPass({
+      raw: [{ name: 'Caffeine', to: 4, reason: 'stale ease from snapshot@5' }],
+      engine: 'test',
+      expectedTargets: { caffeine: 5 }
+    });
+    assert.equal(doc.autoApplied, 0);
+    assert.equal(JSON.parse(state[HABITS_KEY])[0].goal, 6);
+    assert.equal(JSON.parse(state[TARGETS_KEY]).history[0].via, 'approve');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('claimTargetRun: stamps lastRunAt under lock; second claim hits TARGETS_COOLDOWN', async () => {
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({
+      proposals: [],
+      history: [],
+      rejected: [],
+      lastRunAt: 0
+    })
+  };
+  const mock = installRedisMock(state);
+  try {
+    const first = await claimTargetRun();
+    assert.equal(first.skip, false);
+    assert.ok(first.doc.lastRunAt > 0);
+    assert.equal(JSON.parse(state[TARGETS_KEY]).lastRunAt, first.doc.lastRunAt);
+    await assert.rejects(
+      () => claimTargetRun(),
+      (err) => !!(err && err.code === 'TARGETS_COOLDOWN' && err.doc)
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
+test('claimTargetRun: skips without stamping when pending is full', async () => {
+  const proposals = Array.from({ length: 3 }, (_, i) => ({
+    id: 'p' + i, name: 'H' + i, from: 1, to: 2
+  }));
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({
+      proposals,
+      history: [],
+      rejected: [],
+      lastRunAt: 0
+    })
+  };
+  const mock = installRedisMock(state);
+  try {
+    const claim = await claimTargetRun();
+    assert.equal(claim.skip, true);
+    assert.equal(JSON.parse(state[TARGETS_KEY]).lastRunAt, 0, 'must not burn cooldown');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('claimTargetRun: respects TARGET_COOLDOWN_MS from stored lastRunAt', async () => {
+  const recent = Date.now() - Math.floor(TARGET_COOLDOWN_MS / 2);
+  const state = {
+    [TARGETS_KEY]: JSON.stringify({
+      proposals: [],
+      history: [],
+      rejected: [],
+      lastRunAt: recent
+    })
+  };
+  const mock = installRedisMock(state);
+  try {
+    await assert.rejects(
+      () => claimTargetRun(),
+      (err) => err && err.code === 'TARGETS_COOLDOWN'
+    );
+    assert.equal(JSON.parse(state[TARGETS_KEY]).lastRunAt, recent);
   } finally {
     mock.restore();
   }

@@ -48,5 +48,5 @@ match:
 - **Coach stack**: Vercel AI SDK `generateText` + `tool()` over z.ai GLM
   (Mastra was dropped — decision #66 / PR #96). Do not re-add `@mastra/*`.
   Prompt/sanitizer tests stay on `lib/coach-shape.js` (zero-dep unit suite).
-- **Tool deps are NOT in `package.json`** (keeps Vercel's install lean):
-  `npm i playwright-core pngjs gifenc --no-save` once per machine.
+- **Plugin/tool build pins** are exact `devDependencies` (+ `overrides.ws`)
+  so `npm ci` + `npm run build:plugin` reproduces `bin/plugin.js` (#108).

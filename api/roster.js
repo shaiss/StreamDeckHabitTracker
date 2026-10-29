@@ -25,8 +25,14 @@ const view = (doc) => ({
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-habit-key');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
   try {
     if (!isConfigured()) {
       res.status(503).json({ error: 'Storage not connected.' });
