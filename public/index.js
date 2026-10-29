@@ -166,7 +166,9 @@ import { esc } from '/escape.js';
     }
 
     async function suggest() {
-      if (window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
+      // Server accepts ht_/HABIT_KEY OR Clerk; do not require Clerk when a key is stored.
+      const hasKey = window.HabitKey && typeof window.HabitKey.get === 'function' && window.HabitKey.get();
+      if (!hasKey && window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
       const btn = document.getElementById('suggestBtn'), err = document.getElementById('aiErr');
       btn.disabled = true; btn.textContent = '🤔 Thinking…'; err.textContent = '';
       try {
@@ -218,7 +220,9 @@ import { esc } from '/escape.js';
     window.addEventListener('toggle-settings', () => toggleSettings());
     if (new URLSearchParams(location.search).get('settings') === '1') toggleSettings(true);
     document.getElementById('saveProfile').addEventListener('click', async () => {
-      if (window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
+      // Server accepts ht_/HABIT_KEY OR Clerk; do not require Clerk when a key is stored.
+      const hasKey = window.HabitKey && typeof window.HabitKey.get === 'function' && window.HabitKey.get();
+      if (!hasKey && window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
       const st = document.getElementById('profileStatus');
       st.textContent = 'Saving…';
       window.HabitKey.postJson('/api/profile', {

@@ -505,7 +505,9 @@
       go.then((r) => r.json()).then(async (j) => {
         const signedIn = window.HabitAuth && typeof window.HabitAuth.isSignedIn === 'function'
           && window.HabitAuth.isSignedIn();
-        if (j && j.authRequired && signedIn && window.HabitKey && window.HabitKey.get()) {
+        // Only clear a stored key when storage is configured — an unconfigured
+        // public fallback also sets authRequired, which is not a revoked key.
+        if (j && j.authRequired && j.configured !== false && signedIn && window.HabitKey && window.HabitKey.get()) {
           window.HabitKey.clear();
           const r2 = await window.HabitAuth.authFetch(url);
           j = await r2.json();

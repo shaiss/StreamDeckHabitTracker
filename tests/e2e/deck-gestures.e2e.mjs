@@ -26,6 +26,8 @@ let mockQuestion = false;
 let mockPicker = false;
 let mockDanger = false;
 let mockSignedIn = true;    // default: signed-in so existing gesture tests still log
+let mockSlotsConfigured = true; // false → public unconfigured fallback (authRequired)
+let mockSlotsAuthRequired = false; // configured + authRequired (anonymous / revoked key)
 
 before(async () => {
   server = createServer((req, res) => {
@@ -66,6 +68,30 @@ before(async () => {
     if (url === '/api/slots') {
       const now = Date.now();
       res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (!mockSlotsConfigured) {
+        // Matches api/slots.js public fallback when storage is unconfigured.
+        res.end(JSON.stringify({
+          configured: false, aiReady: false, model: null,
+          habits: [], suggestedAt: 0,
+          slots: [null, null, null, null],
+          coachPage: Array.from({ length: 12 }, () => null),
+          coachNav: 'off', today: {}, rosterPending: 0, blocked: false,
+          authRequired: true
+        }));
+        return;
+      }
+      if (mockSlotsAuthRequired) {
+        // Matches optionalAuth miss: storage up, no valid credential.
+        res.end(JSON.stringify({
+          configured: true, aiReady: true, model: 'fixture',
+          habits: [{ name: 'Drink', emoji: '💧', label: 'Drink' }],
+          suggestedAt: 0, slots: [null, null, null, null],
+          coachPage: Array.from({ length: 12 }, () => null),
+          coachNav: 'off', today: {}, rosterPending: 0, blocked: false,
+          authRequired: true
+        }));
+        return;
+      }
       res.end(JSON.stringify({
         configured: true, aiReady: true, suggestedAt: now,
         habits: [{ name: 'Drink', emoji: '💧', label: 'Drink' }],
@@ -136,7 +162,7 @@ before(async () => {
 after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false, signedIn = true } = {}) {
+async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false, signedIn = true, slotsConfigured = true, slotsAuthRequired = false, habitKey = null } = {}) {
   calls = [];
   logStatus = 200;
   nudgeFraction = nudge;
@@ -146,9 +172,28 @@ async function open({ nudge = null, roster = 0, blocked = false, question = fals
   mockPicker = picker;
   mockDanger = danger;
   mockSignedIn = signedIn;
+  mockSlotsConfigured = slotsConfigured;
+  mockSlotsAuthRequired = slotsAuthRequired;
+  if (habitKey != null) {
+    // Seed sessionStorage before HabitKey reads it on the real load.
+    await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'domcontentloaded' });
+    await page.evaluate((k) => {
+      if (k) sessionStorage.setItem('habitdeck.key', k);
+      else sessionStorage.removeItem('habitdeck.key');
+    }, habitKey);
+  }
   await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
-  await page.waitForSelector('.k[data-habit="0"]');
-  return page.locator('.k[data-habit="0"]');
+  if (slotsConfigured && !slotsAuthRequired) {
+    await page.waitForSelector('.k[data-habit="0"]');
+    return page.locator('.k[data-habit="0"]');
+  }
+  if (slotsConfigured && slotsAuthRequired) {
+    // Seed habits still render; wait for the refresh cycle to settle.
+    await page.waitForSelector('.k[data-habit="0"]');
+    return page.locator('.k[data-habit="0"]');
+  }
+  await page.waitForFunction(() => document.getElementById('hint')?.textContent);
+  return null;
 }
 
 // The tap path defers by DOUBLE_TAP_MS, so every assertion has to outwait it.
@@ -450,4 +495,21 @@ test('press 2 within the window commits; a lapsed window disarms silently (#78)'
   assert.equal(calls.length, 0, 'a lapsed window emits nothing');
   const label = await page.$eval('.k[data-slot="1"] .lb', (e) => e.textContent);
   assert.notEqual(label, 'CONFIRM?', 'face reverts after disarm');
+});
+
+// Stored credential constructed at runtime so the key-scan never sees a literal.
+const STORED_HT = 'ht_' + 'e2e' + 'token' + 'xxxxxxxxxxxxxxxxxxxx';
+
+test('unconfigured /api/slots keeps a stored HabitKey (authRequired is not a revoke)', async () => {
+  await open({ slotsConfigured: false, habitKey: STORED_HT, signedIn: true });
+  const kept = await page.evaluate(() => window.HabitKey && window.HabitKey.get());
+  assert.equal(kept, STORED_HT, 'unconfigured public fallback must not clear the key');
+});
+
+test('configured authRequired clears a revoked HabitKey when signed in', async () => {
+  await open({ slotsAuthRequired: true, habitKey: STORED_HT, signedIn: true });
+  // refresh() clears the dead key then Clerk-only retries; settle one poll cycle.
+  await page.waitForFunction(() => !(window.HabitKey && window.HabitKey.get()));
+  assert.equal(await page.evaluate(() => window.HabitKey.get()), '',
+    'configured authRequired + signed-in clears the stored key');
 });

@@ -225,6 +225,8 @@ test('frontend write gates accept HabitKey without Clerk', () => {
   assert.match(deck, /HabitKey\.fetch\(url\)/);
   assert.match(deck, /authRequired/);
   assert.match(deck, /HabitKey\.clear\(\)/);
+  // Unconfigured /api/slots also sets authRequired — must not clear a stored key.
+  assert.match(deck, /authRequired\s*&&\s*j\.configured\s*!==\s*false/);
   const habits = readFileSync(join(root, 'public/habits.js'), 'utf8');
   assert.match(habits, /HabitKey\.fetch\(url,\s*opts\)/);
   assert.match(habits, /hasKey/);
@@ -236,6 +238,14 @@ test('frontend write gates accept HabitKey without Clerk', () => {
   assert.match(index, /Revoke failed|Token revoked/);
   // Dashboard reads must prefer HabitKey.fetch (stored ht_ without Clerk).
   assert.match(index, /HabitKey\.fetch\(url,\s*opts\)/);
+  // Suggest + profile save: hasKey OR Clerk — never Clerk-only before HabitKey.
+  assert.match(index, /HabitKey\.fetch\('\/api\/suggest'/);
+  assert.match(index, /HabitKey\.postJson\('\/api\/profile'/);
+  const hasKeyBlocks = index.match(
+    /const hasKey = window\.HabitKey && typeof window\.HabitKey\.get === 'function' && window\.HabitKey\.get\(\);\s*\n\s*if \(!hasKey && window\.HabitAuth && !\(await window\.HabitAuth\.ensureSignedIn\(\)\)\) return;/g
+  );
+  assert.ok(hasKeyBlocks && hasKeyBlocks.length >= 2,
+    'suggest() and saveProfile must both skip ensureSignedIn when HabitKey.get() is set');
   const habitKey = readFileSync(join(root, 'public/habit-key.js'), 'utf8');
   assert.match(habitKey, /isSignedIn/);
 });

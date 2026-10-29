@@ -287,7 +287,17 @@ test('web pages load the helper and drop the old ?key= plumbing', () => {
   const h = read('public/habits.js');
   assert.match(h, /HabitKey\.postJson\('\/api\/roster'/);
   assert.match(h, /HabitKey\.postJson\('\/api\/habits'/);
+  assert.match(h, /const hasKey = window\.HabitKey && typeof window\.HabitKey\.get === 'function' && window\.HabitKey\.get\(\)/);
+  assert.match(h, /if \(!hasKey && window\.HabitAuth && !\(await window\.HabitAuth\.ensureSignedIn\(\)\)\) return/);
   const i = read('public/index.js');
   assert.match(i, /HabitKey\.fetch\('\/api\/suggest'/);
   assert.match(i, /HabitKey\.postJson\('\/api\/profile'/);
+  // Dashboard mirrors habits.js: stored ht_/HABIT_KEY skips the Clerk prompt.
+  const hasKeyGates = i.match(
+    /const hasKey = window\.HabitKey && typeof window\.HabitKey\.get === 'function' && window\.HabitKey\.get\(\);\s*\n\s*if \(!hasKey && window\.HabitAuth && !\(await window\.HabitAuth\.ensureSignedIn\(\)\)\) return;/g
+  );
+  assert.ok(hasKeyGates && hasKeyGates.length >= 2,
+    'suggest + saveProfile must use hasKey-or-Clerk (not Clerk-only)');
+  const d = read('public/deck.js');
+  assert.match(d, /j\.authRequired && j\.configured !== false/);
 });
