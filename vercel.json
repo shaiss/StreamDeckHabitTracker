@@ -2,6 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "outputDirectory": "public",
   "functions": {
+    "api/experiment.js": { "maxDuration": 60 },
     "api/suggest.js": { "maxDuration": 60 },
     "api/log.js": { "maxDuration": 60 },
     "api/slots.js": { "maxDuration": 60 },
