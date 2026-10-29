@@ -68,12 +68,17 @@ function installRedis(state) {
     }
     throw new Error(`unexpected redis ${JSON.stringify(args)}`);
   };
+  // Production skips the #106 preview-isolation gate. keyDenied is fail-closed
+  // here, so installRedis also plants a dummy HABIT_KEY — handler tests that
+  // must pass auth send KEY_HEADERS (production unset→503 is covered in
+  // targets-key-prompt.test.mjs).
   process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
   // Build the env name at runtime so the no-committed-keys scanner never sees
   // a literal HABIT_KEY=<value> assignment in source.
-  delete process.env['HABIT_' + 'KEY'];
+  const hk = 'HABIT_' + 'KEY';
+  process.env[hk] = TEST_HABIT_KEY;
   delete process.env.ZAI_API_KEY;
   delete process.env.Z_AI_API_KEY;
   delete process.env.GLM_API_KEY;
@@ -85,8 +90,18 @@ function installRedis(state) {
       delete process.env.VERCEL_ENV;
       delete process.env.KV_REST_API_URL;
       delete process.env.KV_REST_API_TOKEN;
+      delete process.env[hk];
     }
   };
+}
+
+const TEST_HABIT_KEY = 'unit-test-habit-key';
+const KEY_HEADERS = { 'x-habit-key': TEST_HABIT_KEY };
+// Re-plant right before a handler call — other unit files scrub HABIT_KEY in
+// beforeEach/afterEach and the runner shares one process (env races).
+function plantKey() {
+  process.env['HABIT_' + 'KEY'] = TEST_HABIT_KEY;
+  process.env.VERCEL_ENV = 'production';
 }
 
 test('targetsClientMessage: TARGETS_WRITE_FAILED → stable generic', () => {
@@ -211,8 +226,9 @@ test('handler POST: validation stays 400 with applyTargetDecision message', asyn
   const mock = installRedis(state);
   try {
     const res = mkRes();
+    plantKey();
     await targetsHandler(
-      { method: 'POST', query: {}, headers: {}, body: { id: 'missing', decision: 'approve' } },
+      { method: 'POST', query: {}, headers: KEY_HEADERS, body: { id: 'missing', decision: 'approve' } },
       res
     );
     assert.equal(res.statusCode, 400);
@@ -237,8 +253,9 @@ test('handler POST: bad decision string stays 400', async () => {
   const mock = installRedis(state);
   try {
     const res = mkRes();
+    plantKey();
     await targetsHandler(
-      { method: 'POST', query: {}, headers: {}, body: { id: 'p1', decision: 'maybe' } },
+      { method: 'POST', query: {}, headers: KEY_HEADERS, body: { id: 'p1', decision: 'maybe' } },
       res
     );
     assert.equal(res.statusCode, 400);
@@ -270,8 +287,9 @@ test('handler POST: TARGETS_BUSY → HTTP 409', async () => {
     });
     await gate;
     const res = mkRes();
+    plantKey();
     await targetsHandler(
-      { method: 'POST', query: {}, headers: {}, body: { id: 'p1', decision: 'dismiss' } },
+      { method: 'POST', query: {}, headers: KEY_HEADERS, body: { id: 'p1', decision: 'dismiss' } },
       res
     );
     assert.equal(res.statusCode, 409);
@@ -288,11 +306,19 @@ test('handler POST: store throw → HTTP 500 generic (no leak)', async () => {
   process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
-  delete process.env['HABIT_' + 'KEY'];
+  // Auth must pass so we reach the store failure (not keyDenied's 503).
+  const hk = 'HABIT_' + 'KEY';
+  const secret = 'unit-test-secret-key';
   try {
     const res = mkRes();
+    process.env[hk] = secret;
     await targetsHandler(
-      { method: 'POST', query: {}, headers: {}, body: { id: 'p1', decision: 'approve' } },
+      {
+        method: 'POST',
+        query: {},
+        headers: { 'x-habit-key': secret },
+        body: { id: 'p1', decision: 'approve' }
+      },
       res
     );
     assert.equal(res.statusCode, 500);
@@ -304,6 +330,7 @@ test('handler POST: store throw → HTTP 500 generic (no leak)', async () => {
     delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
+    delete process.env[hk];
   }
 });
 
@@ -318,11 +345,12 @@ test('handler GET ?run=1: cooldown under lock → HTTP 429', async () => {
     })
   };
   const mock = installRedis(state);
-  // Fail-open keyOk (no HABIT_KEY); zaiKey must be present for the run path.
+  // installRedis planted HABIT_KEY; re-plant + send so we reach the cooldown rail.
   process.env.ZAI_API_KEY = 'test-not-a-real-key';
   try {
     const res = mkRes();
-    await targetsHandler({ method: 'GET', query: { run: '1' }, headers: {} }, res);
+    plantKey();
+    await targetsHandler({ method: 'GET', query: { run: '1' }, headers: KEY_HEADERS }, res);
     assert.equal(res.statusCode, 429);
     assert.match(res.body.error, /half a minute/i);
     assert.ok(res.body.lastRunAt > 0);

@@ -153,22 +153,76 @@ import { esc } from '/escape.js';
       return `${a.label} is a fixed key now — re-import your deck profile to give it a physical key.`;
     }
 
+    // HABIT_KEY for every keyed write on this page (decide + Save) — in-memory
+    // only for this page load (issue 111). Never URL / query / cookie /
+    // localStorage / sessionStorage for the write path. Prompt on first keyed
+    // write; on 401 clear, re-prompt, and retry once. A 503 means the server is
+    // misconfigured (HABIT_KEY unset in production — issue 112) — show that
+    // message and do not re-prompt. (habit-key.js still loads for ?key= scrub;
+    // writes intentionally do not use HabitKey / sessionStorage.)
+    let pageHabitKey = null;
+
+    function promptHabitKey() {
+      const v = window.prompt('Enter HABIT_KEY to save habits or approve/decline coach proposals:');
+      return v == null ? null : v;
+    }
+
+    function keyedHeaders(key) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (key) headers['x-habit-key'] = key;
+      return headers;
+    }
+
+    async function keyedPostJson(url, payload) {
+      const postOnce = (key) => fetch(url, {
+        method: 'POST',
+        headers: keyedHeaders(key),
+        body: JSON.stringify(payload)
+      });
+      if (pageHabitKey === null) {
+        const entered = promptHabitKey();
+        // Cancel → try without a header (Preview has no HABIT_KEY).
+        pageHabitKey = entered == null ? '' : entered;
+      }
+      let res = await postOnce(pageHabitKey);
+      if (res.status === 503) return res;
+      if (res.status === 401) {
+        pageHabitKey = null;
+        const again = promptHabitKey();
+        if (again == null || again === '') return res;
+        pageHabitKey = again;
+        res = await postOnce(pageHabitKey);
+      }
+      if (res.status === 401) pageHabitKey = null;
+      return res;
+    }
+
     function decide(url, payload, kind) {
       document.querySelectorAll('.decide, .restore, .tdecide').forEach(b => { b.disabled = true; });
       statusEl.className = 'status'; statusEl.textContent = 'Working…';
-      // window.HabitKey.postJson sends x-habit-key (asks once on 401). Literal
-      // paths (not `postJson(url, …)`) so the habit-key unit scan can see them.
+      // Literal paths so the habit-key unit scan can see the gated endpoints.
       const post = url === '/api/targets'
-        ? window.HabitKey.postJson('/api/targets', payload)
-        : window.HabitKey.postJson('/api/roster', payload);
-      return post.then(r=>r.json()).then(j =>
+        ? keyedPostJson('/api/targets', payload)
+        : keyedPostJson('/api/roster', payload);
+      return post.then(async (res) => {
+        const j = await res.json().catch(() => ({ error: 'Failed.' }));
         // Re-read first, then report: the status line must never announce a
         // change the lists above it haven't caught up to yet.
-        load(true).then(() => {
-          if (!j.ok) { statusEl.className = 'status err'; statusEl.textContent = j.error || 'Failed.'; }
-          else { statusEl.textContent = decided(j.applied, kind); }
-        })
-      ).catch(e => load(true).then(() => {
+        return load(true).then(() => {
+          if (res.status === 503) {
+            statusEl.className = 'status err';
+            statusEl.textContent = j.error || 'Server misconfigured.';
+          } else if (res.status === 401) {
+            statusEl.className = 'status err';
+            statusEl.textContent = j.error || 'Unauthorized';
+          } else if (!j.ok) {
+            statusEl.className = 'status err';
+            statusEl.textContent = j.error || 'Failed.';
+          } else {
+            statusEl.textContent = decided(j.applied, kind);
+          }
+        });
+      }).catch(e => load(true).then(() => {
         statusEl.className = 'status err'; statusEl.textContent = 'Failed: ' + e.message;
       }));
     }
@@ -277,7 +331,18 @@ import { esc } from '/escape.js';
         seen.add(k);
       }
       statusEl.className = 'status'; statusEl.textContent = 'Saving…';
-      window.HabitKey.postJson('/api/habits', { habits }).then(r=>r.json()).then(j => {
+      keyedPostJson('/api/habits', { habits }).then(async (res) => {
+        const j = await res.json().catch(() => ({ error: 'Save failed.' }));
+        if (res.status === 503) {
+          statusEl.className = 'status err';
+          statusEl.textContent = j.error || 'Server misconfigured.';
+          return;
+        }
+        if (res.status === 401) {
+          statusEl.className = 'status err';
+          statusEl.textContent = j.error || 'Unauthorized';
+          return;
+        }
         if (j.ok) {
           statusEl.textContent = 'Saved — dashboard, coach, and virtual deck are updated.';
           load(); // re-render both sections so promoted habits leave the coach list

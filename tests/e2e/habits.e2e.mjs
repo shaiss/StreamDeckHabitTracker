@@ -27,6 +27,17 @@ const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript
 
 let server, browser, page, port;
 const posted = [];
+// When set, keyed POSTs (/api/targets, /api/habits, /api/roster) require matching x-habit-key (#111).
+let requiredTargetsKey = null;
+let requiredHabitsKey = null;
+let requiredRosterKey = null;
+// When true, keyed POSTs answer 503 (production HABIT_KEY unset — issue 112).
+let targetsMisconfigured = false;
+let habitsMisconfigured = false;
+let rosterMisconfigured = false;
+// Dialog policy for window.prompt HABIT_KEY asks (mutable per test).
+let dialogMode = 'dismiss'; // 'dismiss' | 'accept'
+let dialogAcceptValue = 'test-habit-key-111-dummy';
 
 let habits = [
   { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
@@ -70,10 +81,38 @@ before(async () => {
     const url = req.url.split('?')[0];
     if (url === '/api/habits' && req.method === 'POST') {
       readBody(req, (body) => {
+        if (habitsMisconfigured) {
+          return json(res, 503, { error: 'Server misconfigured: HABIT_KEY is not set.' });
+        }
+        if (requiredHabitsKey) {
+          const hdr = req.headers['x-habit-key'];
+          const got = Array.isArray(hdr) ? hdr[0] : hdr;
+          if (got !== requiredHabitsKey) {
+            return json(res, 401, { error: 'Unauthorized' });
+          }
+        }
         posted.push(body);
         habits = body.habits;
         json(res, 200, { ok: true, habits });
       });
+      return;
+    }
+    if (url === '/api/habits' && req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, x-habit-key',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+      });
+      res.end();
+      return;
+    }
+    if ((url === '/api/roster' || url === '/api/targets') && req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, x-habit-key',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+      });
+      res.end();
       return;
     }
     if (url === '/api/habits') {
@@ -83,6 +122,16 @@ before(async () => {
     }
     if (url === '/api/roster' && req.method === 'POST') {
       readBody(req, (body) => {
+        if (rosterMisconfigured) {
+          return json(res, 503, { error: 'Server misconfigured: HABIT_KEY is not set.' });
+        }
+        if (requiredRosterKey) {
+          const hdr = req.headers['x-habit-key'];
+          const got = Array.isArray(hdr) ? hdr[0] : hdr;
+          if (got !== requiredRosterKey) {
+            return json(res, 401, { error: 'Unauthorized' });
+          }
+        }
         const r = body.restore
           ? restoreFromArchive({ habits, roster, name: String(body.restore) })
           : applyDecision({ habits, roster, id: String(body.id || ''), decision: String(body.decision || '') });
@@ -99,6 +148,16 @@ before(async () => {
     }
     if (url === '/api/targets' && req.method === 'POST') {
       readBody(req, (body) => {
+        if (targetsMisconfigured) {
+          return json(res, 503, { error: 'Server misconfigured: HABIT_KEY is not set.' });
+        }
+        if (requiredTargetsKey) {
+          const hdr = req.headers['x-habit-key'];
+          const got = Array.isArray(hdr) ? hdr[0] : hdr;
+          if (got !== requiredTargetsKey) {
+            return json(res, 401, { error: 'Unauthorized' });
+          }
+        }
         const r = applyTargetDecision({
           habits,
           targets,
@@ -139,6 +198,11 @@ before(async () => {
     (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
   browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
   page = await browser.newPage();
+  // Default: dismiss HABIT_KEY prompts so unkeyed flows keep working (#111).
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
 });
 
 after(async () => { await browser?.close(); server?.close(); });
@@ -352,4 +416,279 @@ test('auto-down applies with reason and never touches the tap log shape (#70)', 
   assert.equal(after[0].goal.setBy, 'coach');
   assert.match(after[0].goal.reason, /well over/);
   assert.equal(after[1].goal, 1);
+});
+
+test('targets decide with correct x-habit-key succeeds when key required (#111)', async () => {
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredTargetsKey = DUMMY;
+  dialogMode = 'accept';
+  dialogAcceptValue = DUMMY;
+  if (!habits.some((h) => h.name === 'Exercise')) {
+    habits = [...habits, { name: 'Exercise', emoji: '🏃', label: 'Exercise', origin: 'human', goal: 1 }];
+  } else {
+    const idx = habits.findIndex((h) => h.name === 'Exercise');
+    habits[idx] = { ...habits[idx], goal: 1 };
+  }
+  const { queue } = sanitizeTargetChanges(
+    [{ name: 'Exercise', to: 2, reason: 'keyed raise for #111' }],
+    { habits, now: Date.now() }
+  );
+  targets = normalizeTargets({ proposals: queue });
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.tdecide[data-name="Exercise"][data-decision="approve"]');
+  await settled('Raised Exercise');
+  assert.equal(habits.find((h) => h.name === 'Exercise').goal.target, 2);
+  requiredTargetsKey = null;
+  dialogMode = 'dismiss';
+});
+
+test('targets decide without/wrong key gets Unauthorized (#111)', async () => {
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredTargetsKey = DUMMY;
+  // Dismiss first prompt (no key sent) → 401 → accept with wrong key → still 401.
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    if (prompts === 1) await d.dismiss();
+    else await d.accept('wrong-key-not-secret');
+  });
+  if (!habits.some((h) => h.name === 'Caffeine')) {
+    habits = [...habits, { name: 'Caffeine', emoji: '☕', label: 'Caffeine', origin: 'human', goal: 5 }];
+  }
+  const caf = habits.find((h) => h.name === 'Caffeine');
+  caf.goal = 5;
+  const beforeGoal = caf.goal;
+  const { queue } = sanitizeTargetChanges(
+    [{ name: 'Caffeine', to: 6, reason: 'auth failure path' }],
+    { habits, now: Date.now() }
+  );
+  targets = normalizeTargets({ proposals: queue });
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.tdecide[data-name="Caffeine"][data-decision="dismiss"]');
+  await settled('Unauthorized');
+  assert.equal(habits.find((h) => h.name === 'Caffeine').goal, beforeGoal);
+  // Approve + dismiss buttons both remain — the proposal was not applied.
+  assert.equal((await page.$$('.tdecide[data-name="Caffeine"]')).length, 2, 'proposal stays pending');
+  // Restore default dialog handler for any later tests.
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  requiredTargetsKey = null;
+  dialogMode = 'dismiss';
+  assert.equal(prompts, 2, '401 must re-prompt once');
+});
+
+test('targets decide 503 shows misconfig and does not re-prompt (issue 112)', async () => {
+  targetsMisconfigured = true;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    await d.accept('test-habit-key-111-dummy');
+  });
+  // Use Caffeine at a known low goal so sanitize queues a raise (Exercise may
+  // already be at 2 from the prior keyed-approve test).
+  if (!habits.some((h) => h.name === 'Caffeine')) {
+    habits = [...habits, { name: 'Caffeine', emoji: '☕', label: 'Caffeine', origin: 'human', goal: 5 }];
+  }
+  const caf = habits.find((h) => h.name === 'Caffeine');
+  caf.goal = 5;
+  const beforeGoal = caf.goal;
+  const { queue } = sanitizeTargetChanges(
+    [{ name: 'Caffeine', to: 6, reason: '503 misconfig path' }],
+    { habits, now: Date.now() }
+  );
+  assert.ok(queue.length, 'need a queued raise for the decide UI');
+  targets = normalizeTargets({ proposals: queue });
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.tdecide[data-name="Caffeine"][data-decision="approve"]');
+  await settled('Server misconfigured');
+  assert.equal(habits.find((h) => h.name === 'Caffeine').goal, beforeGoal, 'no write on 503');
+  assert.equal(prompts, 1, '503 must not clear/re-prompt');
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  targetsMisconfigured = false;
+  dialogMode = 'dismiss';
+});
+
+test('roster decide with correct x-habit-key succeeds when key required (#111)', async () => {
+  // Proves the roster write path sends the habit-key header. With
+  // requiredRosterKey set, omitting it would 401 and never settle on success.
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredRosterKey = DUMMY;
+  dialogMode = 'accept';
+  dialogAcceptValue = DUMMY;
+  const proposals = sanitizeProposals(
+    [{ kind: 'add', name: 'Hydrate', emoji: '💧', label: 'Hydrate', reason: 'keyed roster path' }],
+    { habits }
+  );
+  assert.ok(proposals.length, 'need a queued add for the decide UI');
+  roster = normalizeRoster({
+    proposals,
+    rejected: roster.rejected,
+    archive: roster.archive
+  });
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.decide[data-name="Hydrate"][data-decision="approve"]');
+  await settled('fixed key now');
+  assert.ok((await names()).includes('Hydrate'));
+  assert.equal((await page.$$('.decide[data-name="Hydrate"]')).length, 0);
+  requiredRosterKey = null;
+  dialogMode = 'dismiss';
+});
+
+test('roster decide without/wrong key gets Unauthorized (#111)', async () => {
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredRosterKey = DUMMY;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    if (prompts === 1) await d.dismiss();
+    else await d.accept('wrong-key-not-secret');
+  });
+  const proposals = sanitizeProposals(
+    [{ kind: 'add', name: 'Floss', emoji: '🦷', label: 'Floss', reason: 'roster auth failure' }],
+    { habits }
+  );
+  assert.ok(proposals.length, 'need a queued add for the decide UI');
+  roster = normalizeRoster({
+    proposals,
+    rejected: roster.rejected,
+    archive: roster.archive
+  });
+  const beforeNames = habits.map((h) => h.name).slice().sort();
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.decide[data-name="Floss"][data-decision="dismiss"]');
+  await settled('Unauthorized');
+  assert.deepEqual(habits.map((h) => h.name).slice().sort(), beforeNames, 'no write on 401');
+  assert.equal((await page.$$('.decide[data-name="Floss"]')).length, 2, 'proposal stays pending');
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  requiredRosterKey = null;
+  dialogMode = 'dismiss';
+  assert.equal(prompts, 2, '401 must re-prompt once');
+});
+
+test('roster decide 503 shows misconfig and does not re-prompt (issue 112)', async () => {
+  rosterMisconfigured = true;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    await d.accept('test-habit-key-111-dummy');
+  });
+  const proposals = sanitizeProposals(
+    [{ kind: 'add', name: 'Meditate', emoji: '🧘‍♂️', label: 'Meditate', reason: 'roster 503 path' }],
+    { habits }
+  );
+  assert.ok(proposals.length, 'need a queued add for the decide UI');
+  roster = normalizeRoster({
+    proposals,
+    rejected: roster.rejected,
+    archive: roster.archive
+  });
+  const beforeNames = habits.map((h) => h.name).slice().sort();
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.decide[data-name="Meditate"][data-decision="approve"]');
+  await settled('Server misconfigured');
+  assert.deepEqual(habits.map((h) => h.name).slice().sort(), beforeNames, 'no write on 503');
+  assert.equal(prompts, 1, '503 must not clear/re-prompt');
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  rosterMisconfigured = false;
+  dialogMode = 'dismiss';
+});
+
+test('Save sends x-habit-key and succeeds when key required (#111)', async () => {
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredHabitsKey = DUMMY;
+  dialogMode = 'accept';
+  dialogAcceptValue = DUMMY;
+  posted.length = 0;
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('#saveBtn');
+  await settled('Saved');
+  assert.ok(posted.length >= 1, 'Save must POST habits');
+  requiredHabitsKey = null;
+  dialogMode = 'dismiss';
+});
+
+test('Save 401 re-prompts once then retries with new key (#111)', async () => {
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredHabitsKey = DUMMY;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    if (prompts === 1) await d.accept('wrong-key-not-secret');
+    else await d.accept(DUMMY);
+  });
+  posted.length = 0;
+  const before = habits.length;
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('#saveBtn');
+  await settled('Saved');
+  assert.equal(prompts, 2, 'wrong key → 401 → re-prompt');
+  assert.ok(posted.length >= 1, 'retry Save must land');
+  assert.equal(habits.length, before);
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  requiredHabitsKey = null;
+  dialogMode = 'dismiss';
+});
+
+test('Save 503 shows misconfig and does not re-prompt (issue 112)', async () => {
+  habitsMisconfigured = true;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    await d.accept('test-habit-key-111-dummy');
+  });
+  posted.length = 0;
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('#saveBtn');
+  await settled('Server misconfigured');
+  assert.equal(posted.length, 0, 'no write on 503');
+  assert.equal(prompts, 1, '503 must not clear/re-prompt');
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  habitsMisconfigured = false;
+  dialogMode = 'dismiss';
+});
+
+test('OPTIONS /api/habits preflight returns 204 with CORS headers (no write)', async () => {
+  posted.length = 0;
+  const res = await fetch(`http://127.0.0.1:${port}/api/habits`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://example.test',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'content-type,x-habit-key'
+    }
+  });
+  assert.equal(res.status, 204);
+  assert.equal(res.headers.get('access-control-allow-origin'), '*');
+  assert.match(res.headers.get('access-control-allow-headers') || '', /x-habit-key/i);
+  assert.match(res.headers.get('access-control-allow-methods') || '', /POST/);
+  assert.equal(posted.length, 0);
 });

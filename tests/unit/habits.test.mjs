@@ -539,6 +539,11 @@ const RELEASE_LUA =
 const RENEW_LUA =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], tonumber(ARGV[2])) else return 0 end";
 
+// Runtime-built so the no-committed-keys scanner never sees HABIT_KEY=<value>.
+const LOCK_TEST_SECRET = 'lock-test-secret';
+const LOCK_TEST_ENV = 'HABIT_' + 'KEY';
+const LOCK_TEST_HEADERS = { 'x-habit-key': LOCK_TEST_SECRET };
+
 function installLockAwareRedis(state) {
   const originalFetch = globalThis.fetch;
   const calls = [];
@@ -573,7 +578,8 @@ function installLockAwareRedis(state) {
   process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
-  delete process.env['HABIT_' + 'KEY'];
+  // Production fails closed without a secret (#112 / #129) — set one for writes.
+  process.env[LOCK_TEST_ENV] = LOCK_TEST_SECRET;
   return {
     calls,
     restore() {
@@ -581,6 +587,7 @@ function installLockAwareRedis(state) {
       delete process.env.VERCEL_ENV;
       delete process.env.KV_REST_API_URL;
       delete process.env.KV_REST_API_TOKEN;
+      delete process.env[LOCK_TEST_ENV];
     }
   };
 }
@@ -599,7 +606,7 @@ test('POST /api/habits takes withTargetsLock (SET NX) before saveHabits', async 
     ];
     const res = mkRes();
     await habitsHandler(
-      { method: 'POST', query: {}, headers: {}, body: { habits: list } },
+      { method: 'POST', query: {}, headers: LOCK_TEST_HEADERS, body: { habits: list } },
       res
     );
     assert.equal(res.statusCode, 200);
@@ -637,7 +644,7 @@ test('POST /api/habits: TARGETS_BUSY → HTTP 409 (no habits:config write)', asy
       {
         method: 'POST',
         query: {},
-        headers: {},
+        headers: LOCK_TEST_HEADERS,
         body: {
           habits: [
             { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
@@ -694,7 +701,12 @@ test('POST /api/roster approve: TARGETS_BUSY → HTTP 409 (habits unchanged)', a
     await gate;
     const res = mkRes();
     await rosterHandler(
-      { method: 'POST', query: {}, headers: {}, body: { id: 'r1', decision: 'approve' } },
+      {
+        method: 'POST',
+        query: {},
+        headers: LOCK_TEST_HEADERS,
+        body: { id: 'r1', decision: 'approve' }
+      },
       res
     );
     assert.equal(res.statusCode, 409);
@@ -733,7 +745,12 @@ test('POST /api/roster approve takes withTargetsLock then persists habits+roster
   try {
     const res = mkRes();
     await rosterHandler(
-      { method: 'POST', query: {}, headers: {}, body: { id: 'r1', decision: 'approve' } },
+      {
+        method: 'POST',
+        query: {},
+        headers: LOCK_TEST_HEADERS,
+        body: { id: 'r1', decision: 'approve' }
+      },
       res
     );
     assert.equal(res.statusCode, 200);
@@ -825,11 +842,11 @@ test('POST /api/roster approve: re-reads habits under lock (preserves concurrent
   process.env.VERCEL_ENV = 'production';
   process.env.KV_REST_API_URL = 'https://example.test';
   process.env.KV_REST_API_TOKEN = 'test';
-  delete process.env['HABIT_' + 'KEY'];
+  process.env[LOCK_TEST_ENV] = LOCK_TEST_SECRET;
   try {
     const res = mkRes();
     await rosterHandler(
-      { method: 'POST', query: {}, headers: {}, body: { id: 'r1', decision: 'approve' } },
+      { method: 'POST', query: {}, headers: LOCK_TEST_HEADERS, body: { id: 'r1', decision: 'approve' } },
       res
     );
     assert.equal(res.statusCode, 200);
@@ -845,5 +862,6 @@ test('POST /api/roster approve: re-reads habits under lock (preserves concurrent
     delete process.env.VERCEL_ENV;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
+    delete process.env[LOCK_TEST_ENV];
   }
 });

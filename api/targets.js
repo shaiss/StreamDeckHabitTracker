@@ -4,8 +4,9 @@
 //
 // Adaptive daily targets (#70): the coach proposes/applies goal changes
 // (lib/coach.js targetPass, also run by the morning cron after roster). Downs
-// auto-apply; ups wait here for a human decision. HABIT_KEY (if set) gates
-// writes via x-habit-key, ?key=, or body.key (lib/habit-key.js).
+// auto-apply; ups wait here for a human decision. HABIT_KEY gates writes via
+// x-habit-key (preferred), ?key=, or body.key — see lib/habit-key.js (#112:
+// production fails closed when the secret is unset).
 import { isConfigured, getTargets, setTargets, setHabitsAndTargets, withTargetsLock } from '../lib/store.js';
 import { getHabitsStrict, prepareHabits, validateHabits } from '../lib/habits.js';
 import { zaiKey } from '../lib/ai.js';
@@ -18,7 +19,7 @@ import {
   targetsHttpError,
   TARGETS_WRITE_FAILED_MSG
 } from '../lib/target.js';
-import { keyOk } from '../lib/habit-key.js';
+import { keyDenied } from '../lib/habit-key.js';
 
 const view = (doc) => ({
   proposals: doc.proposals,
@@ -38,8 +39,14 @@ function wrapTargetsWriteError(op, err) {
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-habit-key');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
   try {
     if (!isConfigured()) {
       res.status(503).json({ error: 'Storage not connected.' });
@@ -53,10 +60,7 @@ export default async function handler(req, res) {
         res.status(200).json(view(current));
         return;
       }
-      if (!keyOk(req)) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+      if (keyDenied(req, res)) return;
       if (!zaiKey()) {
         res.status(503).json({ error: 'No AI key set — add ZAI_API_KEY in Vercel, then redeploy.' });
         return;
@@ -91,10 +95,7 @@ export default async function handler(req, res) {
     }
 
     const body = typeof req.body === 'object' && req.body ? req.body : {};
-    if (!keyOk(req, body)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+    if (keyDenied(req, res, body)) return;
     // Same lock as commitTargetPass — covers reads+writes of habits and targets
     // so a concurrent coach pass cannot SET a stale snapshot over this decision.
     let saved;

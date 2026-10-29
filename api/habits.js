@@ -2,17 +2,24 @@
 // POST /api/habits          -> replace the whole list (body: {habits: [...]})
 // The live habit list backing the API, coach, and virtual deck. Physical deck
 // keys are baked into imported profiles — regenerate them after edits.
-// HABIT_KEY (if set) gates writes via x-habit-key, ?key=, or body.key (lib/habit-key.js).
+// HABIT_KEY gates writes via x-habit-key / ?key= / body.key (lib/habit-key.js).
+// Production fails closed when the secret is unset (#112).
 import { isConfigured, getSlots, getSlotHistory, all, withTargetsLock } from '../lib/store.js';
 import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
 import { scoreSuggestions } from '../lib/scorer.js';
-import { keyOk } from '../lib/habit-key.js';
+import { keyDenied } from '../lib/habit-key.js';
 import { targetsHttpError } from '../lib/target.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-habit-key');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
   try {
     if (!isConfigured()) {
       res.status(503).json({ error: 'Storage not connected.' });
@@ -69,10 +76,7 @@ export default async function handler(req, res) {
       return;
     }
     const body = typeof req.body === 'object' && req.body ? req.body : {};
-    if (!keyOk(req, body)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+    if (keyDenied(req, res, body)) return;
     const err = validateHabits(body.habits);
     if (err) {
       res.status(400).json({ error: err });

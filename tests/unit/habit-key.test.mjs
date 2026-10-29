@@ -30,9 +30,11 @@ test('keyOk: wrong or missing key is refused when a secret is set', () => {
   assert.equal(keyOk({ headers: {}, query: {} }, undefined, S), false);
 });
 
-test('keyOk: unset secret stays fail-open (fail-closed is #112, not here)', () => {
-  assert.ok(keyOk({ headers: {}, query: {} }, null, ''));
-  assert.ok(keyOk({ headers: {}, query: {} }, null, undefined));
+test('keyOk: unset secret is fail-open outside production; fail-closed in production (#112)', () => {
+  assert.ok(keyOk({ headers: {}, query: {} }, null, '', 'preview'));
+  assert.ok(keyOk({ headers: {}, query: {} }, null, undefined, 'development'));
+  assert.equal(keyOk({ headers: {}, query: {} }, null, '', 'production'), false);
+  assert.equal(keyOk({ headers: {}, query: {} }, null, undefined, 'production'), false);
 });
 
 test('presentedKeys reads a WHATWG Headers object too', () => {
@@ -46,21 +48,34 @@ test('redactKey strips key material from loggable strings', () => {
   assert.ok(!redactKey('x-habit-key: ' + S).includes(S));
 });
 
-test('every gated route uses keyOk — no raw ?key= compares left', () => {
+test('every gated route uses keyOk or keyDenied — no raw ?key= compares left', () => {
   const files = [...readdirSync(join(ROOT, 'api')).filter((f) => f.endsWith('.js')).map((f) => 'api/' + f),
     'api/cron/morning.js'];
   const gated = ['log', 'habits', 'roster', 'targets', 'profile', 'suggest', 'nudge', 'question', 'slots', 'coachpage',
     'experiment', 'cron/morning'].map((n) => 'api/' + n + '.js');
+  // #116 fail-closed routes (habits/roster/targets) use keyDenied; others still keyOk.
+  const denied = new Set(['api/habits.js', 'api/roster.js', 'api/targets.js']);
   for (const f of files) {
     const src = read(f);
     assert.doesNotMatch(src, /\.key\s*[!=]==?\s*(secret|habitKey)/, f + ' still compares the key by hand');
   }
-  for (const f of gated) assert.match(read(f), /keyOk\(req/, f + ' must gate with keyOk');
+  for (const f of gated) {
+    const src = read(f);
+    if (denied.has(f)) assert.match(src, /keyDenied\(req/, f + ' must gate with keyDenied');
+    else assert.match(src, /keyOk\(req/, f + ' must gate with keyOk');
+  }
 });
 
 test('CORS preflight allows the x-habit-key header where OPTIONS is answered', () => {
-  for (const f of ['api/log.js', 'api/nudge.js', 'api/question.js', 'api/coachpage.js']) {
-    assert.match(read(f), /Access-Control-Allow-Headers', 'Content-Type, x-habit-key'/, f);
+  for (const f of [
+    'api/log.js', 'api/nudge.js', 'api/question.js', 'api/coachpage.js',
+    'api/habits.js', 'api/roster.js', 'api/targets.js'
+  ]) {
+    const src = read(f);
+    assert.match(src, /Access-Control-Allow-Headers', 'Content-Type, x-habit-key'/, f);
+    assert.match(src, /Access-Control-Allow-Methods'/, f);
+    assert.match(src, /req\.method === 'OPTIONS'/, f);
+    assert.match(src, /status\(204\)/, f);
   }
 });
 
@@ -257,9 +272,15 @@ test('web pages load the helper and drop the old ?key= plumbing', () => {
     assert.doesNotMatch(s, /localStorage/, f + ' must not use localStorage');
     assert.doesNotMatch(s, /withKey|'&key='|get\('key'\)/, f + ' still builds ?key= URLs');
   }
+  // #111 stopgap on the habit manager: page-load memory + keyedPostJson
+  // (not HabitKey/sessionStorage) for decide + Save. Other pages keep HabitKey.
   const h = read('public/habits.js');
-  assert.match(h, /HabitKey\.postJson\('\/api\/roster'/);
-  assert.match(h, /HabitKey\.postJson\('\/api\/habits'/);
+  assert.match(h, /pageHabitKey/);
+  assert.match(h, /keyedPostJson\('\/api\/roster'/);
+  assert.match(h, /keyedPostJson\('\/api\/habits'/);
+  assert.match(h, /keyedPostJson\('\/api\/targets'/);
+  assert.doesNotMatch(h, /sessionStorage\.(get|set|remove)Item|sessionStorage\[/);
+  assert.doesNotMatch(h, /HabitKey\.postJson/);
   const i = read('public/index.js');
   assert.match(i, /HabitKey\.fetch\('\/api\/suggest'/);
   assert.match(i, /HabitKey\.postJson\('\/api\/profile'/);
