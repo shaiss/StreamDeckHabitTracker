@@ -27,12 +27,14 @@ const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript
 
 let server, browser, page, port;
 const posted = [];
-// When set, keyed POSTs (/api/targets, /api/habits) require matching x-habit-key (#111).
+// When set, keyed POSTs (/api/targets, /api/habits, /api/roster) require matching x-habit-key (#111).
 let requiredTargetsKey = null;
 let requiredHabitsKey = null;
+let requiredRosterKey = null;
 // When true, keyed POSTs answer 503 (production HABIT_KEY unset — issue 112).
 let targetsMisconfigured = false;
 let habitsMisconfigured = false;
+let rosterMisconfigured = false;
 // Dialog policy for window.prompt HABIT_KEY asks (mutable per test).
 let dialogMode = 'dismiss'; // 'dismiss' | 'accept'
 let dialogAcceptValue = 'test-habit-key-111-dummy';
@@ -120,6 +122,16 @@ before(async () => {
     }
     if (url === '/api/roster' && req.method === 'POST') {
       readBody(req, (body) => {
+        if (rosterMisconfigured) {
+          return json(res, 503, { error: 'Server misconfigured: HABIT_KEY is not set.' });
+        }
+        if (requiredRosterKey) {
+          const hdr = req.headers['x-habit-key'];
+          const got = Array.isArray(hdr) ? hdr[0] : hdr;
+          if (got !== requiredRosterKey) {
+            return json(res, 401, { error: 'Unauthorized' });
+          }
+        }
         const r = body.restore
           ? restoreFromArchive({ habits, roster, name: String(body.restore) })
           : applyDecision({ habits, roster, id: String(body.id || ''), decision: String(body.decision || '') });
@@ -502,6 +514,101 @@ test('targets decide 503 shows misconfig and does not re-prompt (issue 112)', as
     else await d.dismiss();
   });
   targetsMisconfigured = false;
+  dialogMode = 'dismiss';
+});
+
+test('roster decide with correct x-habit-key succeeds when key required (#111)', async () => {
+  // Proves the roster write path sends the habit-key header. With
+  // requiredRosterKey set, omitting it would 401 and never settle on success.
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredRosterKey = DUMMY;
+  dialogMode = 'accept';
+  dialogAcceptValue = DUMMY;
+  const proposals = sanitizeProposals(
+    [{ kind: 'add', name: 'Hydrate', emoji: '💧', label: 'Hydrate', reason: 'keyed roster path' }],
+    { habits }
+  );
+  assert.ok(proposals.length, 'need a queued add for the decide UI');
+  roster = normalizeRoster({
+    proposals,
+    rejected: roster.rejected,
+    archive: roster.archive
+  });
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.decide[data-name="Hydrate"][data-decision="approve"]');
+  await settled('fixed key now');
+  assert.ok((await names()).includes('Hydrate'));
+  assert.equal((await page.$$('.decide[data-name="Hydrate"]')).length, 0);
+  requiredRosterKey = null;
+  dialogMode = 'dismiss';
+});
+
+test('roster decide without/wrong key gets Unauthorized (#111)', async () => {
+  const DUMMY = 'test-habit-key-111-dummy';
+  requiredRosterKey = DUMMY;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    if (prompts === 1) await d.dismiss();
+    else await d.accept('wrong-key-not-secret');
+  });
+  const proposals = sanitizeProposals(
+    [{ kind: 'add', name: 'Floss', emoji: '🦷', label: 'Floss', reason: 'roster auth failure' }],
+    { habits }
+  );
+  assert.ok(proposals.length, 'need a queued add for the decide UI');
+  roster = normalizeRoster({
+    proposals,
+    rejected: roster.rejected,
+    archive: roster.archive
+  });
+  const beforeNames = habits.map((h) => h.name).slice().sort();
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.decide[data-name="Floss"][data-decision="dismiss"]');
+  await settled('Unauthorized');
+  assert.deepEqual(habits.map((h) => h.name).slice().sort(), beforeNames, 'no write on 401');
+  assert.equal((await page.$$('.decide[data-name="Floss"]')).length, 2, 'proposal stays pending');
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  requiredRosterKey = null;
+  dialogMode = 'dismiss';
+  assert.ok(prompts >= 1, 'user must be prompted for the key');
+});
+
+test('roster decide 503 shows misconfig and does not re-prompt (issue 112)', async () => {
+  rosterMisconfigured = true;
+  let prompts = 0;
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    prompts += 1;
+    await d.accept('test-habit-key-111-dummy');
+  });
+  const proposals = sanitizeProposals(
+    [{ kind: 'add', name: 'Meditate', emoji: '🧘‍♂️', label: 'Meditate', reason: 'roster 503 path' }],
+    { habits }
+  );
+  assert.ok(proposals.length, 'need a queued add for the decide UI');
+  roster = normalizeRoster({
+    proposals,
+    rejected: roster.rejected,
+    archive: roster.archive
+  });
+  const beforeNames = habits.map((h) => h.name).slice().sort();
+  await page.goto(`http://127.0.0.1:${port}/habits.html`, { waitUntil: 'networkidle' });
+  await page.click('.decide[data-name="Meditate"][data-decision="approve"]');
+  await settled('Server misconfigured');
+  assert.deepEqual(habits.map((h) => h.name).slice().sort(), beforeNames, 'no write on 503');
+  assert.equal(prompts, 1, '503 must not clear/re-prompt');
+  page.removeAllListeners('dialog');
+  page.on('dialog', async (d) => {
+    if (dialogMode === 'accept') await d.accept(dialogAcceptValue);
+    else await d.dismiss();
+  });
+  rosterMisconfigured = false;
   dialogMode = 'dismiss';
 });
 
