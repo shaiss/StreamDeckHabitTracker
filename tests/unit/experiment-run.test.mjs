@@ -66,6 +66,32 @@ test('api/experiment.js per-run provider log uses fixed marker + safe metadata o
   );
   // Must not log err.message on the per-run path (provider body can be in message).
   assert.doesNotMatch(experimentSrc, /logExperimentError\('experiment run:'/);
+
+  // Isolate the helper so a parallel leak (err.message / String(err) / raw err)
+  // cannot coexist with the safe-metadata console.error and still pass.
+  const fnMatch = experimentSrc.match(
+    /function logProviderRunFailure\([^)]*\)\s*\{([\s\S]*?)\n\}/
+  );
+  assert.ok(fnMatch, 'logProviderRunFailure body must be extractable');
+  const body = fnMatch[1];
+  assert.doesNotMatch(body, /\berr\.message\b/);
+  assert.doesNotMatch(body, /String\(\s*err(?:\?\.message)?\s*\)/);
+  // console.error must not receive the raw err object (or err.message) as an arg.
+  assert.doesNotMatch(body, /console\.error\([^;]*\berr\b/);
+
+  // Call-site catch must not separately dump provider text either.
+  // Match the statement call (not the function signature).
+  const callMatch = experimentSrc.match(/^[ \t]*logProviderRunFailure\(model,\s*err\);/m);
+  assert.ok(callMatch, 'per-run call site present');
+  const callAt = callMatch.index;
+  const catchStart = experimentSrc.lastIndexOf('catch (err)', callAt);
+  const catchEnd = experimentSrc.indexOf('return {', callAt);
+  assert.ok(catchStart >= 0 && catchEnd > callAt, 'per-run catch block bounds');
+  const catchBlock = experimentSrc.slice(catchStart, catchEnd);
+  assert.doesNotMatch(catchBlock, /console\.error/);
+  assert.doesNotMatch(catchBlock, /logExperimentError/);
+  assert.doesNotMatch(catchBlock, /\berr\.message\b/);
+  assert.doesNotMatch(catchBlock, /String\(\s*err/);
 });
 
 test('chat forwards AbortSignal to the provider fetch', async () => {
