@@ -478,7 +478,7 @@ test('targets decide without/wrong key gets Unauthorized (#111)', async () => {
   });
   requiredTargetsKey = null;
   dialogMode = 'dismiss';
-  assert.ok(prompts >= 1, 'user must be prompted for the key');
+  assert.equal(prompts, 2, '401 must re-prompt once');
 });
 
 test('targets decide 503 shows misconfig and does not re-prompt (issue 112)', async () => {
@@ -576,7 +576,7 @@ test('roster decide without/wrong key gets Unauthorized (#111)', async () => {
   });
   requiredRosterKey = null;
   dialogMode = 'dismiss';
-  assert.ok(prompts >= 1, 'user must be prompted for the key');
+  assert.equal(prompts, 2, '401 must re-prompt once');
 });
 
 test('roster decide 503 shows misconfig and does not re-prompt (issue 112)', async () => {

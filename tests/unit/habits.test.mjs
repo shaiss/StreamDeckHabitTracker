@@ -612,10 +612,11 @@ test('POST /api/habits takes withTargetsLock (SET NX) before saveHabits', async 
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.ok, true);
     assert.equal(res.body.habits.length, 2);
-    const nx = mock.calls.find((c) => c[0] === 'SET' && c[1] === LOCK_KEY && c.includes('NX'));
-    assert.ok(nx, 'expected SET NX on habits:targets:lock');
-    const cfg = mock.calls.find((c) => c[0] === 'SET' && c[1] === HABITS_KEY && !c.includes('NX'));
-    assert.ok(cfg, 'expected SET habits:config under the lock');
+    const lockIdx = mock.calls.findIndex((c) => c[0] === 'SET' && c[1] === LOCK_KEY && c.includes('NX'));
+    assert.ok(lockIdx >= 0, 'expected SET NX on habits:targets:lock');
+    const cfgIdx = mock.calls.findIndex((c) => c[0] === 'SET' && c[1] === HABITS_KEY && !c.includes('NX'));
+    assert.ok(cfgIdx >= 0, 'expected SET habits:config under the lock');
+    assert.ok(lockIdx < cfgIdx, 'lock SET NX must precede habits:config write');
     assert.equal(state[LOCK_KEY], undefined, 'lock released');
     assert.deepEqual(JSON.parse(state[HABITS_KEY]).map((h) => h.name), ['Pee', 'Stretch']);
   } finally {
@@ -754,7 +755,14 @@ test('POST /api/roster approve takes withTargetsLock then persists habits+roster
     );
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.ok, true);
-    assert.ok(mock.calls.some((c) => c[0] === 'SET' && c[1] === LOCK_KEY && c.includes('NX')));
+    const lockIdx = mock.calls.findIndex((c) => c[0] === 'SET' && c[1] === LOCK_KEY && c.includes('NX'));
+    assert.ok(lockIdx >= 0, 'expected SET NX on habits:targets:lock');
+    const cfgIdx = mock.calls.findIndex((c) => c[0] === 'SET' && c[1] === HABITS_KEY && !c.includes('NX'));
+    const rosterIdx = mock.calls.findIndex((c) => c[0] === 'SET' && c[1] === ROSTER_KEY);
+    assert.ok(cfgIdx >= 0, 'expected SET habits:config');
+    assert.ok(rosterIdx >= 0, 'expected SET habits:roster');
+    assert.ok(lockIdx < cfgIdx, 'lock SET NX must precede habits:config write');
+    assert.ok(lockIdx < rosterIdx, 'lock SET NX must precede habits:roster write');
     assert.deepEqual(
       JSON.parse(state[HABITS_KEY]).map((h) => h.name),
       ['Pee', 'Eat', 'Stretch']
@@ -763,5 +771,97 @@ test('POST /api/roster approve takes withTargetsLock then persists habits+roster
     assert.equal(state[LOCK_KEY], undefined);
   } finally {
     mock.restore();
+  }
+});
+
+test('POST /api/roster approve: re-reads habits under lock (preserves concurrent goals)', async () => {
+  // Race the old code lost: decision built from a pre-lock habits snapshot, then
+  // a concurrent target pass landed goals, then saveHabits wrote the stale list
+  // and wiped those goals. Inject the goal when SET NX succeeds — after any
+  // pre-lock read would have happened, before the under-lock re-read.
+  const state = {
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+      { name: 'Eat', emoji: '🍽', label: 'Eat', origin: 'human' }
+    ]),
+    [ROSTER_KEY]: JSON.stringify({
+      proposals: [{
+        id: 'r1',
+        kind: 'add',
+        name: 'Stretch',
+        emoji: '🧘',
+        label: 'Stretch',
+        origin: 'coach',
+        reason: 'sit',
+        createdAt: 1
+      }],
+      archive: [],
+      rejected: [],
+      lastRunAt: 0,
+      model: ''
+    })
+  };
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    const op = args[0];
+    if (op === 'GET') {
+      return { ok: true, json: async () => ({ result: state[args[1]] ?? null }) };
+    }
+    if (op === 'SET') {
+      const key = args[1];
+      if (args.includes('NX')) {
+        if (state[key] != null) {
+          return { ok: true, json: async () => ({ result: null }) };
+        }
+        state[key] = args[2];
+        // Concurrent commitTargetPass just finished before we acquired: goals live.
+        const live = JSON.parse(state[HABITS_KEY]);
+        live[0] = { ...live[0], goal: 5 };
+        state[HABITS_KEY] = JSON.stringify(live);
+        return { ok: true, json: async () => ({ result: 'OK' }) };
+      }
+      state[key] = args[2];
+      return { ok: true, json: async () => ({ result: 'OK' }) };
+    }
+    if (op === 'EVAL') {
+      const lua = args[1];
+      if (lua === RELEASE_LUA) {
+        if (state[args[3]] === args[4]) delete state[args[3]];
+        return { ok: true, json: async () => ({ result: 1 }) };
+      }
+      if (lua === RENEW_LUA) {
+        return { ok: true, json: async () => ({ result: state[args[3]] === args[4] ? 1 : 0 }) };
+      }
+      throw new Error(`unexpected EVAL ${lua}`);
+    }
+    throw new Error(`unexpected redis ${JSON.stringify(args)}`);
+  };
+  process.env.VERCEL_ENV = 'production';
+  process.env.KV_REST_API_URL = 'https://example.test';
+  process.env.KV_REST_API_TOKEN = 'test';
+  process.env[LOCK_TEST_ENV] = LOCK_TEST_SECRET;
+  try {
+    const res = mkRes();
+    await rosterHandler(
+      { method: 'POST', query: {}, headers: LOCK_TEST_HEADERS, body: { id: 'r1', decision: 'approve' } },
+      res
+    );
+    assert.equal(res.statusCode, 200);
+    const saved = JSON.parse(state[HABITS_KEY]);
+    assert.deepEqual(saved.map((h) => h.name), ['Pee', 'Eat', 'Stretch']);
+    assert.equal(saved[0].goal, 5, 'live goal from concurrent pass must survive approve');
+    const lockIdx = calls.findIndex((c) => c[0] === 'SET' && c[1] === LOCK_KEY && c.includes('NX'));
+    const getIdx = calls.findIndex((c) => c[0] === 'GET' && c[1] === HABITS_KEY);
+    assert.ok(lockIdx >= 0 && getIdx >= 0);
+    assert.ok(lockIdx < getIdx, 'habits GET must happen after lock acquisition');
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+    delete process.env[LOCK_TEST_ENV];
   }
 });
