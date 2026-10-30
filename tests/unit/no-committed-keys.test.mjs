@@ -471,6 +471,52 @@ test('findKeyLinkHandoffs flags keyed URLs after long path prefixes (#138)', () 
   assert.deepEqual(findKeyLinkHandoffs('see ' + QK + 'SECRET in docs'), []);
 });
 
+test('findKeyLinkHandoffs flags markdown/autolink/attr/relative keyed URLs (#141)', () => {
+  // Cipher HOLD: opener-glued and relative prefixes were missed when the
+  // token had to start with `/` or `http(s)://` or end in `.html`.
+  const secret = 'FAKE_SECRET_VALUE_123';
+  const forms = [
+    '[x](https://example.test/api/log' + QK + secret + ')',
+    '<https://example.test/api/log' + QK + secret + '>',
+    '(https://example.test/api/log' + QK + secret + ')',
+    'href=https://example.test/api/log' + QK + secret,
+    'URL=https://example.test/api/log' + QK + secret,
+    'docs/api/log' + QK + secret,
+    './api/log' + QK + secret
+  ];
+  for (const s of forms) {
+    assert.ok(
+      findKeyLinkHandoffs(s).some((h) => h.rule === 'keyed url'),
+      'missed opener/relative handoff: ' + s
+    );
+  }
+});
+
+test('findKeyLinkHandoffs match snippets never echo secret values (#141)', () => {
+  // Cipher HOLD: USP-init matches used to slice into the object body (~15–21
+  // value chars), and keyed-url hits prepended 48 chars of left context.
+  const secret = 'FAKE_SECRET_VALUE_123';
+  const fixtures = [
+    'new URLSearchParams({ ' + K + ": '" + secret + "' })",
+    'new URLSearchParams({ ' + K + ': "' + secret + '" })',
+    'URLSearchParams({"' + K + '":"' + secret + '"})',
+    // Left context includes the secret as an unrelated literal.
+    "const prior = '" + secret + "'; see https://x/a" + QK + secret,
+    'docs/api/log' + QK + secret,
+    '[x](https://example.test/api/log' + QK + secret + ')'
+  ];
+  for (const s of fixtures) {
+    const hits = findKeyLinkHandoffs(s);
+    assert.ok(hits.length > 0, 'expected handoff hit for: ' + s);
+    for (const h of hits) {
+      assert.ok(
+        !String(h.match || '').includes(secret),
+        'secret echoed in match for ' + h.rule + ': ' + JSON.stringify(h.match)
+      );
+    }
+  }
+});
+
 test('findKeyLinkHandoffs flags #138 forms (entities, USP inits, aliases)', () => {
   const bad = [
     // HTML numeric entities for & (#138)
@@ -615,13 +661,18 @@ test('no docs or UI hand out URL-key links', () => {
 
 test('generate.mjs withKey q.set is allowlisted as #138 open decision', () => {
   // Do not change tools/generate.mjs here — Web Requests withKey still embeds
-  // ?key= via q.set('key', key). The allowlist keeps that intentional exception
-  // visible; header-vs-exception remains an open decision.
+  // ?key= via q.set('key', key). Exact-path allowlist is a stopgap (#138/#141);
+  // keep it narrow: exactly the two source lines that call q.set('key', …).
   assert.ok(KEY_LINK_ALLOWLIST.some((a) => a.file === 'tools/generate.mjs'));
   const src = readFileSync(join(ROOT, 'tools/generate.mjs'), 'utf8');
   const hits = findKeyLinkHandoffs(src);
-  assert.ok(hits.length > 0, 'expected generate.mjs q.set handoffs');
+  assert.equal(hits.length, 2, 'expected exactly 2 handoffs in generate.mjs, got ' +
+    JSON.stringify(hits));
+  const lines = hits.map((h) => h.line).sort((a, b) => a - b);
+  assert.deepEqual(lines, [133, 139],
+    'expected q.set handoffs on generate.mjs lines 133 and 139, got ' + JSON.stringify(hits));
   for (const h of hits) {
+    assert.equal(h.rule, 'searchParams.set key');
     assert.equal(isAllowedKeyLink('tools/generate.mjs', h), true,
       'unallowlisted handoff in generate.mjs: ' + JSON.stringify(h));
   }

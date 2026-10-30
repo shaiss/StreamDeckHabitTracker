@@ -216,28 +216,27 @@ function isKeyLinkDelim(c) {
     c === ')' || c === ']' || c === '>';
 }
 
+/** Leading markup/attr openers glued onto a URL token (markdown, autolink,
+ *  parenthesized, unquoted href=/URL=). Stripped before the prefix check so
+ *  `[x](https://…?key=)`, `<https://…?key=>`, `(https://…?key=)` still hit. */
+function isKeyLinkOpener(c) {
+  return c === '[' || c === ']' || c === '(' || c === '<' ||
+    c === '"' || c === "'" || c === '`' || c === '=';
+}
+
 /**
- * URL / absolute path / *.html prefix for a keyed query (shape only).
+ * URL / path / *.html prefix for a keyed query (shape only).
  * Index form so multi-needle scans never re-slice a growing `before` string.
+ * After stripping leading openers, any prefix that contains `/` counts
+ * (relative `docs/api/…`, `./api/…`, `href=https://…`, markdown wrappers).
  */
 function isKeyLinkPrefixRange(text, start, end) {
+  while (start < end && isKeyLinkOpener(text[start])) start++;
   if (end <= start) return false;
-  if (text[start] === '/') return true;
-  // https?:// — fixed-window head check (O(1)).
-  if (end - start >= 7) {
-    const a = text[start];
-    const b = text[start + 1];
-    const c = text[start + 2];
-    const d = text[start + 3];
-    if ((a === 'h' || a === 'H') && (b === 't' || b === 'T') &&
-        (c === 't' || c === 'T') && (d === 'p' || d === 'P')) {
-      let i = start + 4;
-      if (i < end && (text[i] === 's' || text[i] === 'S')) i++;
-      if (i + 2 < end && text[i] === ':' && text[i + 1] === '/' && text[i + 2] === '/') {
-        return true;
-      }
-    }
+  for (let i = start; i < end; i++) {
+    if (text[i] === '/') return true;
   }
+  // Bare `deck.html?key=` — no slash, but still a path-shaped handoff.
   if (end - start >= 5 && /^\.html$/i.test(text.slice(end - 5, end))) return true;
   return false;
 }
@@ -317,11 +316,12 @@ function findKeyedUrlHits(text) {
       if (text[lineAt] === '\n') line++;
       lineAt++;
     }
-    const snipFrom = Math.max(0, at - 48);
+    // Report the needle only — no left context (can echo unrelated literals
+    // into CI logs) and no value bytes after `key=`.
     hits.push({
       line,
       rule: 'keyed url',
-      match: text.slice(snipFrom, at + tok.length).slice(0, 96),
+      match: tok.slice(0, 96),
       index: at
     });
   }
@@ -416,8 +416,10 @@ function findUrlSearchParamsKeyInits(text) {
       const span = text.slice(open.braceAt, i + 1);
       keyProp.lastIndex = 0;
       if (!keyProp.test(span)) continue;
+      // Slice to the opening `{` only — never echo object-literal values
+      // (secret material) into CI logs.
       pushHit(hits, text, open.matchIndex, 'URLSearchParams key init',
-        text.slice(open.matchIndex, Math.min(text.length, open.matchIndex + i - open.braceAt + 1)));
+        text.slice(open.matchIndex, open.braceAt + 1));
     }
   }
   return hits;
