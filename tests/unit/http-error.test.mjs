@@ -143,6 +143,18 @@ test('redactLogDetail strips HABIT_KEY, bearer, and token material', () => {
   assert.ok(!bearerOut.includes('eyJhbGciOi'));
   assert.equal((bearerOut.match(/\[redacted\]/g) || []).length, 1);
 
+  // Quoted bearer + opaque chars (: ~) that base64-ish classes miss.
+  const quoted = 'Authorization: Bearer "abc~secret"';
+  const quotedOut = redactLogDetail(quoted);
+  assert.match(quotedOut, /Authorization:\s*Bearer\s*\[redacted\]/i);
+  assert.ok(!quotedOut.includes('abc~secret'));
+  assert.ok(!quotedOut.includes('"'));
+
+  const colon = 'proxy said Bearer abc:def then continued';
+  const colonOut = redactLogDetail(colon);
+  assert.match(colonOut, /Bearer \[redacted\]/);
+  assert.ok(!colonOut.includes('abc:def'));
+
   const lone = 'proxy said Bearer sk-live-abc123xyz then continued';
   assert.match(redactLogDetail(lone), /Bearer \[redacted\]/);
   assert.ok(!redactLogDetail(lone).includes('sk-live-abc123xyz'));
