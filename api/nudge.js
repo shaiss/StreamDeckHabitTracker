@@ -30,6 +30,7 @@ import { nudgeDue } from '../lib/nudge.js';
 import { SUPPRESS_MS } from '../lib/takeover.js';
 import { scoreNudges } from '../lib/scorer.js';
 import { keyOk } from '../lib/habit-key.js';
+import { sendServerError } from '../lib/http-error.js';
 
 const RUN_COOLDOWN_MS = 30_000;
 
@@ -163,6 +164,6 @@ export default async function handler(req, res) {
       track: scoreNudges(history, entries, dismissals, now)
     });
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    sendServerError(res, err, { label: 'nudge' });
   }
 }

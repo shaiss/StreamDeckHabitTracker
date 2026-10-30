@@ -7,6 +7,7 @@ import { isConfigured, getSlots, getSlotHistory, all } from '../lib/store.js';
 import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
 import { scoreSuggestions } from '../lib/scorer.js';
 import { keyOk } from '../lib/habit-key.js';
+import { sendServerError } from '../lib/http-error.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -80,6 +81,6 @@ export default async function handler(req, res) {
     const habits = await saveHabits(body.habits);
     res.status(200).json({ ok: true, habits });
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    sendServerError(res, err, { label: 'habits' });
   }
 }

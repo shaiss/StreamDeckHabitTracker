@@ -1,6 +1,7 @@
 // GET /api/data -> { configured, entries: [{h,t,note}, ...] }
 // Feeds the dashboard at /. No auth: it's read-only counts of your own habits.
 import { all, getInsight, isConfigured } from '../lib/store.js';
+import { sendServerError } from '../lib/http-error.js';
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
@@ -13,6 +14,6 @@ export default async function handler(req, res) {
     const [entries, insight] = await Promise.all([all(), getInsight().catch(() => null)]);
     res.status(200).json({ configured: true, entries, insight });
   } catch (err) {
-    res.status(500).json({ configured: true, error: err && err.message ? err.message : String(err), entries: [] });
+    sendServerError(res, err, { label: 'data', extra: { configured: true, entries: [] } });
   }
 }
