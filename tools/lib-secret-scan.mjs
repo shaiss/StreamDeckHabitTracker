@@ -191,10 +191,10 @@ export function valueNeedles(value) {
 // aliased `.searchParams` locals and template-literal names), plus
 // URLSearchParams inits (object / array-of-pairs / string / template).
 //
-// Long-line safety (#138): concat / USP-receiver runs are bounded so a
-// 30k+ no-whitespace token stays linear (the old keyed-url prefix was
-// ~1.2s quadratic). Keyed-url matching is needle-first + linear token
-// walk (prefix length is not capped — a 600+ char path still hits).
+// Long-line safety (#138 / #143): concat / USP-receiver runs are bounded so a
+// 30k+ no-whitespace token stays linear. Keyed-url matching is needle-first +
+// per-token bounds / first-`/` cache (prefix length is not capped — a 600+
+// char path still hits; re-walking the prefix per needle was still quadratic).
 
 // Max run of string interior without whitespace (#138).
 const MAX_STR_RUN = 512;
@@ -226,18 +226,16 @@ function isKeyLinkOpener(c) {
 
 /**
  * URL / path / *.html prefix for a keyed query (shape only).
- * Index form so multi-needle scans never re-slice a growing `before` string.
- * After stripping leading openers, any prefix that contains `/` counts
- * (relative `docs/api/…`, `./api/…`, `href=https://…`, markdown wrappers).
+ * `prefixStart` is tokenStart after stripping leading openers; `firstSlashAt`
+ * is the first `/` in that span (or -1). Slash presence is O(1); the `.html`
+ * check is a fixed 5-char slice at `end`. Do not re-walk the prefix per needle
+ * (#143 — ~30k needles in one token was ~O(n²) via the old loop).
  */
-function isKeyLinkPrefixRange(text, start, end) {
-  while (start < end && isKeyLinkOpener(text[start])) start++;
-  if (end <= start) return false;
-  for (let i = start; i < end; i++) {
-    if (text[i] === '/') return true;
-  }
+function isKeyLinkPrefixRange(text, prefixStart, end, firstSlashAt) {
+  if (end <= prefixStart) return false;
+  if (firstSlashAt >= prefixStart && firstSlashAt < end) return true;
   // Bare `deck.html?key=` — no slash, but still a path-shaped handoff.
-  if (end - start >= 5 && /^\.html$/i.test(text.slice(end - 5, end))) return true;
+  if (end - prefixStart >= 5 && /^\.html$/i.test(text.slice(end - 5, end))) return true;
   return false;
 }
 
@@ -256,8 +254,9 @@ function isQueryRun(text, start, end) {
  * Keyed-url hits via needle scan + per-token state (linear in text length).
  * Finds ?key= / &key= / &amp;key= / &#38;key= / &#x26;key= / %3Fkey%3D / %26key%3D
  * only when a URL/path/.html prefix abuts the query start (or the amp for
- * abutting &key= forms). Token bounds are computed once per token so many
- * needles in one no-whitespace run stay O(n) (#138 review).
+ * abutting &key= forms). Token bounds, opener-stripped prefix start, and the
+ * first `/` are computed once per token so many needles in one no-whitespace
+ * run stay O(n) (#138 / #143 — prefix re-walk was still quadratic per needle).
  */
 function findKeyedUrlHits(text) {
   const hits = [];
@@ -265,9 +264,11 @@ function findKeyedUrlHits(text) {
   const needle =
     /(?:\?|%3[Ff]|&(?:amp;)?|&#(?:x0*26|0*38);|%26)key(?:%3[Dd]|=)/gi;
   let m;
-  // Per-token cache: bounds + last ?/%3F before the current scan cursor.
+  // Per-token cache: bounds, opener-stripped prefix, first `/`, last ?/%3F.
   let tokenStart = -1;
   let tokenEnd = -1;
+  let prefixStart = -1;
+  let firstSlashAt = -1;
   let lastQAt = -1;
   let scannedTo = -1;
   let line = 1;
@@ -277,11 +278,17 @@ function findKeyedUrlHits(text) {
     const tok = m[0];
 
     if (at >= tokenEnd) {
-      // Enter a new token: walk bounds once (amortized O(n) over the file).
+      // Enter a new token: walk bounds + first `/` once (amortized O(n)).
       tokenStart = at;
       while (tokenStart > 0 && !isKeyLinkDelim(text[tokenStart - 1])) tokenStart--;
       tokenEnd = at;
       while (tokenEnd < text.length && !isKeyLinkDelim(text[tokenEnd])) tokenEnd++;
+      prefixStart = tokenStart;
+      while (prefixStart < tokenEnd && isKeyLinkOpener(text[prefixStart])) prefixStart++;
+      firstSlashAt = -1;
+      for (let i = prefixStart; i < tokenEnd; i++) {
+        if (text[i] === '/') { firstSlashAt = i; break; }
+      }
       lastQAt = -1;
       scannedTo = tokenStart;
     }
@@ -300,12 +307,12 @@ function findKeyedUrlHits(text) {
     let ok = false;
     if (/^(?:\?|%3[Ff])/i.test(tok)) {
       // path?key= — prefix must end exactly at `at`.
-      ok = isKeyLinkPrefixRange(text, tokenStart, at);
-    } else if (isKeyLinkPrefixRange(text, tokenStart, at)) {
+      ok = isKeyLinkPrefixRange(text, prefixStart, at, firstSlashAt);
+    } else if (isKeyLinkPrefixRange(text, prefixStart, at, firstSlashAt)) {
       // &key= / &amp;key= / &#38;key= / %26key= abutting the path.
       ok = true;
     } else if (lastQAt >= tokenStart &&
-               isKeyLinkPrefixRange(text, tokenStart, lastQAt) &&
+               isKeyLinkPrefixRange(text, prefixStart, lastQAt, firstSlashAt) &&
                isQueryRun(text, lastQAt, at)) {
       // path?foo=1&key= — query run after a valid prefix.
       ok = true;

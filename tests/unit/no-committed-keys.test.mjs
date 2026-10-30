@@ -405,7 +405,8 @@ test('findKeyLinkHandoffs stays fast on 30k+ no-whitespace lines (#138)', () => 
 
 test('findKeyLinkHandoffs stays linear on many ?key= needles in one token (#138)', () => {
   // Pre-fix: tokenBefore() re-walked from token start per needle (~4–8s at
-  // 10k). Per-token bounds keep this O(n).
+  // 10k). Per-token bounds keep this O(n). Slash-first so the old #143
+  // prefix re-walk returned on the first char — still a useful hit-count check.
   const n = 10000;
   const s = '/' + ('x?key='.repeat(n));
   const t0 = performance.now();
@@ -413,6 +414,21 @@ test('findKeyLinkHandoffs stays linear on many ?key= needles in one token (#138)
   const ms = performance.now() - t0;
   assert.equal(hits.filter((h) => h.rule === 'keyed url').length, n);
   assert.ok(ms < 200, 'multi-needle keyed-url scan too slow: ' + ms.toFixed(1) + 'ms');
+});
+
+test('findKeyLinkHandoffs stays linear on 30k ?key= needles without an early slash (#143)', () => {
+  // Cipher MED on #141: isKeyLinkPrefixRange re-walked [prefixStart, end) for
+  // every needle. With no `/` in the token each walk scans to the needle —
+  // ~30k needles was ~5–7s. Cache first `/` (and opener-stripped start) so
+  // each check is O(1); budget ≪100ms. No hits expected (bare a?key= is not
+  // a URL/path/.html handoff) — the point is the wall clock, not detection.
+  const n = 30000;
+  const s = ('a?key=').repeat(n);
+  const t0 = performance.now();
+  const hits = findKeyLinkHandoffs(s);
+  const ms = performance.now() - t0;
+  assert.deepEqual(hits, [], 'false positive on bare multi-needle token');
+  assert.ok(ms < 100, 'no-slash multi-needle scan too slow: ' + ms.toFixed(1) + 'ms');
 });
 
 test('findKeyLinkHandoffs stays linear on many unmatched URLSearchParams({ (#138)', () => {
