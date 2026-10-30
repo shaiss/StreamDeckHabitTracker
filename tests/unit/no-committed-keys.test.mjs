@@ -403,6 +403,26 @@ test('findKeyLinkHandoffs stays fast on 30k+ no-whitespace lines (#138)', () => 
   assert.ok(ms < 100, 'long-line scan too slow: ' + ms.toFixed(1) + 'ms');
 });
 
+test('findKeyLinkHandoffs flags keyed URLs after long path prefixes (#138)', () => {
+  // A 512-char prefix bound must not let https://x/ + 600 path chars + ?key=
+  // (or &key= after other query) scan clean — key= is matched independently
+  // of prefix length via a linear token walk.
+  const path = 'a'.repeat(600);
+  const bad = [
+    'https://x/' + path + QK + 'SECRET',
+    'https://x/' + path + '?foo=1' + AK + 'SECRET',
+    '/' + path + QK + 'SECRET',
+    '/api/' + path + AK + 'x',
+    'https://example.test/' + path + '%3F' + K + '%3D' + FAKE,
+    'page.html?' + path + AK + 'SECRET'
+  ];
+  for (const s of bad) {
+    assert.ok(findKeyLinkHandoffs(s).length > 0, 'missed long-prefix handoff: ' + s.slice(0, 40) + '…');
+  }
+  // Still allow bare ?key= with no URL/path/.html in front.
+  assert.deepEqual(findKeyLinkHandoffs('see ' + QK + 'SECRET in docs'), []);
+});
+
 test('findKeyLinkHandoffs flags #138 forms (entities, USP inits, aliases)', () => {
   const bad = [
     // HTML numeric entities for & (#138)
@@ -484,11 +504,30 @@ test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {
     'params.set(`habit`, secret)',
     "const sp = url.searchParams;\nsp.get('" + K + "')",
     // Template &key= must not span past a closing backtick into later prose
-    'const a = `?habit=Water`;\nconst b = x; // ' + AK + '${nope} outside template'
+    'const a = `?habit=Water`;\nconst b = x; // ' + AK + '${nope} outside template',
+    // USP object-init must not span into a later statement's `{ key }`
+    'new URLSearchParams({ habit: h }); const o = { ' + K + ', v: 1 };',
+    'new URLSearchParams({ slot: n }); const cfg = { "' + K + '": secret };'
   ];
   for (const s of ok) {
     assert.deepEqual(findKeyLinkHandoffs(s), [], 'false positive: ' + s);
   }
+  // Nested call before a later outer key property must still hit.
+  assert.ok(
+    findKeyLinkHandoffs('new URLSearchParams({ first: fn({ habit: h }), ' + K + ': v })').length > 0,
+    'missed outer key after nested call in USP init'
+  );
+});
+
+test('isAllowedKeyLink requires exact repo-relative path (#138)', () => {
+  const hit = { rule: 'searchParams.set key', match: "q.set('key', key)" };
+  assert.equal(isAllowedKeyLink('tools/generate.mjs', hit), true);
+  assert.equal(isAllowedKeyLink('./tools/generate.mjs', hit), true);
+  // Suffix match would wrongly allow a nested public copy under the
+  // public/**/*.mjs handoff scan — exact path only.
+  assert.equal(isAllowedKeyLink('public/tools/generate.mjs', hit), false);
+  assert.equal(isAllowedKeyLink('other/tools/generate.mjs', hit), false);
+  assert.equal(isAllowedKeyLink('tools/generate.mjs.bak', hit), false);
 });
 
 test('no docs or UI hand out URL-key links', () => {

@@ -191,32 +191,48 @@ export function valueNeedles(value) {
 // aliased `.searchParams` locals and template-literal names), plus
 // URLSearchParams inits (object / array-of-pairs / string / template).
 //
-// Long-line safety (#138): prefix / concat / USP-receiver runs are bounded
-// so a 30k+ no-whitespace token stays linear (the old keyed-url prefix was
-// ~1.2s quadratic). Keyed-url matching is needle-first + lookback.
+// Long-line safety (#138): concat / USP-receiver runs are bounded so a
+// 30k+ no-whitespace token stays linear (the old keyed-url prefix was
+// ~1.2s quadratic). Keyed-url matching is needle-first + linear token
+// walk (prefix length is not capped — a 600+ char path still hits).
 
-// Max run of path/host/query/string interior without whitespace (#138).
-const MAX_URL_RUN = 512;
+// Max run of string interior without whitespace (#138).
 const MAX_STR_RUN = 512;
 // `a.b.c.searchParams` — cap id length and chain depth (#138).
 const MAX_USP_ID = 64;
 const MAX_USP_DEPTH = 6;
 
-// Path / URL / *.html prefix that may precede a keyed query. Bounded.
-const KEY_LINK_PREFIX_RE = new RegExp(
-  `(?:https?:\\/\\/[^\\s"'\`)\\]>]{0,${MAX_URL_RUN}}|[A-Za-z0-9_./~-]{0,${MAX_URL_RUN}}\\.html|\\/(?:api\\/)?[A-Za-z0-9_./~-]{0,${MAX_URL_RUN}})$`
-);
 // Receivers that look like URLSearchParams (not Map / localStorage / …).
 const USP_WRITER_RECEIVER =
   String.raw`(?:q|params|searchParams|(?:[A-Za-z_$][\w$]{0,${MAX_USP_ID - 1}}\.){1,${MAX_USP_DEPTH}}searchParams)`;
 // Name argument: 'key' / "key" / `key`
 const KEY_NAME_LIT = String.raw`['"\`]key['"\`]`;
 
+/** URL / absolute path / *.html prefix for a keyed query (shape only). */
+function isKeyLinkPrefix(s) {
+  if (!s) return false;
+  if (/^https?:\/\//i.test(s)) return true;
+  if (s.startsWith('/')) return true;
+  if (/\.html$/i.test(s)) return true;
+  return false;
+}
+
 /**
- * Keyed-url hits via needle scan + bounded lookback (linear in text length).
+ * Contiguous non-delimiter token ending at `end` (linear walk, no length cap).
+ * Delimiters match the old KEY_LINK_PREFIX_RE stop set so bare `?key=` stays clean.
+ */
+function tokenBefore(text, end) {
+  let i = end;
+  while (i > 0 && !/[\s"'`)\]>]/.test(text[i - 1])) i--;
+  return text.slice(i, end);
+}
+
+/**
+ * Keyed-url hits via needle scan + linear token lookback (any prefix length).
  * Finds ?key= / &key= / &amp;key= / &#38;key= / &#x26;key= / %3Fkey%3D / %26key%3D
- * only when a KEY_LINK_PREFIX abuts the query start (or the amp for abutting
- * &key= forms).
+ * only when a URL/path/.html prefix abuts the query start (or the amp for
+ * abutting &key= forms). The key= needle is matched independently of how
+ * long the path/host run is (#138 review: 512-char bound let long URLs slip).
  */
 function findKeyedUrlHits(text) {
   const hits = [];
@@ -227,15 +243,13 @@ function findKeyedUrlHits(text) {
   while ((m = needle.exec(text))) {
     const at = m.index;
     const tok = m[0];
-    // How far back a prefix + optional "?…params" may reach.
-    const lookFrom = Math.max(0, at - MAX_URL_RUN * 2 - 16);
-    const before = text.slice(lookFrom, at);
+    const before = tokenBefore(text, at);
 
     let ok = false;
     if (/^(?:\?|%3[Ff])/i.test(tok)) {
       // path?key= — prefix must end exactly at `at`.
-      ok = KEY_LINK_PREFIX_RE.test(before);
-    } else if (KEY_LINK_PREFIX_RE.test(before)) {
+      ok = isKeyLinkPrefix(before);
+    } else if (isKeyLinkPrefix(before)) {
       // &key= / &amp;key= / &#38;key= / %26key= abutting the path.
       ok = true;
     } else {
@@ -249,19 +263,18 @@ function findKeyedUrlHits(text) {
           qAt = i - 2;
           break;
         }
-        if (/[\s"'`)\]>]/.test(c)) break;
       }
       if (qAt >= 0) {
         const pre = before.slice(0, qAt);
         const mid = before.slice(qAt);
-        if (KEY_LINK_PREFIX_RE.test(pre) &&
+        if (isKeyLinkPrefix(pre) &&
             /^(?:\?|%3[Ff])[^\s"'`)\]>]*$/i.test(mid)) {
           ok = true;
         }
       }
     }
     if (!ok) continue;
-    const snipFrom = Math.max(lookFrom, at - 48);
+    const snipFrom = Math.max(0, at - 48);
     hits.push({
       line: text.slice(0, at).split('\n').length,
       rule: 'keyed url',
@@ -297,13 +310,6 @@ const KEY_LINK_RULES = [
   // (allowlisted for that file — see KEY_LINK_ALLOWLIST).
   { name: 'searchParams.set key', re: new RegExp(String.raw`\b${USP_WRITER_RECEIVER}\s*\.\s*set\s*\(\s*${KEY_NAME_LIT}\s*,`, 'g') },
   { name: 'searchParams.append key', re: new RegExp(String.raw`\b${USP_WRITER_RECEIVER}\s*\.\s*append\s*\(\s*${KEY_NAME_LIT}\s*,`, 'g') },
-  // Object init: { key } / { key: v } / { "key": v } / { [`key`]: v },
-  // including nested-object `key:` (#138). Property-name only (after `{` or
-  // `,`), not values like `{ habit: key }`. Window capped to stay linear.
-  {
-    name: 'URLSearchParams key init',
-    re: /URLSearchParams\s*\(\s*\{[\s\S]{0,400}?(?<=[{,])\s*(?:(?:['"]key['"]|\bkey)|\[\s*[`'"]key[`'"]\s*\])\s*[,}:]/g
-  },
   // Array-of-pairs: URLSearchParams([['key', k]])
   {
     name: 'URLSearchParams pair init',
@@ -322,6 +328,50 @@ const KEY_LINK_RULES = [
 ];
 
 /**
+ * Depth-aware URLSearchParams({ … }) key-property scan (#138 review).
+ * Finds the matching closer for the initializer brace so a later statement's
+ * `{ key }` cannot false-positive, while nested calls / nested objects that
+ * still contain an outer `key` property still hit.
+ */
+function findUrlSearchParamsKeyInits(text) {
+  const hits = [];
+  const startRe = /URLSearchParams\s*\(\s*\{/g;
+  // Property-name only (after `{` or `,`), not values like `{ habit: key }`.
+  const keyProp =
+    /(?<=[{,])\s*(?:(?:['"]key['"]|\bkey)|\[\s*[`'"]key[`'"]\s*\])\s*[,}:]/g;
+  let m;
+  while ((m = startRe.exec(text))) {
+    const braceAt = m.index + m[0].length - 1; // index of the opener `{`
+    let depth = 0;
+    let inStr = null;
+    let escape = false;
+    let end = -1;
+    for (let i = braceAt; i < text.length; i++) {
+      const c = text[i];
+      if (inStr) {
+        if (escape) escape = false;
+        else if (c === '\\') escape = true;
+        else if (c === inStr) inStr = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+      if (c === '{') depth++;
+      else if (c === '}') {
+        depth--;
+        if (depth === 0) { end = i; break; }
+      }
+    }
+    if (end < 0) continue;
+    const span = text.slice(braceAt, end + 1);
+    keyProp.lastIndex = 0;
+    if (!keyProp.test(span)) continue;
+    pushHit(hits, text, m.index, 'URLSearchParams key init',
+      text.slice(m.index, Math.min(text.length, m.index + end - braceAt + 1)));
+  }
+  return hits;
+}
+
+/**
  * #138 open decision: tools/generate.mjs still embeds ?key= into Web Requests
  * Settings via `q.set('key', key)` when --key / withKey is set. Do not move
  * that to a header in this change — filter those hits when scanning that file.
@@ -333,10 +383,12 @@ export const KEY_LINK_ALLOWLIST = [
 
 /** True when a handoff hit is an intentional, documented exception (#138). */
 export function isAllowedKeyLink(file, hit) {
-  const norm = String(file || '').replace(/\\/g, '/');
+  // Exact repo-relative path only — not a suffix match (would also accept
+  // public/tools/generate.mjs under the public/**/*.mjs handoff scan).
+  const norm = String(file || '').replace(/\\/g, '/').replace(/^\.\//, '');
   return KEY_LINK_ALLOWLIST.some(
     (a) =>
-      (norm === a.file || norm.endsWith('/' + a.file)) &&
+      norm === a.file &&
       hit.rule === a.rule &&
       String(hit.match || '').startsWith(a.match)
   );
@@ -370,6 +422,7 @@ function pushHit(hits, text, index, rule, match) {
 export function findKeyLinkHandoffs(text) {
   const hits = [];
   for (const h of findKeyedUrlHits(text)) hits.push(h);
+  for (const h of findUrlSearchParamsKeyInits(text)) hits.push(h);
   for (const { name, re } of KEY_LINK_RULES) {
     re.lastIndex = 0;
     let m;
