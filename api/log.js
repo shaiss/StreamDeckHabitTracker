@@ -16,6 +16,7 @@ import { getHabits } from '../lib/habits.js';
 import { reactTo, answerQuestion } from '../lib/coach.js';
 import { tzHelpers } from '../lib/tz.js';
 import { keyOk } from '../lib/habit-key.js';
+import { sendServerError } from '../lib/http-error.js';
 
 // Only two levels, because only two are expressible on a key: a plain tap
 // means "normal" (no field at all) and a double-tap means "big". `low` exists
@@ -147,6 +148,6 @@ export default async function handler(req, res) {
       waitUntil(reactTo(entry).catch(() => {}));
     }
   } catch (err) {
-    res.status(500).send('Error: ' + (err && err.message ? err.message : err));
+    sendServerError(res, err, { label: 'log', text: true });
   }
 }

@@ -10,6 +10,7 @@ import { isConfigured, getCoachPage } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { coachPagePass, COACHPAGE_COOLDOWN_MS } from '../lib/coach.js';
 import { keyOk } from '../lib/habit-key.js';
+import { sendServerError } from '../lib/http-error.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -54,6 +55,6 @@ export default async function handler(req, res) {
     }
     res.status(200).json(doc);
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    sendServerError(res, err, { label: 'coachpage' });
   }
 }

@@ -5,6 +5,7 @@ import { getSlots, isConfigured } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { fullSuggest } from '../lib/coach.js';
 import { keyOk } from '../lib/habit-key.js';
+import { sendServerError } from '../lib/http-error.js';
 
 const COOLDOWN_MS = 30_000;
 
@@ -46,6 +47,6 @@ export default async function handler(req, res) {
     }
     res.status(200).json(doc);
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    sendServerError(res, err, { label: 'suggest' });
   }
 }

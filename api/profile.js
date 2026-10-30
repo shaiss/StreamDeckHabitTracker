@@ -8,6 +8,7 @@ import { getProfile, setProfile, isConfigured } from '../lib/store.js';
 import { isValidTz, HOME_TZ } from '../lib/tz.js';
 import { normalizeConsent } from '../lib/takeover.js';
 import { keyOk } from '../lib/habit-key.js';
+import { sendServerError } from '../lib/http-error.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -60,6 +61,6 @@ export default async function handler(req, res) {
       coachNav: normalizeConsent(next.coachNav)
     });
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    sendServerError(res, err, { label: 'profile' });
   }
 }
