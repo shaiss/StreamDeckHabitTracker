@@ -3,15 +3,12 @@
 import { isConfigured } from '../../lib/store.js';
 import { zaiKey } from '../../lib/ai.js';
 import { dailyDigest } from '../../lib/coach.js';
-import { authorized } from './morning.js';
+import { cronDenied } from './morning.js';
 
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   try {
-    if (!authorized(req)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+    if (cronDenied(req, res)) return;
     if (!zaiKey() || !isConfigured()) {
       res.status(503).json({ error: 'AI or storage not configured.' });
       return;
