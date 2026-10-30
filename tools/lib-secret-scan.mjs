@@ -208,31 +208,55 @@ const USP_WRITER_RECEIVER =
 // Name argument: 'key' / "key" / `key`
 const KEY_NAME_LIT = String.raw`['"\`]key['"\`]`;
 
-/** URL / absolute path / *.html prefix for a keyed query (shape only). */
-function isKeyLinkPrefix(s) {
-  if (!s) return false;
-  if (/^https?:\/\//i.test(s)) return true;
-  if (s.startsWith('/')) return true;
-  if (/\.html$/i.test(s)) return true;
+/** Token delimiter set (same stop chars as the old KEY_LINK_PREFIX_RE). */
+function isKeyLinkDelim(c) {
+  return c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '"' ||
+    c === "'" || c === '`' || c === ')' || c === ']' || c === '>';
+}
+
+/**
+ * URL / absolute path / *.html prefix for a keyed query (shape only).
+ * Index form so multi-needle scans never re-slice a growing `before` string.
+ */
+function isKeyLinkPrefixRange(text, start, end) {
+  if (end <= start) return false;
+  if (text[start] === '/') return true;
+  // https?:// — fixed-window head check (O(1)).
+  if (end - start >= 7) {
+    const a = text[start];
+    const b = text[start + 1];
+    const c = text[start + 2];
+    const d = text[start + 3];
+    if ((a === 'h' || a === 'H') && (b === 't' || b === 'T') &&
+        (c === 't' || c === 'T') && (d === 'p' || d === 'P')) {
+      let i = start + 4;
+      if (i < end && (text[i] === 's' || text[i] === 'S')) i++;
+      if (i + 2 < end && text[i] === ':' && text[i + 1] === '/' && text[i + 2] === '/') {
+        return true;
+      }
+    }
+  }
+  if (end - start >= 5 && /^\.html$/i.test(text.slice(end - 5, end))) return true;
+  return false;
+}
+
+/** True when [start, end) is a ?… or %3F… query run with no delimiters. */
+function isQueryRun(text, start, end) {
+  if (end <= start) return false;
+  if (text[start] === '?') return true;
+  if (end - start >= 3 && text[start] === '%' && text[start + 1] === '3' &&
+      (text[start + 2] === 'F' || text[start + 2] === 'f')) {
+    return true;
+  }
   return false;
 }
 
 /**
- * Contiguous non-delimiter token ending at `end` (linear walk, no length cap).
- * Delimiters match the old KEY_LINK_PREFIX_RE stop set so bare `?key=` stays clean.
- */
-function tokenBefore(text, end) {
-  let i = end;
-  while (i > 0 && !/[\s"'`)\]>]/.test(text[i - 1])) i--;
-  return text.slice(i, end);
-}
-
-/**
- * Keyed-url hits via needle scan + linear token lookback (any prefix length).
+ * Keyed-url hits via needle scan + per-token state (linear in text length).
  * Finds ?key= / &key= / &amp;key= / &#38;key= / &#x26;key= / %3Fkey%3D / %26key%3D
  * only when a URL/path/.html prefix abuts the query start (or the amp for
- * abutting &key= forms). The key= needle is matched independently of how
- * long the path/host run is (#138 review: 512-char bound let long URLs slip).
+ * abutting &key= forms). Token bounds are computed once per token so many
+ * needles in one no-whitespace run stay O(n) (#138 review).
  */
 function findKeyedUrlHits(text) {
   const hits = [];
@@ -240,43 +264,60 @@ function findKeyedUrlHits(text) {
   const needle =
     /(?:\?|%3[Ff]|&(?:amp;)?|&#(?:x0*26|0*38);|%26)key(?:%3[Dd]|=)/gi;
   let m;
+  // Per-token cache: bounds + last ?/%3F before the current scan cursor.
+  let tokenStart = -1;
+  let tokenEnd = -1;
+  let lastQAt = -1;
+  let scannedTo = -1;
+  let line = 1;
+  let lineAt = 0;
   while ((m = needle.exec(text))) {
     const at = m.index;
     const tok = m[0];
-    const before = tokenBefore(text, at);
+
+    if (at >= tokenEnd) {
+      // Enter a new token: walk bounds once (amortized O(n) over the file).
+      tokenStart = at;
+      while (tokenStart > 0 && !isKeyLinkDelim(text[tokenStart - 1])) tokenStart--;
+      tokenEnd = at;
+      while (tokenEnd < text.length && !isKeyLinkDelim(text[tokenEnd])) tokenEnd++;
+      lastQAt = -1;
+      scannedTo = tokenStart;
+    }
+
+    // Advance within the token, recording the rightmost ?/%3F before `at`.
+    while (scannedTo < at) {
+      const c = text[scannedTo];
+      if (c === '?') lastQAt = scannedTo;
+      else if (c === '%' && scannedTo + 2 < at && text[scannedTo + 1] === '3' &&
+               (text[scannedTo + 2] === 'F' || text[scannedTo + 2] === 'f')) {
+        lastQAt = scannedTo;
+      }
+      scannedTo++;
+    }
 
     let ok = false;
     if (/^(?:\?|%3[Ff])/i.test(tok)) {
       // path?key= — prefix must end exactly at `at`.
-      ok = isKeyLinkPrefix(before);
-    } else if (isKeyLinkPrefix(before)) {
+      ok = isKeyLinkPrefixRange(text, tokenStart, at);
+    } else if (isKeyLinkPrefixRange(text, tokenStart, at)) {
       // &key= / &amp;key= / &#38;key= / %26key= abutting the path.
       ok = true;
-    } else {
-      // path?foo=1&key= — last ?/%3F starts a query run; prefix before it.
-      let qAt = -1;
-      for (let i = before.length - 1; i >= 0; i--) {
-        const c = before[i];
-        if (c === '?') { qAt = i; break; }
-        if ((c === 'F' || c === 'f') && i >= 2 &&
-            before[i - 1] === '3' && before[i - 2] === '%') {
-          qAt = i - 2;
-          break;
-        }
-      }
-      if (qAt >= 0) {
-        const pre = before.slice(0, qAt);
-        const mid = before.slice(qAt);
-        if (isKeyLinkPrefix(pre) &&
-            /^(?:\?|%3[Ff])[^\s"'`)\]>]*$/i.test(mid)) {
-          ok = true;
-        }
-      }
+    } else if (lastQAt >= tokenStart &&
+               isKeyLinkPrefixRange(text, tokenStart, lastQAt) &&
+               isQueryRun(text, lastQAt, at)) {
+      // path?foo=1&key= — query run after a valid prefix.
+      ok = true;
     }
     if (!ok) continue;
+
+    while (lineAt < at) {
+      if (text[lineAt] === '\n') line++;
+      lineAt++;
+    }
     const snipFrom = Math.max(0, at - 48);
     hits.push({
-      line: text.slice(0, at).split('\n').length,
+      line,
       rule: 'keyed url',
       match: text.slice(snipFrom, at + tok.length).slice(0, 96),
       index: at
@@ -329,9 +370,10 @@ const KEY_LINK_RULES = [
 
 /**
  * Depth-aware URLSearchParams({ … }) key-property scan (#138 review).
- * Finds the matching closer for the initializer brace so a later statement's
- * `{ key }` cannot false-positive, while nested calls / nested objects that
- * still contain an outer `key` property still hit.
+ * Single forward pass with a brace stack so unmatched `URLSearchParams({`
+ * openers never rescan to EOF (repeated malformed inits stay linear), while
+ * nested calls / nested objects that contain a `key` property still hit and
+ * a later statement's `{ key }` cannot false-positive.
  */
 function findUrlSearchParamsKeyInits(text) {
   const hits = [];
@@ -339,34 +381,42 @@ function findUrlSearchParamsKeyInits(text) {
   // Property-name only (after `{` or `,`), not values like `{ habit: key }`.
   const keyProp =
     /(?<=[{,])\s*(?:(?:['"]key['"]|\bkey)|\[\s*[`'"]key[`'"]\s*\])\s*[,}:]/g;
+  // braceAt → match index for USP object-init openers.
+  const uspAt = new Map();
   let m;
   while ((m = startRe.exec(text))) {
-    const braceAt = m.index + m[0].length - 1; // index of the opener `{`
-    let depth = 0;
-    let inStr = null;
-    let escape = false;
-    let end = -1;
-    for (let i = braceAt; i < text.length; i++) {
-      const c = text[i];
-      if (inStr) {
-        if (escape) escape = false;
-        else if (c === '\\') escape = true;
-        else if (c === inStr) inStr = null;
-        continue;
-      }
-      if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
-      if (c === '{') depth++;
-      else if (c === '}') {
-        depth--;
-        if (depth === 0) { end = i; break; }
-      }
+    uspAt.set(m.index + m[0].length - 1, m.index);
+  }
+  if (uspAt.size === 0) return hits;
+
+  const stack = []; // { braceAt, matchIndex } — every `{`, USP ones carry matchIndex
+  let inStr = null;
+  let escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (escape) escape = false;
+      else if (c === '\\') escape = true;
+      else if (c === inStr) inStr = null;
+      continue;
     }
-    if (end < 0) continue;
-    const span = text.slice(braceAt, end + 1);
-    keyProp.lastIndex = 0;
-    if (!keyProp.test(span)) continue;
-    pushHit(hits, text, m.index, 'URLSearchParams key init',
-      text.slice(m.index, Math.min(text.length, m.index + end - braceAt + 1)));
+    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    if (c === '{') {
+      const matchIndex = uspAt.get(i);
+      stack.push({
+        braceAt: i,
+        matchIndex: matchIndex === undefined ? -1 : matchIndex
+      });
+    } else if (c === '}') {
+      if (stack.length === 0) continue;
+      const open = stack.pop();
+      if (open.matchIndex < 0) continue;
+      const span = text.slice(open.braceAt, i + 1);
+      keyProp.lastIndex = 0;
+      if (!keyProp.test(span)) continue;
+      pushHit(hits, text, open.matchIndex, 'URLSearchParams key init',
+        text.slice(open.matchIndex, Math.min(text.length, open.matchIndex + i - open.braceAt + 1)));
+    }
   }
   return hits;
 }

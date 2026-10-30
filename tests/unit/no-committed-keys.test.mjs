@@ -403,6 +403,35 @@ test('findKeyLinkHandoffs stays fast on 30k+ no-whitespace lines (#138)', () => 
   assert.ok(ms < 100, 'long-line scan too slow: ' + ms.toFixed(1) + 'ms');
 });
 
+test('findKeyLinkHandoffs stays linear on many ?key= needles in one token (#138)', () => {
+  // Pre-fix: tokenBefore() re-walked from token start per needle (~4–8s at
+  // 10k). Per-token bounds keep this O(n).
+  const n = 10000;
+  const s = '/' + ('x?key='.repeat(n));
+  const t0 = performance.now();
+  const hits = findKeyLinkHandoffs(s);
+  const ms = performance.now() - t0;
+  assert.equal(hits.filter((h) => h.rule === 'keyed url').length, n);
+  assert.ok(ms < 200, 'multi-needle keyed-url scan too slow: ' + ms.toFixed(1) + 'ms');
+});
+
+test('findKeyLinkHandoffs stays linear on many unmatched URLSearchParams({ (#138)', () => {
+  // Pre-fix: each unmatched opener rescanned to EOF (quadratic). One brace
+  // stack pass stays O(n); still detects a later valid nested init.
+  const n = 5000;
+  const junk = 'URLSearchParams({'.repeat(n);
+  const t0 = performance.now();
+  assert.deepEqual(findKeyLinkHandoffs(junk), [], 'false positive on unmatched USP opens');
+  const ms = performance.now() - t0;
+  assert.ok(ms < 200, 'unmatched USP init scan too slow: ' + ms.toFixed(1) + 'ms');
+  // Valid nested init after junk must still hit (stack does not give up).
+  const mixed = junk + 'URLSearchParams({ outer: { ' + K + ': v } })';
+  assert.ok(
+    findKeyLinkHandoffs(mixed).some((h) => h.rule === 'URLSearchParams key init'),
+    'missed nested USP key init after unmatched openers'
+  );
+});
+
 test('findKeyLinkHandoffs flags keyed URLs after long path prefixes (#138)', () => {
   // A 512-char prefix bound must not let https://x/ + 600 path chars + ?key=
   // (or &key= after other query) scan clean — key= is matched independently
