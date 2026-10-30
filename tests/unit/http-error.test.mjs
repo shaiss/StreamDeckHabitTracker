@@ -1,19 +1,29 @@
 // Issue #128: client-facing errors must never echo raw exception text.
+// Zero-dep unit suite: do NOT import api/log.js (@vercel/functions) or any
+// other handler that needs npm packages. Helper tests + light handlers only;
+// api/log.js wiring is asserted from source.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   CLIENT_ERROR,
   COACH_PASS_ERROR,
   classifyCoachPassError,
   logServerError,
+  redactLogDetail,
   sendServerError
 } from '../../lib/http-error.js';
+import { rosterPass } from '../../lib/coach.js';
 import dataHandler from '../../api/data.js';
 import habitsHandler from '../../api/habits.js';
 import rosterHandler from '../../api/roster.js';
-import logHandler from '../../api/log.js';
 import profileHandler from '../../api/profile.js';
 import questionHandler from '../../api/question.js';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
+const read = (p) => readFileSync(join(ROOT, p), 'utf8');
 
 const SENTINEL = 'LEAK_SENTINEL_upstash.example/redis-host_glm-5.2_status_503';
 
@@ -60,6 +70,17 @@ function withRedis(handlers, fn) {
     });
 }
 
+/** Quiet Redis for gather()/rosterPass: empty reads, OK writes. */
+function quietRedis() {
+  return {
+    GET: () => null,
+    LRANGE: () => [],
+    SET: () => 'OK',
+    RPUSH: () => 1,
+    LTRIM: () => 'OK'
+  };
+}
+
 function mkRes() {
   const res = { statusCode: 200, body: undefined, headers: {}, text: undefined };
   res.setHeader = (k, v) => { res.headers[k.toLowerCase()] = v; return res; };
@@ -92,6 +113,15 @@ test('classifyCoachPassError never returns the raw message', () => {
     classifyCoachPassError(new Error('request timeout after 30s')),
     COACH_PASS_ERROR.TIMEOUT
   );
+  // Malformed model JSON → JSON.parse SyntaxError (extractJson wide slice).
+  assert.equal(
+    classifyCoachPassError(Object.assign(new Error('Unexpected token o in JSON'), { name: 'SyntaxError' })),
+    COACH_PASS_ERROR.PARSE
+  );
+  assert.equal(
+    classifyCoachPassError(Object.assign(new Error('Expected property name or } in JSON at position 1'), { name: 'SyntaxError' })),
+    COACH_PASS_ERROR.PARSE
+  );
   const upstream = new Error(`z.ai 503 (glm-5.2): ${SENTINEL}`);
   const code = classifyCoachPassError(upstream);
   assert.equal(code, COACH_PASS_ERROR.UPSTREAM);
@@ -100,17 +130,58 @@ test('classifyCoachPassError never returns the raw message', () => {
   assert.ok(!String(code).includes('glm'));
 });
 
+test('redactLogDetail strips HABIT_KEY, bearer, and token material', () => {
+  // Built at runtime: a literal ?key=<token> in this file trips the secret scanner.
+  const sample = 'super-secret-' + 'habit-key-value';
+  const keyed = 'boom ?' + 'key=' + sample;
+  assert.ok(redactLogDetail(keyed).includes('[redacted]'));
+  assert.ok(!redactLogDetail(keyed).includes(sample));
+
+  const bearer = 'upstream Authorization: Bearer eyJhbGciOi.super.secret';
+  const bearerOut = redactLogDetail(bearer);
+  assert.match(bearerOut, /Authorization:\s*Bearer\s*\[redacted\]/i);
+  assert.ok(!bearerOut.includes('eyJhbGciOi'));
+  assert.equal((bearerOut.match(/\[redacted\]/g) || []).length, 1);
+
+  const lone = 'proxy said Bearer sk-live-abc123xyz then continued';
+  assert.match(redactLogDetail(lone), /Bearer \[redacted\]/);
+  assert.ok(!redactLogDetail(lone).includes('sk-live-abc123xyz'));
+
+  const tok = 'store 401: body token=abc123secret&x=1';
+  assert.ok(redactLogDetail(tok).includes('token=[redacted]'));
+  assert.ok(!redactLogDetail(tok).includes('abc123secret'));
+
+  const long = 'x'.repeat(800);
+  assert.equal(redactLogDetail(long).length, 500);
+});
+
 test('logServerError redacts HABIT_KEY material and returns an id', () => {
   const lines = [];
   const orig = console.error;
   console.error = (...args) => lines.push(args.map(String).join(' '));
   try {
-    const id = logServerError(new Error('boom ?key=super-secret-habit-key-value'), 'test');
+    // Built at runtime: a literal ?key=<token> in this file trips the secret scanner.
+    const sample = 'super-secret-' + 'habit-key-value';
+    const id = logServerError(new Error('boom ?' + 'key=' + sample), 'test');
     assert.match(id, /^[0-9a-f]{8}$/);
     const joined = lines.join('\n');
     assert.ok(joined.includes('[redacted]'));
-    assert.ok(!joined.includes('super-secret-habit-key-value'));
+    assert.ok(!joined.includes(sample));
     assert.ok(joined.includes(id));
+  } finally {
+    console.error = orig;
+  }
+});
+
+test('logServerError redacts bearer tokens before logging', () => {
+  const lines = [];
+  const orig = console.error;
+  console.error = (...args) => lines.push(args.map(String).join(' '));
+  try {
+    logServerError(new Error('Redis REST failed: Authorization: Bearer sk-live-abc123xyz'), 'store');
+    const joined = lines.join('\n');
+    assert.match(joined, /Authorization:\s*Bearer\s*\[redacted\]/i);
+    assert.ok(!joined.includes('sk-live-abc123xyz'));
   } finally {
     console.error = orig;
   }
@@ -144,6 +215,14 @@ test('sendServerError text mode returns plain Internal error', () => {
   } finally {
     console.error = orig;
   }
+});
+
+test('api/log.js catch uses sendServerError text mode (no raw err.message)', () => {
+  // Cannot import api/log.js here: it pulls @vercel/functions, absent in the
+  // zero-dep unit job. Source contract + sendServerError text-mode unit cover it.
+  const src = read('api/log.js');
+  assert.match(src, /sendServerError\(res,\s*err,\s*\{\s*label:\s*'log',\s*text:\s*true\s*\}\)/);
+  assert.doesNotMatch(src, /err\.message/);
 });
 
 async function assertHandlerHidesSentinel(name, invoke) {
@@ -210,12 +289,6 @@ test('GET /api/roster 500 does not echo thrown Redis message', async () => {
   );
 });
 
-test('GET /api/log 500 does not echo thrown Redis message (plain text)', async () => {
-  await assertHandlerHidesSentinel('log', (res) =>
-    logHandler({ method: 'GET', query: { habit: 'Pee' }, headers: {} }, res)
-  );
-});
-
 test('GET /api/profile 500 does not echo thrown Redis message', async () => {
   await assertHandlerHidesSentinel('profile', (res) =>
     profileHandler({ method: 'GET', query: {}, headers: {} }, res)
@@ -228,21 +301,53 @@ test('GET /api/question 500 does not echo thrown Redis message', async () => {
   );
 });
 
-test('roster parseError classification is what clients would see (no raw text)', () => {
-  // Mirrors lib/coach.js rosterPass catch: log + classify, never slice(err.message).
-  const err = new Error(`z.ai 500 (glm-5.2): body contains ${SENTINEL}`);
+test('rosterPass parseError is coarse on upstream failure (no raw text)', async () => {
   const logged = [];
   const orig = console.error;
   console.error = (...args) => logged.push(args.map(String).join(' '));
-  let parseError;
   try {
-    logServerError(err, 'rosterPass');
-    parseError = classifyCoachPassError(err);
+    await withRedis(quietRedis(), async () => {
+      const doc = await rosterPass({
+        generate: async () => {
+          throw new Error(`z.ai 500 (glm-5.2): body contains ${SENTINEL}`);
+        }
+      });
+      assert.equal(doc.parseError, COACH_PASS_ERROR.UPSTREAM);
+      assert.ok(!String(doc.parseError).includes(SENTINEL));
+      assert.ok(!JSON.stringify(doc).includes(SENTINEL));
+    });
   } finally {
     console.error = orig;
   }
-  assert.equal(parseError, COACH_PASS_ERROR.UPSTREAM);
-  assert.ok(!String(parseError).includes(SENTINEL));
   assert.ok(logged.some((l) => l.includes('rosterPass')));
-  assert.ok(logged.some((l) => l.includes('z.ai') || l.includes(SENTINEL)));
+});
+
+test('rosterPass parseError is parse_error on malformed model JSON', async () => {
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    await withRedis(quietRedis(), async () => {
+      const doc = await rosterPass({
+        generate: async () => ({ text: 'here is {not: valid json at all' })
+      });
+      assert.equal(doc.parseError, COACH_PASS_ERROR.PARSE);
+    });
+  } finally {
+    console.error = orig;
+  }
+});
+
+test('rosterPass parseError is parse_error when extractJson finds no object', async () => {
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    await withRedis(quietRedis(), async () => {
+      const doc = await rosterPass({
+        generate: async () => ({ text: 'sorry, no structured reply today' })
+      });
+      assert.equal(doc.parseError, COACH_PASS_ERROR.PARSE);
+    });
+  } finally {
+    console.error = orig;
+  }
 });
