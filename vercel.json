@@ -26,7 +26,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+          "value": "default-src 'self'; script-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; img-src 'self' data: https://*.clerk.accounts.dev https://*.clerk.com; frame-src https://*.clerk.accounts.dev https://*.clerk.com; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         },
         { "key": "Referrer-Policy", "value": "no-referrer" }
       ]
@@ -36,7 +36,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+          "value": "default-src 'self'; script-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; img-src 'self' data: https://*.clerk.accounts.dev https://*.clerk.com; frame-src https://*.clerk.accounts.dev https://*.clerk.com; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         },
         { "key": "Referrer-Policy", "value": "no-referrer" }
       ]
@@ -46,7 +46,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+          "value": "default-src 'self'; script-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; img-src 'self' data: https://*.clerk.accounts.dev https://*.clerk.com; frame-src https://*.clerk.accounts.dev https://*.clerk.com; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         },
         { "key": "Referrer-Policy", "value": "no-referrer" }
       ]
@@ -56,7 +56,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+          "value": "default-src 'self'; script-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; img-src 'self' data: https://*.clerk.accounts.dev https://*.clerk.com; frame-src https://*.clerk.accounts.dev https://*.clerk.com; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         },
         { "key": "Referrer-Policy", "value": "no-referrer" }
       ]
@@ -66,7 +66,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+          "value": "default-src 'self'; script-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; img-src 'self' data: https://*.clerk.accounts.dev https://*.clerk.com; frame-src https://*.clerk.accounts.dev https://*.clerk.com; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         },
         { "key": "Referrer-Policy", "value": "no-referrer" }
       ]
@@ -76,7 +76,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+          "value": "default-src 'self'; script-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; img-src 'self' data: https://*.clerk.accounts.dev https://*.clerk.com; frame-src https://*.clerk.accounts.dev https://*.clerk.com; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         },
         { "key": "Referrer-Policy", "value": "no-referrer" }
       ]

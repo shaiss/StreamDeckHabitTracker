@@ -10,12 +10,11 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const PUBLIC = join(ROOT, 'public');
 const vercel = JSON.parse(readFileSync(join(ROOT, 'vercel.json'), 'utf8'));
 
-// style-src 'unsafe-inline' is the only relaxation past the #114 starting
-// point. Page <style> blocks, runtime style="" (chart geometry, per-habit
-// hue, streak ring), nav.js's injected <style>, and the key-language
-// specimens all set styles in the document. script-src stays 'self' only —
-// that is what keeps a style injection from reading sessionStorage.
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+// style-src 'unsafe-inline' covers page <style> / runtime style="".
+// Clerk CDN hosts are required for auth.js (script + connect + frame + img);
+// everything else stays locked down. 'self' remains on script-src so a style
+// injection still cannot load arbitrary JS from the page origin alone.
+const CSP = "default-src 'self'; script-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; img-src 'self' data: https://*.clerk.accounts.dev https://*.clerk.com; frame-src https://*.clerk.accounts.dev https://*.clerk.com; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 
 // A trailing \b after a quoted "module" never matches: both the quote and
 // the following character are non-word. The boundary has to sit on `module`.
