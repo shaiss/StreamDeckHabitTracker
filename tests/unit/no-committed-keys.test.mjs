@@ -8,7 +8,10 @@ import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, sy
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readIfPresent, scanText, scanFile, valueNeedles, findKeyLinkHandoffs, unzipEntries } from '../../tools/lib-secret-scan.mjs';
+import {
+  readIfPresent, scanText, scanFile, valueNeedles, findKeyLinkHandoffs,
+  unzipEntries, KEY_LINK_ALLOWLIST, isAllowedKeyLink
+} from '../../tools/lib-secret-scan.mjs';
 import { keyedOutputAllowed, writeKeyedOutput } from '../../tools/lib-keyed-output.mjs';
 import { zip } from '../../tools/lib-zip.mjs';
 
@@ -380,6 +383,175 @@ test('URLSearchParams key init is not ReDoS on long comma lists', () => {
   assert.ok(ms < 50, 'ReDoS: ' + ms.toFixed(1) + 'ms for 40 commas');
 });
 
+test('findKeyLinkHandoffs stays fast on 30k+ no-whitespace lines (#138)', () => {
+  // Pre-#138 keyed-url prefix was ~1.2s quadratic at 30k; budget is ≪100ms.
+  const long = 'a'.repeat(30000);
+  const fixtures = [
+    long,
+    '/' + long,
+    long + '.html',
+    "'" + long + "'",
+    '`' + long,
+    'a.'.repeat(8000) + 'x',
+    '/api/log?' + 'x'.repeat(30000)
+  ];
+  const t0 = performance.now();
+  for (const s of fixtures) {
+    assert.deepEqual(findKeyLinkHandoffs(s), [], 'false positive on long token');
+  }
+  const ms = performance.now() - t0;
+  assert.ok(ms < 100, 'long-line scan too slow: ' + ms.toFixed(1) + 'ms');
+});
+
+test('findKeyLinkHandoffs stays linear on many ?key= needles in one token (#138)', () => {
+  // Pre-fix: tokenBefore() re-walked from token start per needle (~4–8s at
+  // 10k). Per-token bounds keep this O(n).
+  const n = 10000;
+  const s = '/' + ('x?key='.repeat(n));
+  const t0 = performance.now();
+  const hits = findKeyLinkHandoffs(s);
+  const ms = performance.now() - t0;
+  assert.equal(hits.filter((h) => h.rule === 'keyed url').length, n);
+  assert.ok(ms < 200, 'multi-needle keyed-url scan too slow: ' + ms.toFixed(1) + 'ms');
+});
+
+test('findKeyLinkHandoffs stays linear on many unmatched URLSearchParams({ (#138)', () => {
+  // Pre-fix: each unmatched opener rescanned to EOF (quadratic). One brace
+  // stack pass stays O(n); still detects a later valid nested init.
+  const n = 5000;
+  const junk = 'URLSearchParams({'.repeat(n);
+  const t0 = performance.now();
+  assert.deepEqual(findKeyLinkHandoffs(junk), [], 'false positive on unmatched USP opens');
+  const ms = performance.now() - t0;
+  assert.ok(ms < 200, 'unmatched USP init scan too slow: ' + ms.toFixed(1) + 'ms');
+  // Valid nested init after junk must still hit (stack does not give up).
+  const mixed = junk + 'URLSearchParams({ outer: { ' + K + ': v } })';
+  assert.ok(
+    findKeyLinkHandoffs(mixed).some((h) => h.rule === 'URLSearchParams key init'),
+    'missed nested USP key init after unmatched openers'
+  );
+});
+
+test('findKeyLinkHandoffs flags keyed URLs after JS whitespace delimiters (#138)', () => {
+  // isKeyLinkDelim must treat all /\s/ as token stops — not only ASCII
+  // space/tab/CR/LF — or NBSP/form-feed/etc. glue prose into the URL token
+  // and the handoff is missed (Entelligence MAJOR/SECURITY on #141).
+  const bad = [
+    'see\u00a0https://x/a' + QK + 'SECRET', // NBSP
+    'see\fhttps://x/a' + QK + 'SECRET',     // form feed
+    'see\vhttps://x/a' + QK + 'SECRET',     // vertical tab
+    'see\u2028https://x/a' + QK + 'SECRET', // line separator
+    'see\u2029https://x/a' + QK + 'SECRET'  // paragraph separator
+  ];
+  for (const s of bad) {
+    assert.ok(
+      findKeyLinkHandoffs(s).some((h) => h.rule === 'keyed url'),
+      'missed whitespace-delimited handoff: ' + JSON.stringify(s)
+    );
+  }
+});
+
+test('findKeyLinkHandoffs flags keyed URLs after long path prefixes (#138)', () => {
+  // A 512-char prefix bound must not let https://x/ + 600 path chars + ?key=
+  // (or &key= after other query) scan clean — key= is matched independently
+  // of prefix length via a linear token walk.
+  const path = 'a'.repeat(600);
+  const bad = [
+    'https://x/' + path + QK + 'SECRET',
+    'https://x/' + path + '?foo=1' + AK + 'SECRET',
+    '/' + path + QK + 'SECRET',
+    '/api/' + path + AK + 'x',
+    'https://example.test/' + path + '%3F' + K + '%3D' + FAKE,
+    'page.html?' + path + AK + 'SECRET'
+  ];
+  for (const s of bad) {
+    assert.ok(findKeyLinkHandoffs(s).length > 0, 'missed long-prefix handoff: ' + s.slice(0, 40) + '…');
+  }
+  // Still allow bare ?key= with no URL/path/.html in front.
+  assert.deepEqual(findKeyLinkHandoffs('see ' + QK + 'SECRET in docs'), []);
+});
+
+test('findKeyLinkHandoffs flags markdown/autolink/attr/relative keyed URLs (#141)', () => {
+  // Cipher HOLD: opener-glued and relative prefixes were missed when the
+  // token had to start with `/` or `http(s)://` or end in `.html`.
+  const secret = 'FAKE_SECRET_VALUE_123';
+  const forms = [
+    '[x](https://example.test/api/log' + QK + secret + ')',
+    '<https://example.test/api/log' + QK + secret + '>',
+    '(https://example.test/api/log' + QK + secret + ')',
+    'href=https://example.test/api/log' + QK + secret,
+    'URL=https://example.test/api/log' + QK + secret,
+    'docs/api/log' + QK + secret,
+    './api/log' + QK + secret
+  ];
+  for (const s of forms) {
+    assert.ok(
+      findKeyLinkHandoffs(s).some((h) => h.rule === 'keyed url'),
+      'missed opener/relative handoff: ' + s
+    );
+  }
+});
+
+test('findKeyLinkHandoffs match snippets never echo secret values (#141)', () => {
+  // Cipher HOLD: USP-init matches used to slice into the object body (~15–21
+  // value chars), and keyed-url hits prepended 48 chars of left context.
+  const secret = 'FAKE_SECRET_VALUE_123';
+  const fixtures = [
+    'new URLSearchParams({ ' + K + ": '" + secret + "' })",
+    'new URLSearchParams({ ' + K + ': "' + secret + '" })',
+    'URLSearchParams({"' + K + '":"' + secret + '"})',
+    // Left context includes the secret as an unrelated literal.
+    "const prior = '" + secret + "'; see https://x/a" + QK + secret,
+    'docs/api/log' + QK + secret,
+    '[x](https://example.test/api/log' + QK + secret + ')'
+  ];
+  for (const s of fixtures) {
+    const hits = findKeyLinkHandoffs(s);
+    assert.ok(hits.length > 0, 'expected handoff hit for: ' + s);
+    for (const h of hits) {
+      assert.ok(
+        !String(h.match || '').includes(secret),
+        'secret echoed in match for ' + h.rule + ': ' + JSON.stringify(h.match)
+      );
+    }
+  }
+});
+
+test('findKeyLinkHandoffs flags #138 forms (entities, USP inits, aliases)', () => {
+  const bad = [
+    // HTML numeric entities for & (#138)
+    'href="/api/log?habit=Water&#38;' + K + '=SECRET"',
+    'href="/api/log?habit=Water&#x26;' + K + '=SECRET"',
+    '/api/log&#X26;' + K + '=x',
+    "const u = base + '?habit=Water&#38;" + K + "=' + secret",
+    'const u = `/api/log?habit=Water&#x26;' + K + '=${k}`',
+    // URLSearchParams array-of-pairs / string concat / template init
+    "new URLSearchParams([['" + K + "', k]])",
+    'new URLSearchParams([["' + K + '", secret]])',
+    "URLSearchParams('" + K + "=' + k)",
+    'URLSearchParams("' + K + '=" + secret)',
+    'URLSearchParams(`' + K + '=${k}`)',
+    // Computed template / quoted key in object init
+    'new URLSearchParams({[`' + K + '`]: k})',
+    "new URLSearchParams({['" + K + "']: k})",
+    'new URLSearchParams({["' + K + '"]: secret})',
+    // Nested-object key: property
+    'new URLSearchParams({ outer: { ' + K + ': v } })',
+    'new URLSearchParams({ a: 1, nest: { "' + K + '": secret } })',
+    // Template-literal writer name
+    'params.set(`' + K + '`, secret)',
+    'q.append(`' + K + '`, v)',
+    'url.searchParams.set(`' + K + '`, k)',
+    // Aliased searchParams (#138)
+    "const sp = url.searchParams;\nsp.set('" + K + "', k)",
+    'let qs = u.searchParams;\nqs.append("' + K + '", v)',
+    'if (ok) sp = req.searchParams;\nsp.set(`' + K + '`, secret)'
+  ];
+  for (const s of bad) {
+    assert.ok(findKeyLinkHandoffs(s).length > 0, 'missed handoff: ' + s);
+  }
+});
+
 test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {
   const ok = [
     'The server still accepts ' + QK + ' during the transition.',
@@ -411,38 +583,103 @@ test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {
     "map.set('" + K + "', v)",
     "headers.set('" + K + "', secret)",
     "cache.append('" + K + "', v)",
+    "localStorage.set(`" + K + "`, v)",
     // Initializer values named/stringed "key" are not a key= param
     'new URLSearchParams({ habit: ' + K + ' })',
     'new URLSearchParams({ habit: "' + K + '" })',
     "new URLSearchParams({ habit: '" + K + "' })",
+    'new URLSearchParams({ outer: { habit: ' + K + ' } })',
+    // #138 negatives for the new forms
+    'mentions &#38;' + K + '= in docs without a path',
+    "URLSearchParams([['habit', k]])",
+    "URLSearchParams('habit=' + k)",
+    'URLSearchParams(`habit=${k}`)',
+    'URLSearchParams({[`habit`]: k})',
+    'params.set(`habit`, secret)',
+    "const sp = url.searchParams;\nsp.get('" + K + "')",
     // Template &key= must not span past a closing backtick into later prose
-    'const a = `?habit=Water`;\nconst b = x; // ' + AK + '${nope} outside template'
+    'const a = `?habit=Water`;\nconst b = x; // ' + AK + '${nope} outside template',
+    // USP object-init must not span into a later statement's `{ key }`
+    'new URLSearchParams({ habit: h }); const o = { ' + K + ', v: 1 };',
+    'new URLSearchParams({ slot: n }); const cfg = { "' + K + '": secret };'
   ];
   for (const s of ok) {
     assert.deepEqual(findKeyLinkHandoffs(s), [], 'false positive: ' + s);
   }
+  // Nested call before a later outer key property must still hit.
+  assert.ok(
+    findKeyLinkHandoffs('new URLSearchParams({ first: fn({ habit: h }), ' + K + ': v })').length > 0,
+    'missed outer key after nested call in USP init'
+  );
+});
+
+test('isAllowedKeyLink requires exact repo-relative path (#138)', () => {
+  const hit = { rule: 'searchParams.set key', match: "q.set('key', key)" };
+  assert.equal(isAllowedKeyLink('tools/generate.mjs', hit), true);
+  assert.equal(isAllowedKeyLink('./tools/generate.mjs', hit), true);
+  // Suffix match would wrongly allow a nested public copy under the
+  // public/**/*.mjs handoff scan — exact path only.
+  assert.equal(isAllowedKeyLink('public/tools/generate.mjs', hit), false);
+  assert.equal(isAllowedKeyLink('other/tools/generate.mjs', hit), false);
+  assert.equal(isAllowedKeyLink('tools/generate.mjs.bak', hit), false);
 });
 
 test('no docs or UI hand out URL-key links', () => {
-  // Recurse under public/** (#121) — top-level globs alone miss nested UI.
+  // Recurse under public/** (#121/#138) — top-level globs alone miss nested UI.
   // Prefer pathspec magic so both public/foo.js and public/a/b/c.js are listed.
+  // #138 also covers .css / .mjs / .json / .svg under public/.
   const listed = execFileSync(
     'git',
-    ['ls-files', '-z', '--', '*.md', ':(glob)public/**/*.html', ':(glob)public/**/*.js', ':(glob)public/**/*.ps1'],
+    ['ls-files', '-z', '--',
+      '*.md',
+      ':(glob)public/**/*.html',
+      ':(glob)public/**/*.js',
+      ':(glob)public/**/*.mjs',
+      ':(glob)public/**/*.css',
+      ':(glob)public/**/*.json',
+      ':(glob)public/**/*.svg',
+      ':(glob)public/**/*.ps1'],
     { cwd: ROOT }
   ).toString().split('\0').filter((f) => f && !f.startsWith('docs/superpowers/'));
   assert.ok(
     listed.some((f) => /^public\/.+\/.+\.(html|js|ps1)$/.test(f)),
     'expected at least one nested public/** file in the handoff scan'
   );
+  assert.ok(
+    listed.some((f) => f === 'public/theme.css' || /\.css$/i.test(f)),
+    'expected public/**/*.css in the handoff scan (#138)'
+  );
   // Bare mentions of the legacy parameter (`?key=` in migration notes) have
   // no path in front and stay allowed; construction and encoded forms do not.
   for (const f of listed) {
     const s = readFileSync(join(ROOT, f), 'utf8');
-    const hits = findKeyLinkHandoffs(s);
+    const hits = findKeyLinkHandoffs(s).filter((h) => !isAllowedKeyLink(f, h));
     assert.deepEqual(hits, [], f + ' hands out a keyed URL:\n' +
       hits.map((h) => `  ${h.line}: ${h.rule} ${JSON.stringify(h.match)}`).join('\n'));
   }
+});
+
+test('generate.mjs withKey q.set is allowlisted as #138 open decision', () => {
+  // Do not change tools/generate.mjs here — Web Requests withKey still embeds
+  // ?key= via q.set('key', key). Exact-path allowlist is a stopgap (#138/#141);
+  // keep it narrow: exactly the two source lines that call q.set('key', …).
+  assert.ok(KEY_LINK_ALLOWLIST.some((a) => a.file === 'tools/generate.mjs'));
+  const src = readFileSync(join(ROOT, 'tools/generate.mjs'), 'utf8');
+  const hits = findKeyLinkHandoffs(src);
+  assert.equal(hits.length, 2, 'expected exactly 2 handoffs in generate.mjs, got ' +
+    JSON.stringify(hits));
+  const lines = hits.map((h) => h.line).sort((a, b) => a - b);
+  assert.deepEqual(lines, [133, 139],
+    'expected q.set handoffs on generate.mjs lines 133 and 139, got ' + JSON.stringify(hits));
+  for (const h of hits) {
+    assert.equal(h.rule, 'searchParams.set key');
+    assert.equal(isAllowedKeyLink('tools/generate.mjs', h), true,
+      'unallowlisted handoff in generate.mjs: ' + JSON.stringify(h));
+  }
+  // Drift guard: a new non-allowlisted form in generate.mjs must fail this test.
+  const smuggled = src + '\nparams.set("' + K + '", leaked);\n';
+  const extra = findKeyLinkHandoffs(smuggled).filter((h) => !isAllowedKeyLink('tools/generate.mjs', h));
+  assert.ok(extra.length > 0, 'allowlist must not swallow unrelated writers');
 });
 
 test('generate --key keeps ?key= out of urls.txt and stdout', () => {
