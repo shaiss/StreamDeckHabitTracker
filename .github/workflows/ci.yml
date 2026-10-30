@@ -59,7 +59,16 @@ jobs:
         env:
           HABIT_KEY: ${{ secrets.HABIT_KEY }}
         run: |
-          if [ -z "$HABIT_KEY" ]; then echo "HABIT_KEY secret not available; value scan skipped."; exit 0; fi
+          # Warn (do not fail) when unset — #120. Adding the Actions secret or
+          # waiving the L1 scan is still undecided; failing would red the default
+          # branch. Same soft path if this job is ever run without secrets
+          # (e.g. forks / PRs): warn + exit 0, never fail closed on empty.
+          if [ -z "$HABIT_KEY" ]; then
+            msg='HABIT_KEY value scan skipped because HABIT_KEY is not configured as a GitHub Actions secret.'
+            echo "::warning::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if printf '%s\n' "$HABIT_KEY" | git grep -q -F -f - -- . ; then
             echo "::error::The HABIT_KEY value is committed in the tree (git grep)."; exit 1
           fi
