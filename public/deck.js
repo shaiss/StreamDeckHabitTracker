@@ -10,6 +10,10 @@
     let coachPage = [];
     let rosterPending = 0;
     let beaconBlocked = false;
+    let coachNav = 'off';   // Autonomy Toggle (#94) — off | nudge-only | may-navigate
+    let confirmedConsent = 'off'; // last persisted consent — rollback target (not tap-prev)
+    let consentSeq = 0;     // write sequence — stale failures must not roll back newer success
+    let consentWritePending = false; // ignore poll coachNav while a POST is in flight
     let habits = [];
     let today = {};   // habitName -> {count, goal, doneToday, streak, ringFill} (#32)
     let built = false;
@@ -75,7 +79,15 @@
       });
       beacon.dataset.beacon = '1';
       face.appendChild(beacon);
-      const used = habits.length + 1 + 4 + 1; // habits + stats + AI slots + beacon
+      // Autonomy Toggle (#94 / §3.5): sticky mode dial. Tap cycles consent
+      // through /api/profile; never logs. Does not steal the beacon key.
+      const autonomy = keyEl({
+        title: 'Autonomy — tap to cycle MANUAL → ASSISTED → AUTO',
+        onTap: (e2) => cycleAutonomy(e2)
+      });
+      autonomy.dataset.autonomy = '1';
+      face.appendChild(autonomy);
+      const used = habits.length + 1 + 4 + 1 + 1; // habits + stats + AI slots + beacon + autonomy
       for (let i = 0; i < Math.max(0, 15 - used); i++) {
         const off = document.createElement('button');
         off.className = 'k off'; off.disabled = true; off.tabIndex = -1;
@@ -251,6 +263,60 @@
       return { pending, blocked, frame, badge: pending > 0 ? String(pending) : '' };
     }
 
+    // Autonomy Toggle (#94 / §3.5). Same mapping as lib/takeover.js —
+    // drift-guarded in tests/unit/autonomy.test.mjs.
+    const CONSENT_LEVELS = ['off', 'nudge-only', 'may-navigate'];
+    const AUTONOMY_GLYPH = '⚙';
+    const AUTONOMY_MODES = {
+      off: { consent: 'off', mode: 'MANUAL', label: 'MANUAL', glyph: AUTONOMY_GLYPH },
+      'nudge-only': { consent: 'nudge-only', mode: 'ASSISTED', label: 'ASSISTED', glyph: AUTONOMY_GLYPH },
+      'may-navigate': { consent: 'may-navigate', mode: 'AUTO', label: 'AUTO', glyph: AUTONOMY_GLYPH }
+    };
+    function normalizeConsent(v) {
+      return CONSENT_LEVELS.includes(v) ? v : 'off';
+    }
+    function autonomyOf(consent) {
+      return AUTONOMY_MODES[normalizeConsent(consent)];
+    }
+    function cycleConsent(consent) {
+      const cur = normalizeConsent(consent);
+      const i = CONSENT_LEVELS.indexOf(cur);
+      return CONSENT_LEVELS[(i + 1) % CONSENT_LEVELS.length];
+    }
+    // Same race helpers as lib/takeover.js (drift-guarded in autonomy.test.mjs).
+    function beginConsentWrite(seq) { return (Number(seq) || 0) + 1; }
+    function settleConsentWrite({ currentSeq, writeSeq, ok, current, prev, server }) {
+      if (writeSeq !== currentSeq) return { consent: current, pending: true, applied: false };
+      if (ok) return { consent: current, pending: false, applied: true };
+      const serverSeq = Number(server?.coachNavSeq);
+      if (typeof server?.coachNav === 'string' &&
+          Number.isInteger(serverSeq) && serverSeq >= 0) {
+        return {
+          consent: normalizeConsent(server.coachNav),
+          sequence: serverSeq,
+          pending: false,
+          applied: true
+        };
+      }
+      return { consent: normalizeConsent(prev), pending: false, applied: true };
+    }
+    function mergePolledConsent({
+      pending, current, polled, pollSeq, currentSeq, pendingAtStart
+    }) {
+      if (pending || pendingAtStart) {
+        return { consent: current, applied: false, ignored: true };
+      }
+      if (pollSeq !== undefined && currentSeq !== undefined && pollSeq !== currentSeq) {
+        return { consent: current, applied: false, ignored: true };
+      }
+      const next = normalizeConsent(polled);
+      return {
+        consent: next,
+        applied: next !== normalizeConsent(current),
+        ignored: false
+      };
+    }
+
     // Opt-in turn-state frame (#74). Same alias as faces.mjs resolveFrame
     // (`frame` or `frameState`). Absent / unknown → no element, same as today.
     function resolveFrame(src) {
@@ -335,6 +401,7 @@
           : ('AI slot ' + n + ' — empty');
       });
       paintBeacon();
+      paintAutonomy();
     }
 
     function paintBeacon() {
@@ -349,6 +416,65 @@
       el.title = b.blocked
         ? 'Coach blocked — tap for context (does not decide)'
         : (b.pending ? b.pending + ' pending — tap for context (does not decide)' : 'Coach quiet');
+    }
+
+    function paintAutonomy() {
+      const el = document.querySelector('.k[data-autonomy]');
+      if (!el) return;
+      const snap = autonomyOf(coachNav);
+      // Sticky key: idle frame always; violet interior; ⚙ + short mode label.
+      el.innerHTML = '<span class="facecss autonomyface">' + stateFrameHtml('idle') +
+        '<span class="em">' + esc(snap.glyph) + '</span>' +
+        '<span class="lb mono">' + esc(snap.label) + '</span></span>' +
+        '<span class="glass"></span><span class="flash"></span>';
+      el.title = 'Autonomy ' + snap.mode + ' — tap to cycle (never logs)';
+      el.dataset.consent = snap.consent;
+      el.dataset.mode = snap.mode;
+    }
+
+    function cycleAutonomy(el) {
+      // Roll back to last persisted consent, not the prior tap's optimistic value.
+      const prev = confirmedConsent;
+      const next = cycleConsent(coachNav);
+      const seq = beginConsentWrite(consentSeq);
+      consentSeq = seq;
+      consentWritePending = true;
+      coachNav = next;
+      paintAutonomy();
+      el.classList.add('pressed');
+      setTimeout(() => el.classList.remove('pressed'), 120);
+      const body = { coachNav: next, navSeq: seq };
+      const applySettle = (ok, server) => {
+        const settled = settleConsentWrite({
+          currentSeq: consentSeq, writeSeq: seq, ok,
+          current: coachNav, prev, server
+        });
+        if (!settled.applied) return; // superseded by a newer tap
+        consentWritePending = settled.pending;
+        confirmedConsent = settled.consent;
+        if (typeof settled.sequence === 'number' && settled.sequence > consentSeq) {
+          consentSeq = settled.sequence;
+        }
+        if (settled.consent !== coachNav) {
+          coachNav = settled.consent;
+          paintAutonomy();
+        }
+        flash(el, ok);
+        if (ok) {
+          const snap = autonomyOf(coachNav);
+          hint.innerHTML = '<b>Autonomy → ' + esc(snap.mode) + '</b> — coach leash is now ' +
+            esc(snap.consent) + '.';
+        }
+      };
+      window.HabitKey.postJson('/api/profile', body)
+        .then(async (r) => {
+          let server;
+          if (r.status === 409) {
+            try { server = await r.json(); } catch { /* no body → prev fallback */ }
+          }
+          applySettle(r.ok, server);
+        })
+        .catch(() => applySettle(false));
     }
 
     function settleQuestionSiblings(pressedN, qid) {
@@ -477,12 +603,26 @@
       // ?tz= lets the server bucket "today" in the viewer's timezone (matches
       // the dashboard), so living key faces read the right day (#32).
       const tz = new Date().getTimezoneOffset(); // minutes; UTC-5 → 300
+      // Capture write state at poll *start* — a slots response that raced a
+      // completed /api/profile write must not clobber the new consent.
+      const pollSeq = consentSeq;
+      const pendingAtStart = consentWritePending;
       fetch('/api/slots?tz=' + tz).then((r) => r.json()).then((j) => {
         habits = j.habits || habits;
         slots = j.slots || slots;
         coachPage = j.coachPage || [];
         rosterPending = Number(j.rosterPending) || 0;
         beaconBlocked = !!j.blocked;
+        const polled = mergePolledConsent({
+          pending: consentWritePending, current: coachNav, polled: j.coachNav,
+          pollSeq, currentSeq: consentSeq, pendingAtStart
+        });
+        if (polled.applied) coachNav = polled.consent;
+        if (!polled.ignored) {
+          confirmedConsent = polled.consent;
+          const serverSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+          if (serverSeq > consentSeq) consentSeq = serverSeq;
+        }
         today = j.today || {};
         if (!built && habits.length) build();
         paintSlots();

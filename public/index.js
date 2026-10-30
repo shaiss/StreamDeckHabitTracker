@@ -186,6 +186,11 @@ import { esc } from '/escape.js';
 
     // Settings panel (opened from the nav bar, or /?settings=1 from other pages)
     const panel = document.getElementById('settings');
+    // Consent is ordered via navSeq (#95). Only POST coachNav when the user
+    // actually changed the select — otherwise a stale Save would fight the
+    // Autonomy Toggle key (and the API rejects coachNav without navSeq).
+    let loadedCoachNav = 'off';
+    let loadedCoachNavSeq = 0;
     try {
       document.getElementById('tzList').innerHTML =
         Intl.supportedValuesOf('timeZone').map(z=>`<option value="${esc(z)}">`).join('');
@@ -198,7 +203,9 @@ import { esc } from '/escape.js';
           document.getElementById('setName').value = p.name || '';
           document.getElementById('setTz').value = p.tz || p.effectiveTz || '';
           document.getElementById('setAbout').value = p.about || '';
-          document.getElementById('setCoachNav').value = p.coachNav || 'off';
+          loadedCoachNav = p.coachNav || 'off';
+          loadedCoachNavSeq = Math.max(0, Number(p.coachNavSeq) || 0);
+          document.getElementById('setCoachNav').value = loadedCoachNav;
           document.getElementById('profileStatus').textContent =
             p.effectiveTz ? `Coach currently reads your day as ${p.effectiveTz}` : '';
         }).catch(()=>{});
@@ -210,13 +217,44 @@ import { esc } from '/escape.js';
     document.getElementById('saveProfile').addEventListener('click', () => {
       const st = document.getElementById('profileStatus');
       st.textContent = 'Saving…';
-      window.HabitKey.postJson('/api/profile', {
+      const coachNav = document.getElementById('setCoachNav').value;
+      const body = {
         name: document.getElementById('setName').value.trim(),
         tz: document.getElementById('setTz').value.trim(),
-        about: document.getElementById('setAbout').value.trim(),
-        coachNav: document.getElementById('setCoachNav').value
-      }).then(r=>r.json()).then(j => {
-        st.textContent = j.ok ? 'Saved — the coach will use this on its next pass.' : (j.error || 'Save failed');
+        about: document.getElementById('setAbout').value.trim()
+      };
+      if (coachNav !== loadedCoachNav) {
+        body.coachNav = coachNav;
+        body.navSeq = loadedCoachNavSeq + 1;
+      }
+      window.HabitKey.postJson('/api/profile', body).then(async (r) => {
+        const j = await r.json();
+        if (j.ok) {
+          // Always adopt the server's consent tokens. A name/tz/about-only
+          // Save can CAS-retry against a fresher Autonomy write and return a
+          // newer coachNavSeq — leaving loaded* stale would make the next
+          // consent change send an obsolete navSeq (#95 Entelligence).
+          loadedCoachNavSeq = Math.max(0, Number(j.coachNavSeq) || loadedCoachNavSeq);
+          if (body.coachNav !== undefined) {
+            loadedCoachNav = j.coachNav || body.coachNav;
+          } else {
+            loadedCoachNav = j.coachNav || loadedCoachNav;
+            // Name-only Save: do not clobber a consent edit made while this
+            // request was in flight — next Save will include coachNav then.
+            const sel = document.getElementById('setCoachNav');
+            if (sel.value === coachNav) sel.value = loadedCoachNav;
+          }
+          st.textContent = 'Saved — the coach will use this on its next pass.';
+        } else if (r.status === 409 && j.coachNavSeq !== undefined) {
+          // Autonomy key beat this Save — resync consent tokens so the next
+          // attempt can land. Leave name/tz/about inputs alone (still unsaved).
+          loadedCoachNav = j.coachNav || loadedCoachNav;
+          loadedCoachNavSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+          document.getElementById('setCoachNav').value = loadedCoachNav;
+          st.textContent = 'Consent changed on the deck — review Autonomy and save again.';
+        } else {
+          st.textContent = j.error || 'Save failed';
+        }
       }).catch(e => { st.textContent = 'Save failed: ' + e.message; });
     });
 
