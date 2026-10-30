@@ -52,6 +52,14 @@ test('roster prompt wants proposals[] and mentions the pending cap', () => {
   assert.ok(p.includes('3'), 'references MAX_PENDING (3)');
 });
 
+test('targets prompt wants changes[] with to/reason (#70)', () => {
+  const p = PROMPTS.targets({ ...baseCtx, window: [{ name: 'Caffeine', target: 5, medianPerDay: 7 }] });
+  assert.match(p, /"changes"/);
+  assert.match(p, /"to"/);
+  assert.match(p, /ONLY JSON/i);
+  assert.match(p, /approv/i);
+});
+
 test('coach-page prompt wants slots[], caps at 12, and stays off the front/fixed keys', () => {
   const p = PROMPTS.coachPage({ ...baseCtx, currentFrontSlots: 'Flow, Bedtime', currentCoachPage: 'none' });
   assert.match(p, /"slots"/);

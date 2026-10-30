@@ -8,6 +8,7 @@ import { esc } from '/escape.js';
     let slotState = null;   // latest /api/slots payload
     let lastEntries = [];   // latest /api/data entries
     let lastInsight = null; // latest coach daily digest
+    let lastTargetLines = []; // adaptive-target plain-language lines (#70)
 
     const dayKey = (d) => { const x = new Date(d); return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); };
     const todayKey = dayKey(Date.now());
@@ -148,12 +149,18 @@ import { esc } from '/escape.js';
       const insight = lastInsight?.text
         ? `<div class="card slot" style="margin-bottom:var(--s3)"><div class="top"><span class="em">📝</span><span class="nm">Coach's note · ${esc(lastInsight.date||'')}</span></div><div class="why">${esc(lastInsight.text)}</div></div>`
         : '';
+      const targetLines = (lastTargetLines || []).filter(Boolean).slice(0, 5);
+      const targetsBlock = targetLines.length
+        ? `<div class="card slot" style="margin-bottom:var(--s3)"><div class="top"><span class="em">🎯</span><span class="nm">Target changes</span></div>${
+            targetLines.map((line) => `<div class="why">${esc(line)}</div>`).join('')
+          }</div>`
+        : '';
       const tr = s?.track?.overall;
       const trackLine = tr && tr.offered > 0
         ? `<div class="ai-note" style="margin:0 0 var(--s3)">Track record: ${tr.landed}/${tr.offered} suggested keys tapped (${Math.round(tr.hitRate*100)}%) — the coach sees this and adapts.</div>`
         : '';
       el.innerHTML = `<div class="ai-head"><h2 class="section-h">AI Coach${s?.model ? ` <span class="muted" style="text-transform:none;letter-spacing:0">· ${esc(s.model)}</span>` : ''}</h2>${btn}</div>
-        ${insight}${trackLine}<div class="slot-grid">${cards}</div>${deckLine(s?.deck)}${note}<div class="ai-err" id="aiErr"></div>`;
+        ${insight}${targetsBlock}${trackLine}<div class="slot-grid">${cards}</div>${deckLine(s?.deck)}${note}<div class="ai-err" id="aiErr"></div>`;
       document.getElementById('suggestBtn')?.addEventListener('click', suggest);
     }
 
@@ -228,6 +235,7 @@ import { esc } from '/escape.js';
       ]).then(([d, s]) => {
         slotState = s;
         lastInsight = d.insight || null;
+        lastTargetLines = d.targetLines || [];
         document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
         if (d.configured === false) return renderSetup();
         lastEntries = d.entries || [];

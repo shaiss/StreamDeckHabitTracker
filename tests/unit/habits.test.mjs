@@ -3,12 +3,16 @@ import assert from 'node:assert/strict';
 import {
   validateHabits,
   isPreviousSeed,
+  migratePreviousSeed,
   PREVIOUS_SEED,
   seedHabits,
   getHabits,
+  getHabitsStrict,
   saveHabits
 } from '../../lib/habits.js';
+import { withTargetsLock } from '../../lib/store.js';
 import habitsHandler from '../../api/habits.js';
+import rosterHandler from '../../api/roster.js';
 
 test('accepts a clean list with origins', () => {
   assert.equal(validateHabits([
@@ -50,12 +54,62 @@ test('goal is optional (no goal still validates)', () => {
   assert.equal(validateHabits([{ name: 'Eat', emoji: '🍽', label: 'Eat' }]), null);
 });
 
+// #70 — object-form goal is backward-compatible with the bare int.
+test('accepts object-form goal {target, setBy, reason, floor, ceil}', () => {
+  assert.equal(validateHabits([{
+    name: 'Caffeine', emoji: '☕', label: 'Caf',
+    goal: { target: 3, setBy: 'coach', reason: 'eased', updatedAt: 1, floor: 1, ceil: 5 }
+  }]), null);
+});
+
+test('plain-number goal still validates alongside an object-form neighbor', () => {
+  assert.equal(validateHabits([
+    { name: 'Drink', emoji: '💧', label: 'Drink', goal: 8 },
+    { name: 'Caffeine', emoji: '☕', label: 'Caf', goal: { target: 2, setBy: 'human' } }
+  ]), null);
+});
+
+test('rejects object goal with bad target / floor>ceil / target outside pins', () => {
+  assert.match(validateHabits([{
+    name: 'X', emoji: '💧', label: 'D', goal: { target: 0, setBy: 'human' }
+  }]), /goal/i);
+  assert.match(validateHabits([{
+    name: 'X', emoji: '💧', label: 'D', goal: { target: 5, floor: 6, ceil: 4 }
+  }]), /floor/i);
+  assert.match(validateHabits([{
+    name: 'X', emoji: '💧', label: 'D', goal: { target: 2, floor: 3 }
+  }]), /below/i);
+});
+
 test('isPreviousSeed matches the pre-Code eight-entry catalog (origin extras ok)', () => {
   assert.equal(isPreviousSeed(PREVIOUS_SEED.map((h) => ({ ...h }))), true);
   assert.equal(
     isPreviousSeed(PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }))),
     true
   );
+});
+
+test('migratePreviousSeed appends Code and preserves goals/origin', () => {
+  const prev = PREVIOUS_SEED.map((h, i) => ({
+    ...h,
+    origin: 'human',
+    ...(i === 2 ? { goal: { target: 4, setBy: 'coach', reason: 'hitting it', floor: 2 } } : {}),
+    ...(i === 4 ? { goal: 3 } : {})
+  }));
+  assert.ok(isPreviousSeed(prev));
+  const next = migratePreviousSeed(prev);
+  assert.equal(next.length, seedHabits().length);
+  assert.equal(next[8].name, 'Code');
+  assert.equal(next[2].name, 'Eat');
+  assert.deepEqual(next[2].goal, {
+    target: 4,
+    setBy: 'coach',
+    reason: 'hitting it',
+    floor: 2
+  });
+  assert.equal(next[2].origin, 'human');
+  assert.equal(next[4].goal, 3);
+  assert.equal(next[8].goal, undefined, 'new Code entry has no inherited goal');
 });
 
 test('isPreviousSeed rejects custom catalogs (length, order, name, emoji, label)', () => {
@@ -142,8 +196,31 @@ function mkRes() {
   return res;
 }
 
+// Redis CAS migration must GET-compare before SET. An unconditional SET script
+// (or a mock that ignores the Lua body) must not pass these tests.
+const EXPECTED_CAS_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('set', KEYS[1], ARGV[2]) else return false end";
+
+/** Assert EVAL carries the real CAS script, then compare-and-set against `currentRaw`. */
+function evalCas(args, currentRaw) {
+  assert.equal(args[0], 'EVAL');
+  const lua = args[1];
+  assert.equal(lua, EXPECTED_CAS_LUA);
+  // Essential shape — fails if someone swaps in unconditional SET.
+  assert.match(lua, /redis\.call\(\s*'get'\s*,\s*KEYS\[1\]\s*\)\s*==\s*ARGV\[1\]/);
+  assert.match(lua, /redis\.call\(\s*'set'\s*,\s*KEYS\[1\]\s*,\s*ARGV\[2\]\s*\)/);
+  assert.equal(args[2], '1');
+  assert.equal(args[3], 'habits:config');
+  if (currentRaw === args[4]) return 'OK';
+  return null;
+}
+
 test('getHabits maps previous seed to current seed with zero Redis writes (#127)', async () => {
-  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prev = PREVIOUS_SEED.map((h, i) => ({
+    ...h,
+    origin: 'human',
+    ...(i === 0 ? { goal: 2 } : {})
+  }));
   const prevRaw = JSON.stringify(prev);
   let redisValue = prevRaw;
   await withRedis({
@@ -152,6 +229,7 @@ test('getHabits maps previous seed to current seed with zero Redis writes (#127)
     const list = await getHabits();
     assert.deepEqual(list.map((h) => h.name), seedHabits().map((h) => h.name));
     assert.equal(list[8].name, 'Code');
+    assert.equal(list[0].goal, 2, 'in-memory map keeps stored goals');
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], 'GET');
     assert.ok(!calls.some((c) => WRITE_CMDS.has(String(c[0]).toUpperCase())));
@@ -220,4 +298,552 @@ test('saveHabits persists the upgraded seed on the keyed write path (#127)', asy
     assert.equal(calls[0][1], 'habits:config');
     assert.deepEqual(JSON.parse(redisValue).map((h) => h.name), seedHabits().map((h) => h.name));
   });
+});
+
+test('getHabitsStrict migrates persisted previous seed to the Code catalog once', async () => {
+  const calls = [];
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prevRaw = JSON.stringify(prev);
+  let redisValue = prevRaw;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    if (args[0] === 'GET') {
+      return {
+        ok: true,
+        json: async () => ({ result: redisValue })
+      };
+    }
+    if (args[0] === 'EVAL') {
+      const result = evalCas(args, redisValue);
+      assert.deepEqual(JSON.parse(args[5]).map((h) => h.name), seedHabits().map((h) => h.name));
+      if (result === 'OK') redisValue = args[5];
+      return { ok: true, json: async () => ({ result }) };
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    // Redis-backed path under production (gate is non-prod only — #106).
+    process.env.VERCEL_ENV = 'production';
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    const list = await getHabitsStrict();
+    assert.deepEqual(list.map((h) => h.name), seedHabits().map((h) => h.name));
+    assert.equal(list[8].name, 'Code');
+    assert.equal(calls[0][0], 'GET');
+    assert.equal(calls[1][0], 'EVAL');
+    assert.equal(calls.length, 2);
+    assert.deepEqual(JSON.parse(redisValue).map((h) => h.name), seedHabits().map((h) => h.name));
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict migration preserves goals on the previous eight', async () => {
+  const prev = PREVIOUS_SEED.map((h, i) => ({
+    ...h,
+    origin: 'human',
+    ...(i === 5 ? { goal: { target: 2, setBy: 'human', ceil: 5 } } : {})
+  }));
+  let redisValue = JSON.stringify(prev);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    if (args[0] === 'GET') {
+      return { ok: true, json: async () => ({ result: redisValue }) };
+    }
+    if (args[0] === 'EVAL') {
+      const result = evalCas(args, redisValue);
+      if (result === 'OK') redisValue = args[5];
+      return { ok: true, json: async () => ({ result }) };
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    process.env.VERCEL_ENV = 'production';
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    const list = await getHabitsStrict();
+    assert.equal(list[5].name, 'Cannabis');
+    assert.deepEqual(list[5].goal, { target: 2, setBy: 'human', ceil: 5 });
+    assert.equal(JSON.parse(redisValue)[5].goal.target, 2);
+    assert.equal(list[8].name, 'Code');
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict throws on store read failure; getHabits still soft-falls-back', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => 'down' });
+  try {
+    process.env.VERCEL_ENV = 'production';
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    await assert.rejects(() => getHabitsStrict(), /store 503/);
+    // Soft reader keeps dashboards alive on a blip.
+    assert.deepEqual(await getHabits(), seedHabits());
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict returns seed only for a missing/empty key (not on error)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    assert.equal(args[0], 'GET');
+    return { ok: true, json: async () => ({ result: null }) };
+  };
+  try {
+    process.env.VERCEL_ENV = 'production';
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    assert.deepEqual(await getHabitsStrict(), seedHabits());
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict migration CAS aborts when a concurrent saveHabits wins', async () => {
+  const calls = [];
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prevRaw = JSON.stringify(prev);
+  const custom = [
+    { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+    { name: 'Meditate', emoji: '🧘', label: 'Meditate', origin: 'coach' }
+  ];
+  const customRaw = JSON.stringify(custom);
+  // Concurrent saveHabits landed between our GET and EVAL.
+  let redisValue = prevRaw;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    if (args[0] === 'GET') {
+      return { ok: true, json: async () => ({ result: redisValue }) };
+    }
+    if (args[0] === 'EVAL') {
+      // Race: custom catalog is already in Redis before CAS runs.
+      redisValue = customRaw;
+      assert.equal(args[4], prevRaw);
+      const result = evalCas(args, redisValue);
+      assert.equal(result, null);
+      return { ok: true, json: async () => ({ result }) };
+    }
+    if (args[0] === 'SET') {
+      throw new Error('unconditional SET must not run during seed migration');
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    process.env.VERCEL_ENV = 'production';
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    const list = await getHabitsStrict();
+    assert.deepEqual(list, custom);
+    assert.equal(calls[0][0], 'GET');
+    assert.equal(calls[1][0], 'EVAL');
+    assert.equal(calls[2][0], 'GET');
+    assert.ok(!calls.some((c) => c[0] === 'SET'));
+    assert.equal(redisValue, customRaw);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict: migration CAS store failure throws (does not serve seed)', async () => {
+  // Former catch returned seedHabits() after a failed CAS — a later saveHabits
+  // could then overwrite a concurrent custom roster with BASE_HABITS.
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    if (args[0] === 'GET') {
+      return { ok: true, json: async () => ({ result: JSON.stringify(prev) }) };
+    }
+    if (args[0] === 'EVAL') {
+      return { ok: false, status: 503, text: async () => 'cas down' };
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    process.env.VERCEL_ENV = 'production';
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    await assert.rejects(() => getHabitsStrict(), /store 503/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+test('getHabitsStrict: CAS miss + unreadable key throws (does not serve seed)', async () => {
+  const prev = PREVIOUS_SEED.map((h) => ({ ...h, origin: 'human' }));
+  const prevRaw = JSON.stringify(prev);
+  let gets = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    if (args[0] === 'GET') {
+      gets++;
+      if (gets === 1) {
+        return { ok: true, json: async () => ({ result: prevRaw }) };
+      }
+      // Empty after CAS miss — must not fall through to returning seedHabits().
+      return { ok: true, json: async () => ({ result: null }) };
+    }
+    if (args[0] === 'EVAL') {
+      assert.equal(args[4], prevRaw);
+      return { ok: true, json: async () => ({ result: null }) }; // CAS miss
+    }
+    throw new Error(`unexpected redis ${args[0]}`);
+  };
+  try {
+    process.env.VERCEL_ENV = 'production';
+    process.env.KV_REST_API_URL = 'https://example.test';
+    process.env.KV_REST_API_TOKEN = 'test';
+    await assert.rejects(() => getHabitsStrict(), /unreadable after CAS miss/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
+});
+
+// --- withTargetsLock serialization for habit / roster writes (#93 review) ---
+const HABITS_KEY = 'habits:config';
+const LOCK_KEY = 'habits:targets:lock';
+const ROSTER_KEY = 'habits:roster';
+const RELEASE_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+const RENEW_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], tonumber(ARGV[2])) else return 0 end";
+
+function installLockAwareRedis(state) {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    const op = args[0];
+    if (op === 'GET') {
+      return { ok: true, json: async () => ({ result: state[args[1]] ?? null }) };
+    }
+    if (op === 'SET') {
+      const key = args[1];
+      if (args.includes('NX') && state[key] != null) {
+        return { ok: true, json: async () => ({ result: null }) };
+      }
+      state[key] = args[2];
+      return { ok: true, json: async () => ({ result: 'OK' }) };
+    }
+    if (op === 'EVAL') {
+      const lua = args[1];
+      if (lua === RELEASE_LUA) {
+        if (state[args[3]] === args[4]) delete state[args[3]];
+        return { ok: true, json: async () => ({ result: 1 }) };
+      }
+      if (lua === RENEW_LUA) {
+        return { ok: true, json: async () => ({ result: state[args[3]] === args[4] ? 1 : 0 }) };
+      }
+      throw new Error(`unexpected EVAL ${lua}`);
+    }
+    throw new Error(`unexpected redis ${JSON.stringify(args)}`);
+  };
+  process.env.VERCEL_ENV = 'production';
+  process.env.KV_REST_API_URL = 'https://example.test';
+  process.env.KV_REST_API_TOKEN = 'test';
+  delete process.env['HABIT_' + 'KEY'];
+  return {
+    calls,
+    restore() {
+      globalThis.fetch = originalFetch;
+      delete process.env.VERCEL_ENV;
+      delete process.env.KV_REST_API_URL;
+      delete process.env.KV_REST_API_TOKEN;
+    }
+  };
+}
+
+test('POST /api/habits takes withTargetsLock (SET NX) before saveHabits', async () => {
+  const state = {
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' }
+    ])
+  };
+  const mock = installLockAwareRedis(state);
+  try {
+    const list = [
+      { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+      { name: 'Stretch', emoji: '🧘', label: 'Stretch', origin: 'coach' }
+    ];
+    const res = mkRes();
+    await habitsHandler(
+      { method: 'POST', query: {}, headers: {}, body: { habits: list } },
+      res
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.habits.length, 2);
+    const lockIdx = mock.calls.findIndex((c) => c[0] === 'SET' && c[1] === LOCK_KEY && c.includes('NX'));
+    assert.ok(lockIdx >= 0, 'expected SET NX on habits:targets:lock');
+    const cfgIdx = mock.calls.findIndex((c) => c[0] === 'SET' && c[1] === HABITS_KEY && !c.includes('NX'));
+    assert.ok(cfgIdx >= 0, 'expected SET habits:config under the lock');
+    assert.ok(lockIdx < cfgIdx, 'lock SET NX must precede habits:config write');
+    assert.equal(state[LOCK_KEY], undefined, 'lock released');
+    assert.deepEqual(JSON.parse(state[HABITS_KEY]).map((h) => h.name), ['Pee', 'Stretch']);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('POST /api/habits: TARGETS_BUSY → HTTP 409 (no habits:config write)', async () => {
+  const prior = JSON.stringify([
+    { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' }
+  ]);
+  const state = { [HABITS_KEY]: prior };
+  const mock = installLockAwareRedis(state);
+  try {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const held = withTargetsLock(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 40));
+      return 'ok';
+    });
+    await gate;
+    const res = mkRes();
+    await habitsHandler(
+      {
+        method: 'POST',
+        query: {},
+        headers: {},
+        body: {
+          habits: [
+            { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+            { name: 'Lost', emoji: '❌', label: 'Lost', origin: 'human' }
+          ]
+        }
+      },
+      res
+    );
+    assert.equal(res.statusCode, 409);
+    assert.match(res.body.error, /in progress/i);
+    assert.equal(state[HABITS_KEY], prior, 'contended save must not overwrite roster');
+    assert.ok(!mock.calls.some((c) => c[0] === 'SET' && c[1] === HABITS_KEY && !c.includes('NX')));
+    assert.equal(await held, 'ok');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('POST /api/roster approve: TARGETS_BUSY → HTTP 409 (habits unchanged)', async () => {
+  const habits = [
+    { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+    { name: 'Eat', emoji: '🍽', label: 'Eat', origin: 'human' }
+  ];
+  const prior = JSON.stringify(habits);
+  const state = {
+    [HABITS_KEY]: prior,
+    [ROSTER_KEY]: JSON.stringify({
+      proposals: [{
+        id: 'r1',
+        kind: 'add',
+        name: 'Stretch',
+        emoji: '🧘',
+        label: 'Stretch',
+        origin: 'coach',
+        reason: 'sit',
+        createdAt: 1
+      }],
+      archive: [],
+      rejected: [],
+      lastRunAt: 0,
+      model: ''
+    })
+  };
+  const mock = installLockAwareRedis(state);
+  try {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const held = withTargetsLock(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 40));
+      return 'ok';
+    });
+    await gate;
+    const res = mkRes();
+    await rosterHandler(
+      { method: 'POST', query: {}, headers: {}, body: { id: 'r1', decision: 'approve' } },
+      res
+    );
+    assert.equal(res.statusCode, 409);
+    assert.match(res.body.error, /in progress/i);
+    assert.equal(state[HABITS_KEY], prior);
+    assert.equal(await held, 'ok');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('POST /api/roster approve takes withTargetsLock then persists habits+roster', async () => {
+  const state = {
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+      { name: 'Eat', emoji: '🍽', label: 'Eat', origin: 'human' }
+    ]),
+    [ROSTER_KEY]: JSON.stringify({
+      proposals: [{
+        id: 'r1',
+        kind: 'add',
+        name: 'Stretch',
+        emoji: '🧘',
+        label: 'Stretch',
+        origin: 'coach',
+        reason: 'sit',
+        createdAt: 1
+      }],
+      archive: [],
+      rejected: [],
+      lastRunAt: 0,
+      model: ''
+    })
+  };
+  const mock = installLockAwareRedis(state);
+  try {
+    const res = mkRes();
+    await rosterHandler(
+      { method: 'POST', query: {}, headers: {}, body: { id: 'r1', decision: 'approve' } },
+      res
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+    const lockIdx = mock.calls.findIndex((c) => c[0] === 'SET' && c[1] === LOCK_KEY && c.includes('NX'));
+    assert.ok(lockIdx >= 0, 'expected SET NX on habits:targets:lock');
+    const cfgIdx = mock.calls.findIndex((c) => c[0] === 'SET' && c[1] === HABITS_KEY && !c.includes('NX'));
+    const rosterIdx = mock.calls.findIndex((c) => c[0] === 'SET' && c[1] === ROSTER_KEY);
+    assert.ok(cfgIdx >= 0, 'expected SET habits:config');
+    assert.ok(rosterIdx >= 0, 'expected SET habits:roster');
+    assert.ok(lockIdx < cfgIdx, 'lock SET NX must precede habits:config write');
+    assert.ok(lockIdx < rosterIdx, 'lock SET NX must precede habits:roster write');
+    assert.deepEqual(
+      JSON.parse(state[HABITS_KEY]).map((h) => h.name),
+      ['Pee', 'Eat', 'Stretch']
+    );
+    assert.equal(JSON.parse(state[ROSTER_KEY]).proposals.length, 0);
+    assert.equal(state[LOCK_KEY], undefined);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('POST /api/roster approve: re-reads habits under lock (preserves concurrent goals)', async () => {
+  // Race the old code lost: decision built from a pre-lock habits snapshot, then
+  // a concurrent target pass landed goals, then saveHabits wrote the stale list
+  // and wiped those goals. Inject the goal when SET NX succeeds — after any
+  // pre-lock read would have happened, before the under-lock re-read.
+  const state = {
+    [HABITS_KEY]: JSON.stringify([
+      { name: 'Pee', emoji: '🚽', label: 'Pee', origin: 'human' },
+      { name: 'Eat', emoji: '🍽', label: 'Eat', origin: 'human' }
+    ]),
+    [ROSTER_KEY]: JSON.stringify({
+      proposals: [{
+        id: 'r1',
+        kind: 'add',
+        name: 'Stretch',
+        emoji: '🧘',
+        label: 'Stretch',
+        origin: 'coach',
+        reason: 'sit',
+        createdAt: 1
+      }],
+      archive: [],
+      rejected: [],
+      lastRunAt: 0,
+      model: ''
+    })
+  };
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, opts) => {
+    const args = JSON.parse(opts.body);
+    calls.push(args);
+    const op = args[0];
+    if (op === 'GET') {
+      return { ok: true, json: async () => ({ result: state[args[1]] ?? null }) };
+    }
+    if (op === 'SET') {
+      const key = args[1];
+      if (args.includes('NX')) {
+        if (state[key] != null) {
+          return { ok: true, json: async () => ({ result: null }) };
+        }
+        state[key] = args[2];
+        // Concurrent commitTargetPass just finished before we acquired: goals live.
+        const live = JSON.parse(state[HABITS_KEY]);
+        live[0] = { ...live[0], goal: 5 };
+        state[HABITS_KEY] = JSON.stringify(live);
+        return { ok: true, json: async () => ({ result: 'OK' }) };
+      }
+      state[key] = args[2];
+      return { ok: true, json: async () => ({ result: 'OK' }) };
+    }
+    if (op === 'EVAL') {
+      const lua = args[1];
+      if (lua === RELEASE_LUA) {
+        if (state[args[3]] === args[4]) delete state[args[3]];
+        return { ok: true, json: async () => ({ result: 1 }) };
+      }
+      if (lua === RENEW_LUA) {
+        return { ok: true, json: async () => ({ result: state[args[3]] === args[4] ? 1 : 0 }) };
+      }
+      throw new Error(`unexpected EVAL ${lua}`);
+    }
+    throw new Error(`unexpected redis ${JSON.stringify(args)}`);
+  };
+  process.env.VERCEL_ENV = 'production';
+  process.env.KV_REST_API_URL = 'https://example.test';
+  process.env.KV_REST_API_TOKEN = 'test';
+  delete process.env['HABIT_' + 'KEY'];
+  try {
+    const res = mkRes();
+    await rosterHandler(
+      { method: 'POST', query: {}, headers: {}, body: { id: 'r1', decision: 'approve' } },
+      res
+    );
+    assert.equal(res.statusCode, 200);
+    const saved = JSON.parse(state[HABITS_KEY]);
+    assert.deepEqual(saved.map((h) => h.name), ['Pee', 'Eat', 'Stretch']);
+    assert.equal(saved[0].goal, 5, 'live goal from concurrent pass must survive approve');
+    const lockIdx = calls.findIndex((c) => c[0] === 'SET' && c[1] === LOCK_KEY && c.includes('NX'));
+    const getIdx = calls.findIndex((c) => c[0] === 'GET' && c[1] === HABITS_KEY);
+    assert.ok(lockIdx >= 0 && getIdx >= 0);
+    assert.ok(lockIdx < getIdx, 'habits GET must happen after lock acquisition');
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.VERCEL_ENV;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+  }
 });
