@@ -208,10 +208,12 @@ const USP_WRITER_RECEIVER =
 // Name argument: 'key' / "key" / `key`
 const KEY_NAME_LIT = String.raw`['"\`]key['"\`]`;
 
-/** Token delimiter set (same stop chars as the old KEY_LINK_PREFIX_RE). */
+/** Token delimiter set (same stop chars as the old KEY_LINK_PREFIX_RE).
+ *  Use /\s/ so JS whitespace beyond ASCII space/tab/CR/LF — form feed,
+ *  vertical tab, NBSP, U+2028/U+2029, etc. — still bounds the URL token. */
 function isKeyLinkDelim(c) {
-  return c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '"' ||
-    c === "'" || c === '`' || c === ')' || c === ']' || c === '>';
+  return /\s/.test(c) || c === '"' || c === "'" || c === '`' ||
+    c === ')' || c === ']' || c === '>';
 }
 
 /**

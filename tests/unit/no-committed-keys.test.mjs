@@ -432,6 +432,25 @@ test('findKeyLinkHandoffs stays linear on many unmatched URLSearchParams({ (#138
   );
 });
 
+test('findKeyLinkHandoffs flags keyed URLs after JS whitespace delimiters (#138)', () => {
+  // isKeyLinkDelim must treat all /\s/ as token stops — not only ASCII
+  // space/tab/CR/LF — or NBSP/form-feed/etc. glue prose into the URL token
+  // and the handoff is missed (Entelligence MAJOR/SECURITY on #141).
+  const bad = [
+    'see\u00a0https://x/a' + QK + 'SECRET', // NBSP
+    'see\fhttps://x/a' + QK + 'SECRET',     // form feed
+    'see\vhttps://x/a' + QK + 'SECRET',     // vertical tab
+    'see\u2028https://x/a' + QK + 'SECRET', // line separator
+    'see\u2029https://x/a' + QK + 'SECRET'  // paragraph separator
+  ];
+  for (const s of bad) {
+    assert.ok(
+      findKeyLinkHandoffs(s).some((h) => h.rule === 'keyed url'),
+      'missed whitespace-delimited handoff: ' + JSON.stringify(s)
+    );
+  }
+});
+
 test('findKeyLinkHandoffs flags keyed URLs after long path prefixes (#138)', () => {
   // A 512-char prefix bound must not let https://x/ + 600 path chars + ?key=
   // (or &key= after other query) scan clean — key= is matched independently
