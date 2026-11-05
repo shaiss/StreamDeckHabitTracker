@@ -198,6 +198,10 @@ export function valueNeedles(value) {
 
 // Max run of string interior without whitespace (#138).
 const MAX_STR_RUN = 512;
+// Multiline template &key=${…}: at most this many extra newline-separated
+// segments after the opener (each ≤ MAX_STR_RUN). Keeps the opener-restricted
+// rule linear on a huge unterminated `…` run (#138 leftover).
+const MAX_TMPL_LINES = 8;
 // `a.b.c.searchParams` — cap id length and chain depth (#138).
 const MAX_USP_ID = 64;
 const MAX_USP_DEPTH = 6;
@@ -335,22 +339,30 @@ function findKeyedUrlHits(text) {
   return hits;
 }
 
+// HTML amp entities in concat/template interiors — case-insensitive so
+// &#X26; / &#x026; / &#038; all count (#138).
+const AMP_ENTITY = String.raw`(?:amp;|#(?:x0*26|0*38);)`;
+
 const KEY_LINK_RULES = [
   // '?key=' +  /  "&key=" +  /  `?key=` +  — also mid-string `'…&key=' + k`
   // Interior run is bounded (#138) so a long quoted token stays linear.
   { name: 'concat ?key=', re: new RegExp(String.raw`(['"\`])[^'"\`\n]{0,${MAX_STR_RUN}}\?key=\1\s*\+`, 'g') },
-  { name: 'concat &key=', re: new RegExp(String.raw`(['"\`])[^'"\`\n]{0,${MAX_STR_RUN}}&(?:amp;|#(?:x0*26|0*38);)?key=\1\s*\+`, 'g') },
+  { name: 'concat &key=', re: new RegExp(String.raw`(['"\`])[^'"\`\n]{0,${MAX_STR_RUN}}&(?:${AMP_ENTITY})?key=\1\s*\+`, 'gi') },
   // `...?key=${` / `...&key=${` / `...&amp;key=${` / `...&#38;key=${`
   // Single-line &key= (base behavior) union multiline-with-opener: the
   // single-line rule catches tagged/JSX/nested/bang/export/throw forms that
-  // the opener list would miss; the multiline rule allows newlines inside a
-  // real template start without spanning past a closing backtick. Distinct
-  // names (#138) so the same hit is not reported twice under one label.
+  // the opener list would miss; the multiline rule allows a few newlines
+  // inside a real template start without spanning past a closing backtick
+  // or walking an unbounded unterminated `…` run. Distinct names (#138) so
+  // the same hit is not reported twice under one label.
   { name: 'template ?key=', re: new RegExp(String.raw`\`[^\`\n]{0,${MAX_STR_RUN}}\?key=\$\{`, 'g') },
-  { name: 'template &key= single-line', re: new RegExp(String.raw`\`[^\`\n]{0,${MAX_STR_RUN}}&(?:amp;|#(?:x0*26|0*38);)?key=\$\{`, 'g') },
+  { name: 'template &key= single-line', re: new RegExp(String.raw`\`[^\`\n]{0,${MAX_STR_RUN}}&(?:${AMP_ENTITY})?key=\$\{`, 'gi') },
   {
     name: 'template &key= multiline',
-    re: /(?:^|[=(+,[?:|&]|(?:return|await|yield)\s*|=>\s*)\s*`[^`]*&(?:amp;|#(?:x0*26|0*38);)?key=\$\{/g
+    re: new RegExp(
+      String.raw`(?:^|[=(+,[?:|&]|(?:return|await|yield)\s*|=>\s*)\s*\`(?:[^\`\n]{0,${MAX_STR_RUN}}\n){0,${MAX_TMPL_LINES}}[^\`\n]{0,${MAX_STR_RUN}}&(?:${AMP_ENTITY})?key=\$\{`,
+      'gi'
+    )
   },
   // '?' + 'key=' / "&" + "key=" (same or mixed quotes)
   { name: 'split concat key=', re: /(['"`])([?&])\1\s*\+\s*(['"`])key=\3/g },
