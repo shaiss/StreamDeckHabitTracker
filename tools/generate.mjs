@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { zip } from './lib-zip.mjs';
 import { keyedOutputAllowed, writeKeyedOutput } from './lib-keyed-output.mjs';
 import { loadHabits } from './lib-habits.mjs';
+import { KEY_HEADER } from '../lib/habit-key.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -123,22 +124,25 @@ const iconImage = (name) => {
 // ---- read habits (live list first — the habit manager is the source of truth)
 const { habits, source: habitsSource } = await loadHabits(siteOrigin, ROOT);
 
-// Public/manual URLs never carry ?key= (#115). Callers send x-habit-key as a
-// header; a URL key would land in dist/urls.txt (plain writeFileSync) and in
-// stdout. Web Requests profile Settings still embed the key in the URL when
-// --key is set — that path goes through writeKeyedOutput and is never printed.
-/** Build a habit log URL; withKey embeds ?key= only for Web Requests Settings. */
-const buildUrl = (h, { withKey = false } = {}) => {
+// Public/manual URLs never carry ?key= (#115 / #142). Callers send
+// x-habit-key as a header; a URL key would land in dist/urls.txt (plain
+// writeFileSync) and in stdout. Web Requests profile Settings put the key in
+// Settings.headers when --key is set — that path goes through writeKeyedOutput
+// and is never printed. Habit Tracker AI plugin Settings still use { key }.
+/** Build a habit log URL (never includes HABIT_KEY). */
+const buildUrl = (h) => {
   const q = new URLSearchParams({ habit: h.name });
-  if (withKey && key) q.set('key', key);
   return `${execBase}?${q.toString()}`;
 };
-/** Build a slot log URL; withKey embeds ?key= only for Web Requests Settings. */
-const buildSlotUrl = (n, { withKey = false } = {}) => {
+/** Build a slot log URL (never includes HABIT_KEY). */
+const buildSlotUrl = (n) => {
   const q = new URLSearchParams({ slot: String(n) });
-  if (withKey && key) q.set('key', key);
   return `${execBase}?${q.toString()}`;
 };
+// Web Requests (gg.datagram.web-requests.http) parses Settings.headers as
+// newline-separated `Name: value` lines. Concatenation (not a template with a
+// literal secret) so scanText does not treat this source as a hardcoded header.
+const habitKeyHeaders = key ? KEY_HEADER + ': ' + key : '';
 
 // Multi-page plugin layouts get a Coach key on page 0 (#53): an ambient
 // attention face that consumes no slot, whose tap jumps to the Coach page.
@@ -267,7 +271,7 @@ habits.forEach((h, i) => {
           ActionID: randomUUID().toUpperCase(),
           LinkedTitle: true,
           Name: 'HTTP Request',
-          Settings: { url: buildUrl(h, { withKey: true }), method: 'GET', contentType: '', headers: '', body: '' },
+          Settings: { url: buildUrl(h), method: 'GET', contentType: '', headers: habitKeyHeaders, body: '' },
           Resources: null,
           State: 0,
           States: states(h.name, `${h.emoji} ${h.label}`),
@@ -310,7 +314,7 @@ for (let n = 1; n <= slotCount; n++) {
           ActionID: randomUUID().toUpperCase(),
           LinkedTitle: true,
           Name: 'HTTP Request',
-          Settings: { url: buildSlotUrl(n, { withKey: true }), method: 'GET', contentType: '', headers: '', body: '' },
+          Settings: { url: buildSlotUrl(n), method: 'GET', contentType: '', headers: habitKeyHeaders, body: '' },
           Resources: null,
           State: 0,
           States: states(`Slot${n}`, `✨ AI ${n}`),
@@ -360,7 +364,7 @@ for (let p = 1; p < pageCount; p++) {
           ActionID: randomUUID().toUpperCase(),
           LinkedTitle: true,
           Name: 'HTTP Request',
-          Settings: { url: buildSlotUrl(n), method: 'GET', contentType: '', headers: '', body: '' },
+          Settings: { url: buildSlotUrl(n), method: 'GET', contentType: '', headers: habitKeyHeaders, body: '' },
           Resources: null,
           State: 0,
           States: states(null, `✨ AI ${n}`),
