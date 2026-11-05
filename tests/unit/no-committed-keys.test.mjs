@@ -385,19 +385,29 @@ test('URLSearchParams key init is not ReDoS on long comma lists', () => {
 
 test('findKeyLinkHandoffs stays fast on 30k+ no-whitespace lines (#138)', () => {
   // Pre-#138 keyed-url prefix was ~1.2s quadratic at 30k; budget is ≪100ms.
+  // Fixtures deliberately exercise mid-string concat interiors, unterminated
+  // templates (single + multiline opener rule), and deep *.searchParams chains.
   const long = 'a'.repeat(30000);
   const fixtures = [
     long,
     '/' + long,
     long + '.html',
     "'" + long + "'",
-    '`' + long,
-    'a.'.repeat(8000) + 'x',
+    '"' + long + AK + '" + k',           // concat &key= interior (bounded)
+    "'" + long + QK + "' + k",           // concat ?key= interior (bounded)
+    '`' + long,                          // unterminated template
+    'const u = `' + long,                // multiline-opener unterminated template
+    'a.'.repeat(8000) + 'searchParams',  // deep USP receiver chain
     '/api/log?' + 'x'.repeat(30000)
   ];
   const t0 = performance.now();
   for (const s of fixtures) {
-    assert.deepEqual(findKeyLinkHandoffs(s), [], 'false positive on long token');
+    // Long concat fixtures that embed ?key= / &key= are real hits — just
+    // assert they finish fast. Pure-noise fixtures must stay clean.
+    const hits = findKeyLinkHandoffs(s);
+    if (!s.includes(QK) && !s.includes(AK)) {
+      assert.deepEqual(hits, [], 'false positive on long token');
+    }
   }
   const ms = performance.now() - t0;
   assert.ok(ms < 100, 'long-line scan too slow: ' + ms.toFixed(1) + 'ms');
@@ -535,12 +545,19 @@ test('findKeyLinkHandoffs match snippets never echo secret values (#141)', () =>
 
 test('findKeyLinkHandoffs flags #138 forms (entities, USP inits, aliases)', () => {
   const bad = [
-    // HTML numeric entities for & (#138)
+    // HTML numeric entities for & (#138) — incl. uppercase hex / padded digits
     'href="/api/log?habit=Water&#38;' + K + '=SECRET"',
     'href="/api/log?habit=Water&#x26;' + K + '=SECRET"',
     '/api/log&#X26;' + K + '=x',
+    'href="/api/log?habit=Water&#X26;' + K + '=SECRET"',
+    'href="/api/log?habit=Water&#038;' + K + '=SECRET"',
     "const u = base + '?habit=Water&#38;" + K + "=' + secret",
+    "const u = base + '?habit=Water&#X26;" + K + "=' + secret",
     'const u = `/api/log?habit=Water&#x26;' + K + '=${k}`',
+    'const u = `/api/log?habit=Water&#X26;' + K + '=${k}`',
+    // Multiline template with entity amp (opener-restricted, bounded lines)
+    'const u = `?habit=Water\n&#38;' + K + '=${secret}`',
+    'const u = `/api/log?habit=Water\n&#X26;' + K + '=${k}`',
     // URLSearchParams array-of-pairs / string concat / template init
     "new URLSearchParams([['" + K + "', k]])",
     'new URLSearchParams([["' + K + '", secret]])',
@@ -607,12 +624,14 @@ test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {
     'new URLSearchParams({ outer: { habit: ' + K + ' } })',
     // #138 negatives for the new forms
     'mentions &#38;' + K + '= in docs without a path',
+    'mentions &#X26;' + K + '= in docs without a path',
     "URLSearchParams([['habit', k]])",
     "URLSearchParams('habit=' + k)",
     'URLSearchParams(`habit=${k}`)',
     'URLSearchParams({[`habit`]: k})',
     'params.set(`habit`, secret)',
     "const sp = url.searchParams;\nsp.get('" + K + "')",
+    "const sp = url.searchParams;\nsp.has('" + K + "')",
     // Template &key= must not span past a closing backtick into later prose
     'const a = `?habit=Water`;\nconst b = x; // ' + AK + '${nope} outside template',
     // USP object-init must not span into a later statement's `{ key }`
@@ -644,17 +663,27 @@ test('no docs or UI hand out URL-key links', () => {
   // Recurse under public/** (#121/#138) — top-level globs alone miss nested UI.
   // Prefer pathspec magic so both public/foo.js and public/a/b/c.js are listed.
   // #138 also covers .css / .mjs / .json / .svg under public/.
+  const pathspecs = [
+    '*.md',
+    ':(glob)public/**/*.html',
+    ':(glob)public/**/*.js',
+    ':(glob)public/**/*.mjs',
+    ':(glob)public/**/*.css',
+    ':(glob)public/**/*.json',
+    ':(glob)public/**/*.svg',
+    ':(glob)public/**/*.ps1'
+  ];
+  // Drift guard: the #138 extensions must stay in the handoff scan even when
+  // the tree currently has no matching files (only theme.css today).
+  for (const ext of ['.mjs', '.css', '.json', '.svg']) {
+    assert.ok(
+      pathspecs.some((p) => p.endsWith('*' + ext)),
+      'handoff scan missing public/**/*' + ext + ' pathspec (#138)'
+    );
+  }
   const listed = execFileSync(
     'git',
-    ['ls-files', '-z', '--',
-      '*.md',
-      ':(glob)public/**/*.html',
-      ':(glob)public/**/*.js',
-      ':(glob)public/**/*.mjs',
-      ':(glob)public/**/*.css',
-      ':(glob)public/**/*.json',
-      ':(glob)public/**/*.svg',
-      ':(glob)public/**/*.ps1'],
+    ['ls-files', '-z', '--', ...pathspecs],
     { cwd: ROOT }
   ).toString().split('\0').filter((f) => f && !f.startsWith('docs/superpowers/'));
   assert.ok(
