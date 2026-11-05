@@ -742,6 +742,7 @@ test('generate --key runtime keeps key out of urls.txt and stdout', () => {
       '--' + K + '=' + fakeKey,
       '--static',
       '--slots=1',
+      '--pages=2',
       '--no-dashboard',
       '--model=mini'
     ], { cwd: ROOT, encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -753,10 +754,9 @@ test('generate --key runtime keeps key out of urls.txt and stdout', () => {
     assert.ok(!urls.includes(AK), 'urls.txt contains ' + AK);
     assert.ok(!urls.includes(fakeKey), 'urls.txt leaks --key value');
     // Profile must put --key into every Web Requests Settings.headers as
-    // x-habit-key, never into Settings.url (#142). Without this, a regression
-    // that drops the header (or puts the key back on the URL) would pass the
-    // stdout/urls.txt checks above. This test stays on --pages=1 so coach-page
-    // actions are not in the zip.
+    // x-habit-key, never into Settings.url (#142). --pages=2 exercises the
+    // coach-page loop in generate.mjs so a regression that only drops
+    // headers: habitKeyHeaders there cannot slip past the zip walk below.
     assert.ok(existsSync(profilePath), 'keyed profile was not written');
     const entries = unzipEntries(readFileSync(profilePath));
     const httpActions = [];
@@ -773,6 +773,16 @@ test('generate --key runtime keeps key out of urls.txt and stdout', () => {
     }
     assert.ok(httpActions.length > 0,
       'no gg.datagram.web-requests.http Settings in keyed profile');
+    // Coach pages number slots from 5 (#52); at least one such action must
+    // appear so the header assertions below cover that branch.
+    const coachPageActions = httpActions.filter((s) => {
+      try {
+        const slot = Number(new URL(s.url).searchParams.get('slot'));
+        return Number.isFinite(slot) && slot >= 5;
+      } catch { return false; }
+    });
+    assert.ok(coachPageActions.length > 0,
+      'keyed --pages=2 profile has no coach-page (slot>=5) Web Requests actions');
     const expectHeader = 'x-habit-' + K + ': ' + fakeKey;
     for (const s of httpActions) {
       assert.equal(typeof s.url, 'string', 'Web Requests Settings.url missing');
