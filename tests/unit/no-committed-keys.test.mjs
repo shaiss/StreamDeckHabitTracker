@@ -631,13 +631,26 @@ test('findKeyLinkHandoffs allows bare mentions and unrelated words', () => {
 
 test('isAllowedKeyLink requires exact repo-relative path (#138)', () => {
   const hit = { rule: 'searchParams.set key', match: "q.set('key', key)" };
-  assert.equal(isAllowedKeyLink('tools/generate.mjs', hit), true);
-  assert.equal(isAllowedKeyLink('./tools/generate.mjs', hit), true);
-  // Suffix match would wrongly allow a nested public copy under the
-  // public/**/*.mjs handoff scan — exact path only.
-  assert.equal(isAllowedKeyLink('public/tools/generate.mjs', hit), false);
-  assert.equal(isAllowedKeyLink('other/tools/generate.mjs', hit), false);
-  assert.equal(isAllowedKeyLink('tools/generate.mjs.bak', hit), false);
+  // #142 cleared the generate.mjs stopgap — allowlist starts empty.
+  assert.equal(KEY_LINK_ALLOWLIST.length, 0);
+  assert.equal(isAllowedKeyLink('tools/generate.mjs', hit), false);
+  // Exercise matcher with a temporary entry so path rules stay tested.
+  KEY_LINK_ALLOWLIST.push({
+    file: 'tools/generate.mjs',
+    rule: 'searchParams.set key',
+    match: "q.set('key',"
+  });
+  try {
+    assert.equal(isAllowedKeyLink('tools/generate.mjs', hit), true);
+    assert.equal(isAllowedKeyLink('./tools/generate.mjs', hit), true);
+    // Suffix match would wrongly allow a nested public copy under the
+    // public/**/*.mjs handoff scan — exact path only.
+    assert.equal(isAllowedKeyLink('public/tools/generate.mjs', hit), false);
+    assert.equal(isAllowedKeyLink('other/tools/generate.mjs', hit), false);
+    assert.equal(isAllowedKeyLink('tools/generate.mjs.bak', hit), false);
+  } finally {
+    KEY_LINK_ALLOWLIST.length = 0;
+  }
 });
 
 test('no docs or UI hand out URL-key links', () => {
@@ -675,47 +688,41 @@ test('no docs or UI hand out URL-key links', () => {
   }
 });
 
-test('generate.mjs withKey q.set is allowlisted as #138 open decision', () => {
-  // Do not change tools/generate.mjs here — Web Requests withKey still embeds
-  // ?key= via q.set('key', key). Exact-path allowlist is a stopgap (#138/#141);
-  // keep it narrow: exactly the two source lines that call q.set('key', …).
-  assert.ok(KEY_LINK_ALLOWLIST.some((a) => a.file === 'tools/generate.mjs'));
+test('generate.mjs has zero key-link handoffs (#142)', () => {
+  // Web Requests Settings carry HABIT_KEY in Settings.headers (x-habit-key);
+  // URLs from buildUrl/buildSlotUrl never q.set the key. Allowlist entry gone.
+  assert.equal(KEY_LINK_ALLOWLIST.length, 0,
+    'KEY_LINK_ALLOWLIST must stay empty after #142 (got ' +
+      JSON.stringify(KEY_LINK_ALLOWLIST) + ')');
   const src = readFileSync(join(ROOT, 'tools/generate.mjs'), 'utf8');
-  const hits = findKeyLinkHandoffs(src);
-  assert.equal(hits.length, 2, 'expected exactly 2 handoffs in generate.mjs, got ' +
-    JSON.stringify(hits));
-  const lines = hits.map((h) => h.line).sort((a, b) => a - b);
-  assert.deepEqual(lines, [133, 139],
-    'expected q.set handoffs on generate.mjs lines 133 and 139, got ' + JSON.stringify(hits));
-  for (const h of hits) {
-    assert.equal(h.rule, 'searchParams.set key');
-    assert.equal(isAllowedKeyLink('tools/generate.mjs', h), true,
-      'unallowlisted handoff in generate.mjs: ' + JSON.stringify(h));
-  }
-  // Drift guard: a new non-allowlisted form in generate.mjs must fail this test.
+  assert.deepEqual(findKeyLinkHandoffs(src), [],
+    'generate.mjs must have zero findKeyLinkHandoffs hits');
+  assert.doesNotMatch(src, /q\.set\(\s*['"]key['"]/);
+  assert.doesNotMatch(src, /\bwithKey\b/);
+  // Drift guard: a smuggled writer must still surface (empty allowlist).
   const smuggled = src + '\nparams.set("' + K + '", leaked);\n';
-  const extra = findKeyLinkHandoffs(smuggled).filter((h) => !isAllowedKeyLink('tools/generate.mjs', h));
-  assert.ok(extra.length > 0, 'allowlist must not swallow unrelated writers');
+  assert.ok(findKeyLinkHandoffs(smuggled).length > 0,
+    'scanner must still catch a smuggled params.set("key", …)');
 });
 
 test('generate --key keeps ?key= out of urls.txt and stdout', () => {
-  // Source-level guard: public/manual URL builders default to withKey:false,
-  // and only Web Requests profile Settings opt into withKey:true (those bytes
-  // go through writeKeyedOutput; they are never printed).
+  // Source-level guard (#142): URL builders never take withKey / never q.set
+  // key. Web Requests Settings use habitKeyHeaders (x-habit-key) instead;
+  // those bytes go through writeKeyedOutput and are never printed.
   const src = readFileSync(join(ROOT, 'tools/generate.mjs'), 'utf8');
-  assert.match(src, /withKey\s*=\s*false/);
-  assert.match(src, /buildUrl\(h,\s*\{\s*withKey:\s*true\s*\}\)/);
-  assert.match(src, /buildSlotUrl\(n,\s*\{\s*withKey:\s*true\s*\}\)/);
-  // reportRows / urls.txt use the unkeyed form (no second arg).
+  assert.doesNotMatch(src, /\bwithKey\b/);
+  assert.doesNotMatch(src, /q\.set\(\s*['"]key['"]/);
+  assert.match(src, /habitKeyHeaders/);
+  assert.match(src, /KEY_HEADER\s*\+\s*': '\s*\+\s*key/);
+  assert.match(src, /headers:\s*habitKeyHeaders/);
+  // reportRows / urls.txt / stdout use the unkeyed builders.
   assert.match(src, /buildUrl\(h\)\}/);
   assert.match(src, /buildSlotUrl\(i \+ 1\)\}/);
-  // Stdout report must use the same unkeyed builders (reportRows / buildSlotUrl
-  // without withKey), never a raw q.set('key') beside the console.log loop.
   const reportAt = src.indexOf('// ---- report');
   assert.ok(reportAt >= 0, 'report marker missing in tools/generate.mjs');
   const report = src.slice(reportAt);
-  assert.doesNotMatch(report, /withKey:\s*true/);
   assert.doesNotMatch(report, /\.set\(\s*['"]key['"]/);
+  assert.doesNotMatch(report, /habitKeyHeaders/);
 });
 
 test('generate --key runtime keeps key out of urls.txt and stdout', () => {
@@ -745,19 +752,18 @@ test('generate --key runtime keeps key out of urls.txt and stdout', () => {
     assert.ok(!urls.includes(QK), 'urls.txt contains ' + QK);
     assert.ok(!urls.includes(AK), 'urls.txt contains ' + AK);
     assert.ok(!urls.includes(fakeKey), 'urls.txt leaks --key value');
-    // Profile must still embed --key into every Web Requests Settings.url (the
-    // only path that opts into withKey:true). Without this, a regression that
-    // drops the key from some/all zip actions would pass the stdout/urls.txt
-    // checks above. Front-page habit + slot actions all use withKey:true; this
-    // test stays on --pages=1 so coach-page actions are not in the zip.
+    // Profile must put --key into every Web Requests Settings.headers as
+    // x-habit-key, never into Settings.url (#142). Without this, a regression
+    // that drops the header (or puts the key back on the URL) would pass the
+    // stdout/urls.txt checks above. This test stays on --pages=1 so coach-page
+    // actions are not in the zip.
     assert.ok(existsSync(profilePath), 'keyed profile was not written');
     const entries = unzipEntries(readFileSync(profilePath));
-    const httpUrls = [];
+    const httpActions = [];
     const walk = (o) => {
       if (!o || typeof o !== 'object') return;
-      if (o.UUID === 'gg.datagram.web-requests.http' &&
-          o.Settings && typeof o.Settings.url === 'string') {
-        httpUrls.push(o.Settings.url);
+      if (o.UUID === 'gg.datagram.web-requests.http' && o.Settings) {
+        httpActions.push(o.Settings);
       }
       for (const v of Object.values(o)) walk(v);
     };
@@ -765,13 +771,17 @@ test('generate --key runtime keeps key out of urls.txt and stdout', () => {
       if (!e.name.endsWith('manifest.json')) continue;
       walk(JSON.parse(e.data.toString('utf8')));
     }
-    assert.ok(httpUrls.length > 0,
-      'no gg.datagram.web-requests.http Settings.url in keyed profile');
-    for (const url of httpUrls) {
+    assert.ok(httpActions.length > 0,
+      'no gg.datagram.web-requests.http Settings in keyed profile');
+    const expectHeader = 'x-habit-' + K + ': ' + fakeKey;
+    for (const s of httpActions) {
+      assert.equal(typeof s.url, 'string', 'Web Requests Settings.url missing');
       let param;
-      try { param = new URL(url).searchParams.get(K); } catch { param = null; }
-      assert.equal(param, fakeKey,
-        'gg.datagram.web-requests.http Settings.url missing --key value: ' + url);
+      try { param = new URL(s.url).searchParams.get(K); } catch { param = null; }
+      assert.equal(param, null,
+        'gg.datagram.web-requests.http Settings.url must not carry --key: ' + s.url);
+      assert.equal(s.headers, expectHeader,
+        'gg.datagram.web-requests.http Settings.headers missing x-habit-key');
     }
   } finally {
     if (prevUrls) writeFileSync(urlsPath, prevUrls);
