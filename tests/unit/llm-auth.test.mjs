@@ -298,6 +298,8 @@ test('frontend write gates accept HabitKey without Clerk', () => {
   const auth = readFileSync(join(root, 'public/auth.js'), 'utf8');
   assert.match(auth, /Clerk failed to load|Sign-in is unavailable/);
   assert.match(auth, /onReady/);
+  assert.match(auth, /onAuthChange/);
+  assert.match(auth, /clerk\.addListener/);
   const index = readFileSync(join(root, 'public/index.js'), 'utf8');
   assert.match(index, /await window\.HabitAuth\.init\(\)/);
   assert.match(index, /Revoke failed|Token revoked/);
@@ -313,4 +315,22 @@ test('frontend write gates accept HabitKey without Clerk', () => {
     'suggest() and saveProfile must both skip ensureSignedIn when HabitKey.get() is set');
   const habitKey = readFileSync(join(root, 'public/habit-key.js'), 'utf8');
   assert.match(habitKey, /isSignedIn/);
+});
+
+test('mind page: Clerk retry checks r2.ok and reloads on auth change', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
+  const mind = readFileSync(join(root, 'public/mind.js'), 'utf8');
+  // Revoked ht_ → clear + Clerk-only retry (same gate as deck.js).
+  assert.match(mind, /authRequired\s*&&\s*m\.configured\s*!==\s*false/);
+  assert.match(mind, /HabitKey\.clear\(\)/);
+  assert.match(mind, /HabitAuth\.authFetch\('\/api\/mind'\)/);
+  // Non-OK retry bodies must not render as mind data.
+  assert.match(mind, /if\s*\(\s*!r2\.ok\s*\)\s*throw/);
+  // Fetch/render is reusable and re-runs when signed-in state changes.
+  assert.match(mind, /function loadMind\s*\(/);
+  assert.match(mind, /function renderMind\s*\(/);
+  assert.match(mind, /HabitAuth\.onAuthChange/);
+  assert.match(mind, /loadMind\(\)/);
+  // Signed-out short-circuit stays.
+  assert.match(mind, /Sign in to see what the coach has learned/);
 });

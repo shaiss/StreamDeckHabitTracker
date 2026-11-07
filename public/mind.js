@@ -18,21 +18,7 @@ import { esc } from '/escape.js';
           ? window.HabitAuth.authFetch(url, opts)
           : fetch(url, opts);
 
-    // HabitKey.fetch adds x-habit-key and layers HabitAuth Bearer when present.
-    // A revoked ht_ is rejected without Clerk fallthrough, and /api/mind still
-    // answers 200 with authRequired — clear the dead key and retry Clerk-only.
-    apiFetch('/api/mind').then(r=>r.json()).then(async (m) => {
-      const signedIn = window.HabitAuth && typeof window.HabitAuth.isSignedIn === 'function'
-        && window.HabitAuth.isSignedIn();
-      // Only clear a stored key when storage is configured — an unconfigured
-      // public fallback also sets authRequired, which is not a revoked key.
-      if (m && m.authRequired && m.configured !== false && signedIn && window.HabitKey && window.HabitKey.get()) {
-        window.HabitKey.clear();
-        const r2 = await window.HabitAuth.authFetch('/api/mind');
-        m = await r2.json();
-      }
-      return m;
-    }).then(m => {
+    function renderMind(m) {
       if (!m.configured) { document.getElementById('tagline').textContent = 'Storage not connected yet.'; return; }
       if (m.authRequired) {
         document.getElementById('tagline').textContent = 'Sign in to see what the coach has learned.';
@@ -80,7 +66,32 @@ import { esc } from '/escape.js';
         document.getElementById('reflect').innerHTML =
           `<div class="note"><div class="d">${esc(m.insight.date||'')}</div>${esc(m.insight.text)}</div>`;
       }
-    }).catch(() => {
-      document.getElementById('tagline').textContent = 'Couldn’t reach the coach — refresh to retry.';
-    });
+    }
+
+    // HabitKey.fetch adds x-habit-key and layers HabitAuth Bearer when present.
+    // A revoked ht_ is rejected without Clerk fallthrough, and /api/mind still
+    // answers 200 with authRequired — clear the dead key and retry Clerk-only.
+    function loadMind() {
+      return apiFetch('/api/mind').then(r=>r.json()).then(async (m) => {
+        const signedIn = window.HabitAuth && typeof window.HabitAuth.isSignedIn === 'function'
+          && window.HabitAuth.isSignedIn();
+        // Only clear a stored key when storage is configured — an unconfigured
+        // public fallback also sets authRequired, which is not a revoked key.
+        if (m && m.authRequired && m.configured !== false && signedIn && window.HabitKey && window.HabitKey.get()) {
+          window.HabitKey.clear();
+          const r2 = await window.HabitAuth.authFetch('/api/mind');
+          if (!r2.ok) throw new Error('HTTP ' + r2.status);
+          m = await r2.json();
+        }
+        return m;
+      }).then(renderMind).catch(() => {
+        document.getElementById('tagline').textContent = 'Couldn’t reach the coach — refresh to retry.';
+      });
+    }
+
+    loadMind();
+    // Re-fetch when Clerk session changes (sign-in after the first paint).
+    if (window.HabitAuth && typeof window.HabitAuth.onAuthChange === 'function') {
+      window.HabitAuth.onAuthChange(() => { loadMind(); });
+    }
   

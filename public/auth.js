@@ -13,6 +13,8 @@
   let signInHost = null;
   let initError = null;
   const readyListeners = [];
+  const authChangeListeners = [];
+  let clerkAuthBound = false;
 
   function ensureHost() {
     if (signInHost) return signInHost;
@@ -146,6 +148,36 @@
     };
   }
 
+  function notifyAuthChange() {
+    for (const fn of authChangeListeners.slice()) {
+      try { fn(); } catch { /* listener errors must not break auth */ }
+    }
+  }
+
+  /** Bind once to Clerk session/user changes (same path mountNavChip uses). */
+  function bindClerkAuthListener() {
+    if (!clerk || clerkAuthBound) return;
+    clerkAuthBound = true;
+    clerk.addListener(() => {
+      notifyAuthChange();
+    });
+  }
+
+  /**
+   * Register a callback when signed-in state may have changed.
+   * Uses Clerk's addListener (fires with current state on attach, then on
+   * sign-in/out). No-op under __HABIT_AUTH_MOCK__ (no live Clerk session).
+   */
+  function onAuthChange(fn) {
+    if (typeof fn !== 'function') return () => {};
+    authChangeListeners.push(fn);
+    bindClerkAuthListener();
+    return () => {
+      const i = authChangeListeners.indexOf(fn);
+      if (i >= 0) authChangeListeners.splice(i, 1);
+    };
+  }
+
   async function init() {
     if (readyPromise) return readyPromise;
     readyPromise = (async () => {
@@ -162,6 +194,7 @@
         }
         await loadClerk(cfg.publishableKey);
         initError = null;
+        bindClerkAuthListener();
         notifyReady();
         mountNavChip();
       } catch (err) {
@@ -245,6 +278,7 @@
   const api = {
     init,
     onReady,
+    onAuthChange,
     isSignedIn,
     getToken,
     ensureSignedIn,
