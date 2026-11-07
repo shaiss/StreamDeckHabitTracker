@@ -9,10 +9,14 @@ import { esc } from '/escape.js';
       let hue = h % 320; if (hue >= 245) hue += 40; return hue;
     }
 
+    // Prefer HabitKey.fetch so a stored ht_/HABIT_KEY is sent even when the
+    // viewer is signed out of Clerk (HabitAuth.authFetch alone omits it).
     const apiFetch = (url, opts) =>
-      (window.HabitAuth && window.HabitAuth.authFetch)
-        ? window.HabitAuth.authFetch(url, opts)
-        : fetch(url, opts);
+      window.HabitKey
+        ? window.HabitKey.fetch(url, opts)
+        : (window.HabitAuth && window.HabitAuth.authFetch)
+          ? window.HabitAuth.authFetch(url, opts)
+          : fetch(url, opts);
 
     apiFetch('/api/mind').then(r=>r.json()).then(m => {
       if (!m.configured) { document.getElementById('tagline').textContent = 'Storage not connected yet.'; return; }
