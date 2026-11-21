@@ -356,8 +356,8 @@ const KEY_LINK_RULES = [
   { name: 'split concat key=', re: /(['"`])([?&])\1\s*\+\s*(['"`])key=\3/g },
   // URLSearchParams writers (#121/#138). Receivers constrained so
   // Map/localStorage/etc. .set('key', …) is not flagged; template-literal
-  // names (`key`) match too. generate.mjs-style `q.set('key', …)` still hits
-  // (allowlisted for that file — see KEY_LINK_ALLOWLIST).
+  // names (`key`) match too. generate.mjs no longer calls q.set('key', …)
+  // (#142); KEY_LINK_ALLOWLIST stays for any future documented exception.
   { name: 'searchParams.set key', re: new RegExp(String.raw`\b${USP_WRITER_RECEIVER}\s*\.\s*set\s*\(\s*${KEY_NAME_LIT}\s*,`, 'g') },
   { name: 'searchParams.append key', re: new RegExp(String.raw`\b${USP_WRITER_RECEIVER}\s*\.\s*append\s*\(\s*${KEY_NAME_LIT}\s*,`, 'g') },
   // Array-of-pairs: URLSearchParams([['key', k]])
@@ -433,14 +433,13 @@ function findUrlSearchParamsKeyInits(text) {
 }
 
 /**
- * #138 open decision: tools/generate.mjs still embeds ?key= into Web Requests
- * Settings via `q.set('key', key)` when --key / withKey is set. Do not move
- * that to a header in this change — filter those hits when scanning that file.
- * Match is the stable snippet findKeyLinkHandoffs reports (slice 0..96).
+ * Exact-path exceptions for findKeyLinkHandoffs (repo-relative file + rule +
+ * match prefix). Empty after #142: generate.mjs no longer embeds ?key= into
+ * Web Requests Settings (key goes in Settings.headers as x-habit-key). Keep
+ * the export and isAllowedKeyLink so a future intentional exception can be
+ * documented here without reinventing the filter.
  */
-export const KEY_LINK_ALLOWLIST = [
-  { file: 'tools/generate.mjs', rule: 'searchParams.set key', match: "q.set('key'," }
-];
+export const KEY_LINK_ALLOWLIST = [];
 
 /** True when a handoff hit is an intentional, documented exception (#138). */
 export function isAllowedKeyLink(file, hit) {
