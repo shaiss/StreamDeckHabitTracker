@@ -2,18 +2,51 @@ import { esc } from '/escape.js';
     const rowsEl = document.getElementById('rows');
     const statusEl = document.getElementById('status');
 
+    function goalBits(h) {
+      const g = h && h.goal;
+      if (g != null && typeof g === 'object') {
+        return {
+          target: g.target != null ? String(g.target) : '',
+          setBy: g.setBy === 'coach' ? 'coach' : 'human',
+          reason: g.reason || '',
+          updatedAt: g.updatedAt || 0,
+          floor: g.floor != null ? String(g.floor) : '',
+          ceil: g.ceil != null ? String(g.ceil) : ''
+        };
+      }
+      return {
+        target: g ? String(g) : '',
+        setBy: 'human',
+        reason: '',
+        updatedAt: 0,
+        floor: '',
+        ceil: ''
+      };
+    }
+
     function rowHtml(h, isNew) {
       const origin = h.origin === 'coach' ? 'coach' : 'human';
+      const g = goalBits(h);
       const chip = origin === 'coach'
         ? '<span class="chip coach" title="Invented by the AI coach, promoted by you">COACH</span>'
         : '<span class="chip quiet human" title="Created by you">HUMAN</span>';
-      return `<div class="card hrow" data-new="${isNew ? 1 : 0}" data-origin="${origin}">
+      const meta = g.setBy === 'coach' && g.reason
+        ? `<div class="goal-meta">coach · ${esc(g.reason)}</div>`
+        : (g.setBy === 'coach' ? '<div class="goal-meta">coach-set target</div>' : '');
+      return `<div class="card hrow" data-new="${isNew ? 1 : 0}" data-origin="${origin}" data-goal-setby="${esc(g.setBy)}" data-goal-target="${esc(g.target)}" data-goal-updated="${esc(String(g.updatedAt||0))}" data-goal-reason="${esc(g.reason)}">
         <input class="field emoji" value="${esc(h.emoji||'')}" maxlength="8" placeholder="🙂">
         <input class="field label" value="${esc(h.label||'')}" maxlength="12" placeholder="Label">
         <input class="field name" value="${esc(h.name||'')}" maxlength="20" placeholder="OneWordId" ${isNew ? '' : 'readonly title="Ids are locked to keep history consistent — delete and re-add to rename."'}>
-        <input class="field goal" type="number" min="1" max="99" value="${h.goal ? esc(String(h.goal)) : ''}" placeholder="1" title="Daily goal (default 1). 2+ makes the key show count dots and a progress ring.">
+        <div class="goal-cell">
+          <input class="field goal" type="number" min="1" max="99" value="${esc(g.target)}" placeholder="1" title="Daily goal (default 1). 2+ makes the key show count dots and a progress ring.">
+          <div class="pins">
+            <input class="field floor" type="number" min="1" max="99" value="${esc(g.floor)}" placeholder="⌊" title="Floor — the coach may never set the target below this.">
+            <input class="field ceil" type="number" min="1" max="99" value="${esc(g.ceil)}" placeholder="⌈" title="Ceil — the coach may never set the target above this.">
+          </div>
+        </div>
         ${chip}
         <button class="del" title="Remove">✕</button>
+        ${meta}
       </div>`;
     }
 
@@ -76,34 +109,64 @@ import { esc } from '/escape.js';
 
       document.querySelectorAll('.decide').forEach(b => b.addEventListener('click', () => {
         if (b.dataset.decision === 'approve' && b.dataset.kind === 'retire') {
-          armThenFire(b, { idleText: '✓ Retire it', onCommit: () => decide({ id: b.dataset.id, decision: b.dataset.decision }) });
+          armThenFire(b, { idleText: '✓ Retire it', onCommit: () => decide('/api/roster', { id: b.dataset.id, decision: b.dataset.decision }) });
           return;
         }
-        decide({ id: b.dataset.id, decision: b.dataset.decision });
+        decide('/api/roster', { id: b.dataset.id, decision: b.dataset.decision });
       }));
       document.querySelectorAll('.restore').forEach(b => b.addEventListener('click', () =>
-        decide({ restore: b.dataset.name })));
+        decide('/api/roster', { restore: b.dataset.name })));
     }
 
-    function decided(a) {
+    // Ramp-up proposals (#70): higher targets wait for approve/dismiss.
+    function renderTargets(t) {
+      const props = (t && t.proposals) || [];
+      document.getElementById('targetPropSect').hidden = !props.length;
+      document.getElementById('targetPropRows').innerHTML = props.map(p => `
+        <div class="card prow tprow">
+          <span class="em">${esc(p.emoji || '✨')}</span>
+          <span>
+            <span class="chip coach kind">RAISE</span>
+            <span class="nm">${esc(p.label || p.name)}</span>
+            <span class="meta">· ${esc(p.from)}→${esc(p.to)}/day</span>
+            ${p.reason ? `<div class="why">${esc(p.reason)}</div>` : ''}
+          </span>
+          <span class="pbtns">
+            <button class="btn tdecide" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-decision="approve">✓ Raise it</button>
+            <button class="btn ghost tdecide" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-decision="dismiss">Dismiss</button>
+          </span>
+        </div>`).join('');
+      document.querySelectorAll('.tdecide').forEach(b => b.addEventListener('click', () =>
+        decide('/api/targets', { id: b.dataset.id, decision: b.dataset.decision }, 'target')));
+    }
+
+    function decided(a, kind) {
       if (!a) return 'Done.';
+      if (kind === 'target') {
+        if (a.status === 'dismissed') return `Dismissed — the coach won’t ask to raise ${a.name} to ${a.to} again.`;
+        if (a.status === 'stale') return `${a.name}'s target is already at ${a.from} — that raise no longer applies.`;
+        return `Raised ${a.label || a.name} ${a.from}→${a.to}/day.`;
+      }
       if (a.status === 'restored') return `${a.label} is back on your roster.`;
       if (a.status === 'dismissed') return `Dismissed — the coach won’t ask about ${a.name} again.`;
       if (a.kind === 'retire') return `${a.label} retired — it’s under Retired below, and its history is untouched.`;
       return `${a.label} is a fixed key now — re-import your deck profile to give it a physical key.`;
     }
 
-    function decide(payload) {
-      document.querySelectorAll('.decide, .restore').forEach(b => { b.disabled = true; });
+    function decide(url, payload, kind) {
+      document.querySelectorAll('.decide, .restore, .tdecide').forEach(b => { b.disabled = true; });
       statusEl.className = 'status'; statusEl.textContent = 'Working…';
-      // window.HabitKey.postJson sends x-habit-key (asks once on 401). #93's
-      // /api/targets decide() should use the same call.
-      return window.HabitKey.postJson('/api/roster', payload).then(r=>r.json()).then(j =>
+      // window.HabitKey.postJson sends x-habit-key (asks once on 401). Literal
+      // paths (not `postJson(url, …)`) so the habit-key unit scan can see them.
+      const post = url === '/api/targets'
+        ? window.HabitKey.postJson('/api/targets', payload)
+        : window.HabitKey.postJson('/api/roster', payload);
+      return post.then(r=>r.json()).then(j =>
         // Re-read first, then report: the status line must never announce a
         // change the lists above it haven't caught up to yet.
         load(true).then(() => {
           if (!j.ok) { statusEl.className = 'status err'; statusEl.textContent = j.error || 'Failed.'; }
-          else { statusEl.textContent = decided(j.applied); }
+          else { statusEl.textContent = decided(j.applied, kind); }
         })
       ).catch(e => load(true).then(() => {
         statusEl.className = 'status err'; statusEl.textContent = 'Failed: ' + e.message;
@@ -147,12 +210,14 @@ import { esc } from '/escape.js';
     function load(keepStatus) {
       return Promise.all([
         fetch('/api/habits').then(r=>r.json()),
-        fetch('/api/roster').then(r=>r.json()).catch(() => ({}))
-      ]).then(([j, r]) => {
+        fetch('/api/roster').then(r=>r.json()).catch(() => ({})),
+        fetch('/api/targets').then(r=>r.json()).catch(() => ({}))
+      ]).then(([j, r, t]) => {
         rowsEl.innerHTML = (j.habits||[]).map(h => rowHtml(h, false)).join('');
         rowsEl.querySelectorAll('.hrow').forEach(wireRow);
         renderCoach(j.coachHabits);
         renderRoster(r);
+        renderTargets(t);
       }).catch(() => {
         if (!keepStatus) statusEl.textContent = 'Couldn’t load habits.';
       });
@@ -168,12 +233,37 @@ import { esc } from '/escape.js';
     document.getElementById('saveBtn').addEventListener('click', () => {
       const habits = [...rowsEl.querySelectorAll('.hrow')].map(el => {
         const g = parseInt(el.querySelector('.goal').value, 10);
+        const floor = parseInt(el.querySelector('.floor').value, 10);
+        const ceil = parseInt(el.querySelector('.ceil').value, 10);
+        const hasPins = (Number.isInteger(floor) && floor >= 1 && floor <= 99)
+          || (Number.isInteger(ceil) && ceil >= 1 && ceil <= 99);
+        const prevSetBy = el.dataset.goalSetby === 'coach' ? 'coach' : 'human';
+        const prevTarget = parseInt(el.dataset.goalTarget || '', 10);
+        // Editing the number (or first setting pins) is a human write; leaving
+        // a coach-set target untouched keeps the coach reason/metadata.
+        const targetChanged = Number.isInteger(g) && Number.isInteger(prevTarget) && g !== prevTarget;
+        const keepCoach = prevSetBy === 'coach' && !targetChanged && Number.isInteger(g);
+        let goal;
+        if (Number.isInteger(g) && g >= 1 && g <= 99) {
+          if (keepCoach || hasPins) {
+            goal = {
+              target: g,
+              setBy: keepCoach ? 'coach' : 'human',
+              ...(keepCoach && el.dataset.goalReason ? { reason: el.dataset.goalReason } : {}),
+              ...(keepCoach && el.dataset.goalUpdated ? { updatedAt: Number(el.dataset.goalUpdated) || undefined } : {}),
+              ...(Number.isInteger(floor) && floor >= 1 && floor <= 99 ? { floor } : {}),
+              ...(Number.isInteger(ceil) && ceil >= 1 && ceil <= 99 ? { ceil } : {})
+            };
+          } else {
+            goal = g;
+          }
+        }
         return {
           emoji: el.querySelector('.emoji').value.trim(),
           label: el.querySelector('.label').value.trim(),
           name: el.querySelector('.name').value.trim(),
           origin: el.dataset.origin === 'coach' ? 'coach' : 'human',
-          ...(Number.isInteger(g) && g >= 1 && g <= 99 ? { goal: g } : {})
+          ...(goal !== undefined ? { goal } : {})
         };
       });
       const seen = new Set();
@@ -195,4 +285,3 @@ import { esc } from '/escape.js';
         else { statusEl.className = 'status err'; statusEl.textContent = j.error || 'Save failed.'; }
       }).catch(e => { statusEl.className = 'status err'; statusEl.textContent = 'Save failed: ' + e.message; });
     });
-  

@@ -49,7 +49,7 @@ test('redactKey strips key material from loggable strings', () => {
 test('every gated route uses keyOk — no raw ?key= compares left', () => {
   const files = [...readdirSync(join(ROOT, 'api')).filter((f) => f.endsWith('.js')).map((f) => 'api/' + f),
     'api/cron/morning.js'];
-  const gated = ['log', 'habits', 'roster', 'profile', 'suggest', 'nudge', 'question', 'slots', 'coachpage',
+  const gated = ['log', 'habits', 'roster', 'targets', 'profile', 'suggest', 'nudge', 'question', 'slots', 'coachpage',
     'experiment', 'cron/morning'].map((n) => 'api/' + n + '.js');
   for (const f of files) {
     const src = read(f);

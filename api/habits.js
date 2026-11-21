@@ -3,10 +3,11 @@
 // The live habit list backing the API, coach, and virtual deck. Physical deck
 // keys are baked into imported profiles — regenerate them after edits.
 // HABIT_KEY (if set) gates writes via x-habit-key, ?key=, or body.key (lib/habit-key.js).
-import { isConfigured, getSlots, getSlotHistory, all } from '../lib/store.js';
+import { isConfigured, getSlots, getSlotHistory, all, withTargetsLock } from '../lib/store.js';
 import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
 import { scoreSuggestions } from '../lib/scorer.js';
 import { keyOk } from '../lib/habit-key.js';
+import { targetsHttpError } from '../lib/target.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -77,7 +78,20 @@ export default async function handler(req, res) {
       res.status(400).json({ error: err });
       return;
     }
-    const habits = await saveHabits(body.habits);
+    // Same lock as commitTargetPass / POST /api/targets — saveHabits writes a
+    // full habits:config snapshot; without the lock a concurrent target-pass
+    // MSET can silently overwrite this save (or vice versa).
+    let habits;
+    try {
+      habits = await withTargetsLock(() => saveHabits(body.habits));
+    } catch (lockErr) {
+      const mapped = targetsHttpError(lockErr);
+      if (mapped.status === 409) {
+        res.status(409).json({ error: mapped.error });
+        return;
+      }
+      throw lockErr;
+    }
     res.status(200).json({ ok: true, habits });
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
