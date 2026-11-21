@@ -690,7 +690,7 @@ test('no docs or UI hand out URL-key links', () => {
   // the tree currently has no matching files (only theme.css today).
   for (const ext of ['.mjs', '.css', '.json', '.svg']) {
     assert.ok(
-      pathspecs.some((p) => p.endsWith('*' + ext)),
+      pathspecs.includes(':(glob)public/**/*' + ext),
       'handoff scan missing public/**/*' + ext + ' pathspec (#138)'
     );
   }
