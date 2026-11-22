@@ -119,10 +119,13 @@ function fireDomContentLoaded(listeners) {
 }
 
 test('a page without habit-key.js drops the handoff after DOMContentLoaded', () => {
-  const { win, replaced, listeners } = blockedWindow('https://h.test/mind.html?key=' + S + '#top');
+  // key-language.html is a docs page that strips ?key= but never loads habit-key.js.
+  const { win, replaced, listeners } = blockedWindow(
+    'https://h.test/design/ai-human-bridge/key-language.html?key=' + S + '#top'
+  );
   vm.runInNewContext(read('public/strip-key.js'), win);
   assert.equal(win.__habitdeckPendingKey, S);
-  assert.deepEqual(replaced, [[{ n: 1 }, '/mind.html#top']]);
+  assert.deepEqual(replaced, [[{ n: 1 }, '/design/ai-human-bridge/key-language.html#top']]);
   fireDomContentLoaded(listeners);
   assert.equal(Object.prototype.hasOwnProperty.call(win, '__habitdeckPendingKey'), false);
   assert.equal(win.HabitKey, undefined);
@@ -170,7 +173,7 @@ test('pages that load habit-key.js do so before DOMContentLoaded', () => {
     assert.doesNotMatch(keyTags[0][1], /\btype\s*=\s*["']?module\b/i, rel);
     withKey.push(rel);
   }
-  assert.deepEqual(withKey.sort(), ['deck.html', 'habits.html', 'index.html']);
-  assert.ok(withoutKey.includes('mind.html'));
+  assert.deepEqual(withKey.sort(), ['deck.html', 'habits.html', 'index.html', 'mind.html']);
+  assert.ok(!withoutKey.includes('mind.html'));
   assert.ok(withoutKey.includes(join('design', 'ai-human-bridge', 'key-language.html')));
 });

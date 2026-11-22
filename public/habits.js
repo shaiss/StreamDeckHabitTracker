@@ -144,10 +144,19 @@ import { esc } from '/escape.js';
       });
     }
 
+    // HabitKey.fetch sends stored ht_/HABIT_KEY and layers Clerk Bearer via
+    // HabitAuth.authFetch — token-only users must not fall back to bare authFetch.
+    const apiFetch = (url, opts) =>
+      window.HabitKey
+        ? window.HabitKey.fetch(url, opts)
+        : (window.HabitAuth && window.HabitAuth.authFetch)
+          ? window.HabitAuth.authFetch(url, opts)
+          : fetch(url, opts);
+
     function load(keepStatus) {
       return Promise.all([
-        fetch('/api/habits').then(r=>r.json()),
-        fetch('/api/roster').then(r=>r.json()).catch(() => ({}))
+        apiFetch('/api/habits').then(r=>r.json()),
+        apiFetch('/api/roster').then(r=>r.json()).catch(() => ({}))
       ]).then(([j, r]) => {
         rowsEl.innerHTML = (j.habits||[]).map(h => rowHtml(h, false)).join('');
         rowsEl.querySelectorAll('.hrow').forEach(wireRow);
@@ -165,7 +174,10 @@ import { esc } from '/escape.js';
       rowsEl.lastElementChild.querySelector('.emoji').focus();
     });
 
-    document.getElementById('saveBtn').addEventListener('click', () => {
+    document.getElementById('saveBtn').addEventListener('click', async () => {
+      // Server accepts ht_/HABIT_KEY OR Clerk; do not require Clerk when a key is stored.
+      const hasKey = window.HabitKey && typeof window.HabitKey.get === 'function' && window.HabitKey.get();
+      if (!hasKey && window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
       const habits = [...rowsEl.querySelectorAll('.hrow')].map(el => {
         const g = parseInt(el.querySelector('.goal').value, 10);
         return {

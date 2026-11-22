@@ -15,7 +15,7 @@
 // memory and deletes. habit-key.js does that synchronously at init, and
 // every page that loads it does so with a classic parser-blocking script
 // (not async), so the copy finishes before DOMContentLoaded. Pages that
-// never load habit-key.js (mind.html, the key-language guide) would
+// never load habit-key.js (the key-language guide) would
 // otherwise keep the property for the life of the page; the listener
 // below drops it once the document is ready. Nothing else is persisted.
 (function (root) {

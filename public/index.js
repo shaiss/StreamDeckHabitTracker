@@ -1,4 +1,20 @@
 import { esc } from '/escape.js';
+    // Prefer HabitKey.fetch so a stored ht_/HABIT_KEY is sent even when the
+    // viewer is signed out of Clerk (HabitAuth.authFetch alone omits it).
+    const apiFetch = (url, opts) =>
+      window.HabitKey
+        ? window.HabitKey.fetch(url, opts)
+        : (window.HabitAuth && window.HabitAuth.authFetch)
+          ? window.HabitAuth.authFetch(url, opts)
+          : fetch(url, opts);
+    // /api/token is Clerk-session only (api/token.js refuses ht_ and HABIT_KEY).
+    // Never route through apiFetch/HabitKey.fetch — a stored deck token would be
+    // sent first, win auth precedence, and 401/403 (or clear the stored key on
+    // HabitKey's 401 retry).
+    const tokenFetch = (url, opts) =>
+      (window.HabitAuth && window.HabitAuth.authFetch)
+        ? window.HabitAuth.authFetch(url, opts)
+        : fetch(url, opts);
     const EMOJI = { Pee:"🚽", Poop:"💩", Eat:"🍽", Drink:"💧", Exercise:"🏃" };
     const emojiFor = (h, e) => e || EMOJI[h] || "•";
     // Habit names, notes, and emoji come from the log — /api/log accepts
@@ -158,6 +174,9 @@ import { esc } from '/escape.js';
     }
 
     async function suggest() {
+      // Server accepts ht_/HABIT_KEY OR Clerk; do not require Clerk when a key is stored.
+      const hasKey = window.HabitKey && typeof window.HabitKey.get === 'function' && window.HabitKey.get();
+      if (!hasKey && window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
       const btn = document.getElementById('suggestBtn'), err = document.getElementById('aiErr');
       btn.disabled = true; btn.textContent = '🤔 Thinking…'; err.textContent = '';
       try {
@@ -194,7 +213,7 @@ import { esc } from '/escape.js';
       const open = forceOpen === true ? true : !panel.classList.contains('open');
       panel.classList.toggle('open', open);
       if (open) {
-        fetch('/api/profile').then(r=>r.json()).then(p => {
+        apiFetch('/api/profile').then(r=>r.json()).then(p => {
           document.getElementById('setName').value = p.name || '';
           document.getElementById('setTz').value = p.tz || p.effectiveTz || '';
           document.getElementById('setAbout').value = p.about || '';
@@ -202,12 +221,16 @@ import { esc } from '/escape.js';
           document.getElementById('profileStatus').textContent =
             p.effectiveTz ? `Coach currently reads your day as ${p.effectiveTz}` : '';
         }).catch(()=>{});
+        refreshTokens();
         panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     }
     window.addEventListener('toggle-settings', () => toggleSettings());
     if (new URLSearchParams(location.search).get('settings') === '1') toggleSettings(true);
-    document.getElementById('saveProfile').addEventListener('click', () => {
+    document.getElementById('saveProfile').addEventListener('click', async () => {
+      // Server accepts ht_/HABIT_KEY OR Clerk; do not require Clerk when a key is stored.
+      const hasKey = window.HabitKey && typeof window.HabitKey.get === 'function' && window.HabitKey.get();
+      if (!hasKey && window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
       const st = document.getElementById('profileStatus');
       st.textContent = 'Saving…';
       window.HabitKey.postJson('/api/profile', {
@@ -220,11 +243,80 @@ import { esc } from '/escape.js';
       }).catch(e => { st.textContent = 'Save failed: ' + e.message; });
     });
 
+    async function refreshTokens() {
+      const list = document.getElementById('tokenList');
+      if (!list) return;
+      if (window.HabitAuth && typeof window.HabitAuth.init === 'function') {
+        await window.HabitAuth.init();
+      }
+      if (!window.HabitAuth || !window.HabitAuth.isSignedIn()) {
+        list.innerHTML = '<li>Sign in to manage tokens.</li>';
+        return;
+      }
+      try {
+        const r = await tokenFetch('/api/token');
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        const tokens = j.tokens || [];
+        list.innerHTML = tokens.length
+          ? tokens.map((t) =>
+              `<li><code>${esc(t.prefix)}…</code> ${esc(t.label || '')} · ` +
+              `${t.createdAt ? new Date(t.createdAt).toLocaleDateString() : ''} ` +
+              `<button type="button" class="linklike" data-revoke="${esc(t.hash)}">revoke</button></li>`
+            ).join('')
+          : '<li>No tokens yet.</li>';
+        list.querySelectorAll('[data-revoke]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const st = document.getElementById('tokenStatus');
+            try {
+              const rr = await tokenFetch('/api/token?hash=' + encodeURIComponent(btn.dataset.revoke), { method: 'DELETE' });
+              const jj = await rr.json().catch(() => ({}));
+              if (!rr.ok) throw new Error(jj.error || ('HTTP ' + rr.status));
+              if (st) st.textContent = 'Token revoked.';
+              refreshTokens();
+            } catch (e) {
+              if (st) st.textContent = e.message || 'Revoke failed';
+            }
+          });
+        });
+      } catch {
+        list.innerHTML = '<li>Could not load tokens.</li>';
+      }
+    }
+    // Settings may open before Clerk finishes loading — refresh once ready.
+    if (window.HabitAuth && typeof window.HabitAuth.onReady === 'function') {
+      window.HabitAuth.onReady(() => {
+        const panelEl = document.getElementById('settings');
+        if (panelEl && panelEl.classList.contains('open')) refreshTokens();
+      });
+    }
+    document.getElementById('mintToken')?.addEventListener('click', async () => {
+      if (window.HabitAuth && !(await window.HabitAuth.ensureSignedIn())) return;
+      const st = document.getElementById('tokenStatus');
+      const once = document.getElementById('tokenOnce');
+      st.textContent = 'Creating…';
+      try {
+        const r = await tokenFetch('/api/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: 'Stream Deck' })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        st.textContent = 'Copy now — shown once.';
+        once.style.display = 'block';
+        once.textContent = j.token;
+        refreshTokens();
+      } catch (e) {
+        st.textContent = e.message || 'Failed';
+      }
+    });
+
     let firstLoad = true;
     function refresh() {
       Promise.all([
-        fetch('/api/data').then(r=>r.json()),
-        fetch('/api/slots?track=1').then(r=>r.json()).catch(()=>null)
+        apiFetch('/api/data').then(r=>r.json()),
+        apiFetch('/api/slots?track=1').then(r=>r.json()).catch(()=>null)
       ]).then(([d, s]) => {
         slotState = s;
         lastInsight = d.insight || null;

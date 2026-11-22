@@ -126,13 +126,25 @@
     return init;
   }
 
-  // fetch() for writes: header-only key; on 401 ask once in-page and retry
-  // once (a 401 means nothing was written, so the retry is safe).
+  // Underlying transport: prefer HabitAuth.authFetch so Clerk Bearer is
+  // layered on top of x-habit-key (never instead of it).
+  function transport() {
+    return (root.HabitAuth && root.HabitAuth.authFetch) || root.fetch;
+  }
+
+  // fetch() for writes: header-only key; on 401 drop a dead key so a valid
+  // Clerk Bearer can succeed alone (server never falls through from a revoked
+  // ht_ to Clerk). Then ask once for a replacement when still signed out.
+  // A 401 means nothing was written, so the retry is safe.
   function keyedFetch(url, init) {
-    var f = root.fetch;
-    return f(url, withHeader(init, get())).then(function (r) {
+    var f = transport();
+    var had = get();
+    return f(url, withHeader(init, had)).then(function (r) {
       if (r.status !== 401) return r;
-      clear();
+      if (had) clear();
+      var signedIn = root.HabitAuth && typeof root.HabitAuth.isSignedIn === 'function'
+        && root.HabitAuth.isSignedIn();
+      if (signedIn) return f(url, withHeader(init, ''));
       return ask().then(function (k) {
         return k ? f(url, withHeader(init, k)) : r;
       });

@@ -10,12 +10,13 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const PUBLIC = join(ROOT, 'public');
 const vercel = JSON.parse(readFileSync(join(ROOT, 'vercel.json'), 'utf8'));
 
-// style-src 'unsafe-inline' is the only relaxation past the #114 starting
-// point. Page <style> blocks, runtime style="" (chart geometry, per-habit
-// hue, streak ring), nav.js's injected <style>, and the key-language
-// specimens all set styles in the document. script-src stays 'self' only —
-// that is what keeps a style injection from reading sessionStorage.
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+// style-src 'unsafe-inline' covers page <style> / runtime style="".
+// Clerk CSP hosts per https://clerk.com/docs/guides/secure/best-practices/csp-headers
+// (dev FAPI wildcard, challenges.cloudflare.com, *.protect.clerk.com, img.clerk.com).
+// Production FAPI hostname is instance-specific and must be added once known.
+// No 'unsafe-eval'. 'self' stays on script-src so a style injection cannot
+// load arbitrary JS from the page origin alone.
+const CSP = "default-src 'self'; script-src 'self' https://*.clerk.accounts.dev https://challenges.cloudflare.com https://*.protect.clerk.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.clerk.accounts.dev https://*.protect.clerk.com:*; img-src 'self' data: https://img.clerk.com; frame-src https://*.clerk.accounts.dev https://challenges.cloudflare.com https://*.protect.clerk.com; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 
 // A trailing \b after a quoted "module" never matches: both the quote and
 // the following character are non-word. The boundary has to sit on `module`.

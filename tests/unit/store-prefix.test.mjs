@@ -11,6 +11,21 @@ import {
   previewIsolationStatus,
   redisCmd
 } from '../../lib/store.js';
+import { runAsUser } from '../../lib/scope.js';
+
+const OWNER = 'user_owner_prefix_test';
+
+/** redisKey requires tenant ALS; owner maps logical keys without u: prefix. */
+async function asOwner(fn) {
+  const prev = process.env.HABIT_OWNER_USER_ID;
+  process.env.HABIT_OWNER_USER_ID = OWNER;
+  try {
+    return await runAsUser(OWNER, fn);
+  } finally {
+    if (prev === undefined) delete process.env.HABIT_OWNER_USER_ID;
+    else process.env.HABIT_OWNER_USER_ID = prev;
+  }
+}
 
 const TRACKED = [
   'VERCEL_ENV',
@@ -20,7 +35,8 @@ const TRACKED = [
   'KV_REST_API_URL',
   'KV_REST_API_TOKEN',
   'UPSTASH_REDIS_REST_URL',
-  'UPSTASH_REDIS_REST_TOKEN'
+  'UPSTASH_REDIS_REST_TOKEN',
+  'HABIT_OWNER_USER_ID'
 ];
 
 const saved = {};
@@ -44,23 +60,29 @@ function withConfiguredRedis() {
   process.env.KV_REST_API_TOKEN = 'token-long-enough';
 }
 
-test('redisKeyPrefix is empty when unset (Production default)', () => {
+test('redisKeyPrefix is empty when unset (Production default)', async () => {
   assert.equal(redisKeyPrefix(), '');
-  assert.equal(redisKey('habits:log'), 'habits:log');
+  await asOwner(() => {
+    assert.equal(redisKey('habits:log'), 'habits:log');
+  });
 });
 
-test('REDIS_KEY_PREFIX namespaces every logical key', () => {
+test('REDIS_KEY_PREFIX namespaces every logical key', async () => {
   process.env.REDIS_KEY_PREFIX = 'preview:';
   assert.equal(redisKeyPrefix(), 'preview:');
-  assert.equal(redisKey('habits:log'), 'preview:habits:log');
-  assert.equal(redisKey('habits:slots'), 'preview:habits:slots');
-  assert.equal(redisKey('habits:takeover:') + '2026-10-14', 'preview:habits:takeover:2026-10-14');
+  await asOwner(() => {
+    assert.equal(redisKey('habits:log'), 'preview:habits:log');
+    assert.equal(redisKey('habits:slots'), 'preview:habits:slots');
+    assert.equal(redisKey('habits:takeover:') + '2026-10-14', 'preview:habits:takeover:2026-10-14');
+  });
 });
 
-test('PREVIEW_REDIS_PREFIX is an alias when REDIS_KEY_PREFIX is unset', () => {
+test('PREVIEW_REDIS_PREFIX is an alias when REDIS_KEY_PREFIX is unset', async () => {
   process.env.PREVIEW_REDIS_PREFIX = 'pv:';
   assert.equal(redisKeyPrefix(), 'pv:');
-  assert.equal(redisKey('habits:config'), 'pv:habits:config');
+  await asOwner(() => {
+    assert.equal(redisKey('habits:config'), 'pv:habits:config');
+  });
 });
 
 test('REDIS_KEY_PREFIX wins over PREVIEW_REDIS_PREFIX', () => {
@@ -204,7 +226,9 @@ test('redisCmd fails closed in Preview before fetch when isolation is missing', 
     return { ok: true, json: async () => ({ result: null }) };
   };
   try {
-    await assert.rejects(() => redisCmd(['GET', redisKey('habits:log')]), /Non-production storage isolation/);
+    await asOwner(async () => {
+      await assert.rejects(() => redisCmd(['GET', redisKey('habits:log')]), /Non-production storage isolation/);
+    });
     assert.equal(fetched, false);
   } finally {
     globalThis.fetch = original;
@@ -221,7 +245,9 @@ test('redisCmd fails closed in Development before fetch when isolation is missin
     return { ok: true, json: async () => ({ result: null }) };
   };
   try {
-    await assert.rejects(() => redisCmd(['GET', redisKey('habits:log')]), /Non-production storage isolation/);
+    await asOwner(async () => {
+      await assert.rejects(() => redisCmd(['GET', redisKey('habits:log')]), /Non-production storage isolation/);
+    });
     assert.equal(fetched, false);
   } finally {
     globalThis.fetch = original;
@@ -239,7 +265,9 @@ test('redisCmd issues prefixed keys when isolation is via REDIS_KEY_PREFIX', asy
     return { ok: true, json: async () => ({ result: 'OK' }) };
   };
   try {
-    await redisCmd(['SET', redisKey('habits:slots'), '{}']);
+    await asOwner(async () => {
+      await redisCmd(['SET', redisKey('habits:slots'), '{}']);
+    });
     assert.deepEqual(body, ['SET', 'preview:habits:slots', '{}']);
   } finally {
     globalThis.fetch = original;

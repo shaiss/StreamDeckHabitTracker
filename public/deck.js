@@ -1,9 +1,22 @@
     import { questionPaint, isDetailsKey } from '/glyphs.js';
     import { esc } from '/escape.js';
-    // Writes carry the key as an x-habit-key header via /habit-key.js —
-    // never in the URL. strip-key.js (first script in <head>) moves a stray
-    // ?key= into sessionStorage and strips it; habit-key.js repeats that.
+    // Writes carry x-habit-key (HabitKey) and Clerk Bearer (HabitAuth via
+    // HabitKey's transport). strip-key.js moves a stray ?key= into
+    // sessionStorage; habit-key.js repeats that scrub.
     const keyed = (url, init) => window.HabitKey.fetch(url, init);
+    async function gateAuth() {
+      // OR-gate mirrors the server: stored ht_/HABIT_KEY OR Clerk session.
+      if (window.HabitKey && typeof window.HabitKey.get === 'function' && window.HabitKey.get()) {
+        return true;
+      }
+      if (!window.HabitAuth) return true; // tests without auth.js
+      const ok = await window.HabitAuth.ensureSignedIn();
+      if (!ok) {
+        const hintEl = document.getElementById('hint');
+        if (hintEl) hintEl.innerHTML = '<b>Sign in</b> to log habits on the virtual deck.';
+      }
+      return ok;
+    }
     const face = document.getElementById('face');
     const hint = document.getElementById('hint');
     let slots = [null, null, null, null];
@@ -427,7 +440,8 @@
       setTimeout(() => f.classList.remove('show'), 900);
     }
 
-    function tap(el, url) {
+    async function tap(el, url) {
+      if (!(await gateAuth())) return;
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
       keyed(url)
@@ -446,7 +460,8 @@
     // Long-press "oops": take back today's last log for this key. The 404 the
     // server sends when there is nothing to remove flashes ⚠️ like any other
     // failure — which is the honest answer.
-    function undo(el, url) {
+    async function undo(el, url) {
+      if (!(await gateAuth())) return;
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
       keyed(url, { method: 'DELETE' })
@@ -461,7 +476,8 @@
 
     // Long-press on a nudge: "not today". Distinct from ignoring it — the
     // scorer records the two differently (#35).
-    function dismiss(el, url, msg) {
+    async function dismiss(el, url, msg) {
+      if (!(await gateAuth())) return;
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
       keyed(url, { method: 'POST' })
@@ -477,7 +493,27 @@
       // ?tz= lets the server bucket "today" in the viewer's timezone (matches
       // the dashboard), so living key faces read the right day (#32).
       const tz = new Date().getTimezoneOffset(); // minutes; UTC-5 → 300
-      fetch('/api/slots?tz=' + tz).then((r) => r.json()).then((j) => {
+      const url = '/api/slots?tz=' + tz;
+      // HabitKey.fetch adds x-habit-key and layers HabitAuth Bearer when present.
+      // A revoked ht_ is rejected without Clerk fallthrough, and /api/slots still
+      // answers 200 with authRequired — clear the dead key and retry Clerk-only.
+      const go = window.HabitKey
+        ? window.HabitKey.fetch(url)
+        : (window.HabitAuth && window.HabitAuth.authFetch)
+          ? window.HabitAuth.authFetch(url)
+          : fetch(url);
+      go.then((r) => r.json()).then(async (j) => {
+        const signedIn = window.HabitAuth && typeof window.HabitAuth.isSignedIn === 'function'
+          && window.HabitAuth.isSignedIn();
+        // Only clear a stored key when storage is configured — an unconfigured
+        // public fallback also sets authRequired, which is not a revoked key.
+        if (j && j.authRequired && j.configured !== false && signedIn && window.HabitKey && window.HabitKey.get()) {
+          window.HabitKey.clear();
+          const r2 = await window.HabitAuth.authFetch(url);
+          j = await r2.json();
+        }
+        return j;
+      }).then((j) => {
         habits = j.habits || habits;
         slots = j.slots || slots;
         coachPage = j.coachPage || [];

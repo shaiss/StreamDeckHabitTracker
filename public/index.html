@@ -83,6 +83,7 @@
   </style>
 </head>
 <body>
+  <script src="/auth.js"></script>
   <script src="/nav.js" defer></script>
   <div class="wrap">
     <header>
@@ -111,6 +112,18 @@
         <button class="btn" id="saveProfile">Save</button>
         <span class="status" id="profileStatus"></span>
       </div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:var(--s4) 0" />
+      <h3>Stream Deck API token</h3>
+      <p class="muted" style="font-size:13px;margin:0 0 var(--s3)">
+        Generate a per-user token and paste it into the plugin&rsquo;s Property Inspector
+        (global settings). Shown once — stored hashed server-side.
+      </p>
+      <div class="row2">
+        <button class="btn ghost" id="mintToken" type="button">Generate token</button>
+        <span class="status" id="tokenStatus"></span>
+      </div>
+      <pre id="tokenOnce" class="muted" style="display:none;margin-top:var(--s3);padding:var(--s3);background:var(--card2);border-radius:var(--r-sm);font-size:12px;word-break:break-all;white-space:pre-wrap"></pre>
+      <ul id="tokenList" class="muted" style="font-size:13px;margin:var(--s3) 0 0;padding-left:var(--s4)"></ul>
     </div>
     <div id="app"><div class="empty">Loading&hellip;</div></div>
   </div>
