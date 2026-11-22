@@ -6,7 +6,7 @@
 import { isConfigured, getSlots, getSlotHistory, all } from '../lib/store.js';
 import { getHabits, saveHabits, validateHabits } from '../lib/habits.js';
 import { scoreSuggestions } from '../lib/scorer.js';
-import { keyOk } from '../lib/habit-key.js';
+import { keyDenied } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -68,10 +68,7 @@ export default async function handler(req, res) {
       return;
     }
     const body = typeof req.body === 'object' && req.body ? req.body : {};
-    if (!keyOk(req, body)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+    if (keyDenied(req, res, body)) return;
     const err = validateHabits(body.habits);
     if (err) {
       res.status(400).json({ error: err });

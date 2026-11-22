@@ -9,7 +9,7 @@
 import { isConfigured, getCoachPage } from '../lib/store.js';
 import { zaiKey } from '../lib/ai.js';
 import { coachPagePass, COACHPAGE_COOLDOWN_MS } from '../lib/coach.js';
-import { keyOk } from '../lib/habit-key.js';
+import { keyDenied } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -33,10 +33,7 @@ export default async function handler(req, res) {
       res.status(200).json(current);
       return;
     }
-    if (!keyOk(req)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+    if (keyDenied(req, res)) return;
     if (!zaiKey()) {
       res.status(503).json({ error: 'No AI key set — add ZAI_API_KEY in Vercel, then redeploy.' });
       return;

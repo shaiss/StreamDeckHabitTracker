@@ -15,7 +15,7 @@ import { zaiKey } from '../lib/ai.js';
 import { getHabits } from '../lib/habits.js';
 import { reactTo, answerQuestion } from '../lib/coach.js';
 import { tzHelpers } from '../lib/tz.js';
-import { keyOk } from '../lib/habit-key.js';
+import { keyDenied } from '../lib/habit-key.js';
 
 // Only two levels, because only two are expressible on a key: a plain tap
 // means "normal" (no field at all) and a double-tap means "big". `low` exists
@@ -39,10 +39,7 @@ export default async function handler(req, res) {
 
     // Optional shared secret. Set HABIT_KEY in the Vercel project env to require it;
     // callers send it as the x-habit-key header (lib/habit-key.js).
-    if (!keyOk(req)) {
-      res.status(401).send('Unauthorized');
-      return;
-    }
+    if (keyDenied(req, res, null, { text: true })) return;
 
     if (!isConfigured()) {
       res
