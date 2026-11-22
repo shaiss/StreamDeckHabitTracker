@@ -44,7 +44,9 @@ export function resolveKey(globalSettings, settings, base) {
 export function keyedInit(key, init = {}) {
   const headers = { ...(init.headers || {}) };
   if (key) headers[KEY_HEADER] = key;
-  return { ...init, headers };
+  // Cipher #115: never follow 30x — undici would re-send x-habit-key to the
+  // Location origin. Force redirect:'error' so a caller redirect cannot win.
+  return { ...init, headers, redirect: 'error' };
 }
 
 export { redactKey } from '../../lib/habit-key.js';
