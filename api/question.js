@@ -12,6 +12,7 @@ import { getQuestions, getSlots, isConfigured } from '../lib/store.js';
 import { dismissQuestion } from '../lib/coach.js';
 import { openQuestion, scoreQuestions } from '../lib/question.js';
 import { keyOk } from '../lib/habit-key.js';
+import { sendServerError } from '../lib/http-error.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -63,6 +64,6 @@ export default async function handler(req, res) {
       track: scoreQuestions(records)
     });
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    sendServerError(res, err, { label: 'question' });
   }
 }

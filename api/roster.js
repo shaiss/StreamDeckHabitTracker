@@ -14,6 +14,7 @@ import { zaiKey } from '../lib/ai.js';
 import { rosterPass, ROSTER_COOLDOWN_MS } from '../lib/coach.js';
 import { normalizeRoster, applyDecision, restoreFromArchive } from '../lib/roster.js';
 import { keyOk } from '../lib/habit-key.js';
+import { sendServerError } from '../lib/http-error.js';
 
 const view = (doc) => ({
   proposals: doc.proposals,
@@ -88,6 +89,6 @@ export default async function handler(req, res) {
     await setRoster(result.roster);
     res.status(200).json({ ok: true, applied: result.applied, habits: saved, ...view(result.roster) });
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    sendServerError(res, err, { label: 'roster' });
   }
 }

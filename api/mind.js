@@ -6,6 +6,7 @@ import {
 } from '../lib/store.js';
 import { zaiKey, zaiModel } from '../lib/ai.js';
 import { scoreSuggestions } from '../lib/scorer.js';
+import { sendServerError } from '../lib/http-error.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -50,6 +51,6 @@ export default async function handler(req, res) {
       }
     });
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    sendServerError(res, err, { label: 'mind' });
   }
 }

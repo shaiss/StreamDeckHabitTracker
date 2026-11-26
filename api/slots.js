@@ -16,6 +16,7 @@ import { computeToday } from '../lib/today.js';
 import { nudgePass } from '../lib/coach.js';
 import { isBlocked } from '../lib/beacon.js';
 import { keyOk } from '../lib/habit-key.js';
+import { sendServerError } from '../lib/http-error.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -104,6 +105,6 @@ export default async function handler(req, res) {
       waitUntil(nudgePass().catch(() => {}));
     }
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    sendServerError(res, err, { label: 'slots' });
   }
 }

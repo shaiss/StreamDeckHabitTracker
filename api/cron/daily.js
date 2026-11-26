@@ -4,6 +4,7 @@ import { isConfigured } from '../../lib/store.js';
 import { zaiKey } from '../../lib/ai.js';
 import { dailyDigest } from '../../lib/coach.js';
 import { authorized } from './morning.js';
+import { sendServerError } from '../../lib/http-error.js';
 
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -19,6 +20,6 @@ export default async function handler(req, res) {
     const doc = await dailyDigest();
     res.status(200).json(doc || { error: 'no digest produced' });
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    sendServerError(res, err, { label: 'cron/daily' });
   }
 }
