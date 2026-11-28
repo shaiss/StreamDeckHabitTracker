@@ -13,10 +13,20 @@ const WORKFLOW = join(ROOT, '.github/workflows/coach-experiment.yml');
 
 const SECRET_IN_RUN_RE = /\$\{\{\s*secrets\.HABIT_KEY\s*\}\}/;
 const SECRET_ENV_RE = /^\$\{\{\s*secrets\.HABIT_KEY\s*\}\}$/;
-// Header option must carry the HABIT_KEY expansion, not an empty "x-habit-key:".
+// Header option must carry the HABIT_KEY expansion (double-quoted or unquoted).
 // Built with RegExp so a source literal is not mistaken for a header value.
+const HABIT_HEADER_NAME = '[Xx]-[Hh]abit-[Kk]ey';
+const HABIT_HEADER_VALUE = '\\$\\{?HABIT_KEY\\}?';
 const HABIT_KEY_HEADER_RE = new RegExp(
-  '-H\\s+["\']x-habit-key:\\s*\\$\\{?HABIT_KEY\\}?["\']'
+  '(?:--header(?:\\s+|=)|-H\\s+)(?:"' +
+    HABIT_HEADER_NAME +
+    ':\\s*' +
+    HABIT_HEADER_VALUE +
+    '"|' +
+    HABIT_HEADER_NAME +
+    ':\\s*' +
+    HABIT_HEADER_VALUE +
+    '(?![A-Za-z0-9_]))'
 );
 // `|` / `>` plus optional chomp/indent indicators and a trailing comment.
 const BLOCK_HEADER_RE =
@@ -263,6 +273,8 @@ function parseTopLevelPermissions(text) {
     if (trimmed.startsWith('{')) return parseFlowMap(trimmed);
     if (trimmed !== '') return { _invalid: trimmed };
     const { map } = readBlockMapping(lines, i + 1, 0);
+    // A bare `permissions:` line is YAML null, not an empty mapping.
+    if (Object.keys(map).length === 0) return { _bare: true };
     return map;
   }
   return undefined;
@@ -340,6 +352,19 @@ test('permissions check rejects a grant hidden after a comment', () => {
   );
   assertEmptyPermissions(
     parseTopLevelPermissions('name: example\npermissions: {}\njobs:\n')
+  );
+});
+
+test('permissions check rejects a bare permissions: line', () => {
+  const text = [
+    'name: example',
+    'permissions:',
+    'jobs:',
+    '',
+  ].join('\n');
+  assert.throws(
+    () => assertEmptyPermissions(parseTopLevelPermissions(text)),
+    /permissions: \{\}/
   );
 });
 
@@ -451,7 +476,7 @@ test('runScriptBodies extracts bodies under commented or indicated block headers
 
 test('experiment curl uses x-habit-key header, not ?key= in the URL', () => {
   const text = loadWorkflow();
-  const bodies = runScriptBodies(text);
+  const bodies = experimentSteps(parseWorkflowSteps(text)).map((s) => s.run);
   const joined = bodies.join('\n');
   const requestCommands = requestCommandText(bodies);
 
@@ -518,8 +543,62 @@ test('x-habit-key assertion rejects an empty header value', () => {
       ),
     /x-habit-key/
   );
+});
+
+test('x-habit-key assertion rejects a single-quoted header value', () => {
   const braced = requestCommandText([
     "curl -sS --max-time 120 -H 'x-habit-key: ${HABIT_KEY}' \"$URL\"",
   ]);
-  assert.match(braced, HABIT_KEY_HEADER_RE);
+  assert.doesNotMatch(
+    braced,
+    HABIT_KEY_HEADER_RE,
+    'single-quoted header values must not satisfy the header check'
+  );
+  assert.throws(
+    () =>
+      assert.match(
+        braced,
+        HABIT_KEY_HEADER_RE,
+        'curl/request must send the x-habit-key header with $HABIT_KEY'
+      ),
+    /x-habit-key/
+  );
+});
+
+test('x-habit-key assertion accepts --header and a case-insensitive header name', () => {
+  const longFlag = requestCommandText([
+    'curl -sS --max-time 120 --header "x-habit-key: $HABIT_KEY" "$URL"',
+  ]);
+  assert.match(longFlag, HABIT_KEY_HEADER_RE);
+  const mixedCase = requestCommandText([
+    'curl -sS --max-time 120 -H "X-Habit-Key: $HABIT_KEY" "$URL"',
+  ]);
+  assert.match(mixedCase, HABIT_KEY_HEADER_RE);
+  const unquoted = requestCommandText([
+    'curl -sS --max-time 120 -H x-habit-key:$HABIT_KEY "$URL"',
+  ]);
+  assert.match(unquoted, HABIT_KEY_HEADER_RE);
+});
+
+test('x-habit-key header on a different step does not satisfy the experiment step', () => {
+  const yaml = [
+    'jobs:',
+    '  experiment:',
+    '    steps:',
+    '      - name: other',
+    '        run: |',
+    '          curl -sS -H "x-habit-key: $HABIT_KEY" "$BASE/api/other"',
+    '      - name: experiment',
+    '        env:',
+    '          HABIT_KEY: ${{ secrets.HABIT_KEY }}',
+    '        run: |',
+    '          curl "$BASE/api/experiment?run=1"',
+  ].join('\n');
+  const bodies = experimentSteps(parseWorkflowSteps(yaml)).map((s) => s.run);
+  const requestCommands = requestCommandText(bodies);
+  assert.doesNotMatch(
+    requestCommands,
+    HABIT_KEY_HEADER_RE,
+    'a header on a non-experiment step must not satisfy the header check'
+  );
 });
