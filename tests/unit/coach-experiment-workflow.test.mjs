@@ -13,7 +13,7 @@ const WORKFLOW = join(ROOT, '.github/workflows/coach-experiment.yml');
 
 const SECRET_IN_RUN_RE = /\$\{\{\s*secrets\.HABIT_KEY\s*\}\}/;
 const SECRET_ENV_RE = /^\$\{\{\s*secrets\.HABIT_KEY\s*\}\}$/;
-// Header option must carry the HABIT_KEY expansion (double-quoted or unquoted).
+// Header option must carry the HABIT_KEY expansion (double-quoted, or unquoted with no space after the colon).
 // Built with RegExp so a source literal is not mistaken for a header value.
 const HABIT_HEADER_NAME = '[Xx]-[Hh]abit-[Kk]ey';
 const HABIT_HEADER_VALUE = '\\$\\{?HABIT_KEY\\}?';
@@ -24,7 +24,7 @@ const HABIT_KEY_HEADER_RE = new RegExp(
     HABIT_HEADER_VALUE +
     '"|' +
     HABIT_HEADER_NAME +
-    ':\\s*' +
+    ':' +
     HABIT_HEADER_VALUE +
     '(?![A-Za-z0-9_]))'
 );
@@ -43,7 +43,7 @@ function leading(line) {
   return line.match(/^(\s*)/)[1].length;
 }
 
-/** Drop an unquoted `#` comment, leaving quoted `#` intact. */
+/** Drop an unquoted `#` comment. `#` starts a comment only at the start of the string or after whitespace, so plain scalars may contain `#`. */
 function stripYamlComment(s) {
   let out = '';
   let quote = null;
@@ -59,7 +59,7 @@ function stripYamlComment(s) {
       out += c;
       continue;
     }
-    if (c === '#') break;
+    if (c === '#' && (i === 0 || /\s/.test(s[i - 1]))) break;
     out += c;
   }
   return out;
@@ -329,6 +329,18 @@ function requestCommandText(bodies) {
     .join('\n');
 }
 
+function assertHabitKeyHeaderOnExperimentSteps(steps) {
+  const exp = experimentSteps(steps);
+  assert.ok(exp.length > 0, 'expected a step whose run calls /api/experiment');
+  for (const s of exp) {
+    assert.match(
+      requestCommandText([s.run]),
+      HABIT_KEY_HEADER_RE,
+      'curl/request must send the x-habit-key header with $HABIT_KEY'
+    );
+  }
+}
+
 test('coach-experiment.yml exists and is non-empty', () => {
   loadWorkflow();
 });
@@ -474,17 +486,37 @@ test('runScriptBodies extracts bodies under commented or indicated block headers
   );
 });
 
+test('runScriptBodies preserves # inside YAML plain scalars', () => {
+  const yaml = [
+    'jobs:',
+    '  experiment:',
+    '    steps:',
+    '      - run: echo prefix#${{ secrets.HABIT_KEY }}',
+  ].join('\n');
+  const bodies = runScriptBodies(yaml);
+  assert.equal(
+    bodies.length,
+    1,
+    'inline `run: echo prefix#…` must be extracted as a plain scalar'
+  );
+  assert.match(
+    bodies[0],
+    SECRET_IN_RUN_RE,
+    '`#` without preceding whitespace must stay in the run value'
+  );
+  assert.throws(
+    () => assertNoSecretInRunBodies(bodies),
+    /secrets\.HABIT_KEY/,
+    'secret interpolation after prefix# must fail the secret check'
+  );
+});
+
 test('experiment curl uses x-habit-key header, not ?key= in the URL', () => {
   const text = loadWorkflow();
-  const bodies = experimentSteps(parseWorkflowSteps(text)).map((s) => s.run);
+  const steps = parseWorkflowSteps(text);
+  const bodies = experimentSteps(steps).map((s) => s.run);
   const joined = bodies.join('\n');
-  const requestCommands = requestCommandText(bodies);
-
-  assert.match(
-    requestCommands,
-    HABIT_KEY_HEADER_RE,
-    'curl/request must send the x-habit-key header with $HABIT_KEY'
-  );
+  assertHabitKeyHeaderOnExperimentSteps(steps);
   // Experiment URL is built as $BASE/api/experiment?... — never append ?key=.
   assert.doesNotMatch(
     joined,
@@ -600,5 +632,50 @@ test('x-habit-key header on a different step does not satisfy the experiment ste
     requestCommands,
     HABIT_KEY_HEADER_RE,
     'a header on a non-experiment step must not satisfy the header check'
+  );
+});
+
+test('x-habit-key header is required on every experiment step', () => {
+  const yaml = [
+    'jobs:',
+    '  experiment:',
+    '    steps:',
+    '      - name: first',
+    '        env:',
+    '          HABIT_KEY: ${{ secrets.HABIT_KEY }}',
+    '        run: |',
+    '          curl -sS -H "x-habit-key: $HABIT_KEY" "$BASE/api/experiment?run=1"',
+    '      - name: duplicate',
+    '        env:',
+    '          HABIT_KEY: ${{ secrets.HABIT_KEY }}',
+    '        run: |',
+    '          curl -sS "$BASE/api/experiment?run=1"',
+  ].join('\n');
+  const steps = parseWorkflowSteps(yaml);
+  assert.equal(experimentSteps(steps).length, 2);
+  assert.throws(
+    () => assertHabitKeyHeaderOnExperimentSteps(steps),
+    /x-habit-key/,
+    'a duplicated experiment step that drops the header must fail'
+  );
+});
+
+test('x-habit-key assertion rejects an unquoted header with a space after the colon', () => {
+  const spaced = requestCommandText([
+    'curl -sS --max-time 120 -H x-habit-key: $HABIT_KEY "$URL"',
+  ]);
+  assert.doesNotMatch(
+    spaced,
+    HABIT_KEY_HEADER_RE,
+    'unquoted header with a space after the colon must not satisfy the header check'
+  );
+  assert.throws(
+    () =>
+      assert.match(
+        spaced,
+        HABIT_KEY_HEADER_RE,
+        'curl/request must send the x-habit-key header with $HABIT_KEY'
+      ),
+    /x-habit-key/
   );
 });
