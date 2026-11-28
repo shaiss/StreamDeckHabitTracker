@@ -12,12 +12,85 @@ import { spawn } from 'node:child_process';
 import {
   CONSENT_LEVELS, normalizeConsent, cycleConsent, autonomyOf,
   AUTONOMY_GLYPH, AUTONOMY_MODES,
-  beginConsentWrite, nextNavSeq, settleConsentWrite, mergePolledConsent, acceptCoachNavSeq
+  beginConsentWrite, nextNavSeq, releaseIssuedNavSeq, settleConsentWrite, mergePolledConsent,
+  acceptCoachNavSeq, CONSENT_WRITE_TIMEOUT_MS
 } from '../../lib/takeover.js';
+import { zip } from '../../tools/lib-zip.mjs';
+import { inflateRawSync, crc32 as zlibCrc32 } from 'node:zlib';
 import { face } from '../../streamdeck-plugin/src/faces.mjs';
-import { unzipEntries } from '../../tools/lib-secret-scan.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
+
+// Strict, Node-only ZIP reader used by the profile-archive assertions: walks
+// the central directory and checks CRC32 (not just local headers). zlib.crc32
+// is used when present; otherwise a small compatible implementation.
+function crc32(buf) {
+  if (typeof zlibCrc32 === 'function') return zlibCrc32(buf) >>> 0;
+  let c = ~0;
+  for (let i = 0; i < buf.length; i++) {
+    c ^= buf[i];
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return (~c) >>> 0;
+}
+function readZipArchive(buf) {
+  if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
+  let eocd = -1;
+  const min = Math.max(0, buf.length - 22 - 65535);
+  for (let i = buf.length - 22; i >= min; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('missing end-of-central-directory');
+  const cdCount = buf.readUInt16LE(eocd + 10);
+  const cdSize = buf.readUInt32LE(eocd + 12);
+  const cdOffset = buf.readUInt32LE(eocd + 16);
+  if (cdOffset + cdSize > eocd) throw new Error('central directory overlaps EOCD');
+  const entries = [];
+  let pos = cdOffset;
+  for (let n = 0; n < cdCount; n++) {
+    if (pos + 46 > buf.length || buf.readUInt32LE(pos) !== 0x02014b50) {
+      throw new Error('truncated central directory');
+    }
+    const method = buf.readUInt16LE(pos + 10);
+    const crc = buf.readUInt32LE(pos + 16);
+    const csize = buf.readUInt32LE(pos + 20);
+    const usize = buf.readUInt32LE(pos + 24);
+    const nlen = buf.readUInt16LE(pos + 28);
+    const xlen = buf.readUInt16LE(pos + 30);
+    const clen = buf.readUInt16LE(pos + 32);
+    const localOff = buf.readUInt32LE(pos + 42);
+    const name = buf.slice(pos + 46, pos + 46 + nlen).toString('utf8');
+    pos += 46 + nlen + xlen + clen;
+    if (localOff + 30 > buf.length || buf.readUInt32LE(localOff) !== 0x04034b50) {
+      throw new Error('missing local header for ' + name);
+    }
+    const lflags = buf.readUInt16LE(localOff + 6);
+    const lmethod = buf.readUInt16LE(localOff + 8);
+    const lcrc = buf.readUInt32LE(localOff + 14);
+    const lcsize = buf.readUInt32LE(localOff + 18);
+    const lusize = buf.readUInt32LE(localOff + 22);
+    const lnlen = buf.readUInt16LE(localOff + 26);
+    const lxlen = buf.readUInt16LE(localOff + 28);
+    if (lflags & 0x08) throw new Error('data-descriptor entries are not supported');
+    if (lflags & 0x01) throw new Error('encrypted entry');
+    if (lmethod !== method || lcrc !== crc || lcsize !== csize || lusize !== usize) {
+      throw new Error('local header does not match central directory for ' + name);
+    }
+    const start = localOff + 30 + lnlen + lxlen;
+    if (start + csize > buf.length) throw new Error('truncated entry ' + name);
+    const raw = buf.slice(start, start + csize);
+    let data;
+    if (method === 8) data = inflateRawSync(raw);
+    else if (method === 0) data = raw;
+    else throw new Error('unsupported compression method ' + method + ' for ' + name);
+    if (data.length !== usize) throw new Error('size mismatch for ' + name);
+    if ((crc32(data) >>> 0) !== (crc >>> 0)) throw new Error('crc32 mismatch for ' + name);
+    entries.push({ name, data });
+  }
+  if (pos !== cdOffset + cdSize) throw new Error('central directory size mismatch');
+  return entries;
+}
+
 
 const decode = (uri) => Buffer.from(uri.slice(uri.indexOf(',') + 1), 'base64').toString('utf8');
 const stripFrame = (svg) => svg.replace(/<g data-state-frame="[^"]*"[\s\S]*?<\/g>/, '');
@@ -430,6 +503,54 @@ test('poll at a lower sequence is still applied when no higher sequence was acce
   }).ignored, false);
 });
 
+test('issued navSeq stays monotonic while an older write is in flight', () => {
+  // Older POST still pending, newer POST fails: a third tap must receive a
+  // token strictly greater than the older in-flight write, otherwise the
+  // older (larger) token could land later and overwrite the newer consent.
+  let confirmedSeq = 0;
+  let issued = 0;
+  let outstanding = 0;
+  let gen = 0;
+  const begin = () => {
+    gen = beginConsentWrite(gen);
+    const token = nextNavSeq(confirmedSeq, issued);
+    issued = token;
+    outstanding += 1;
+    return { writeSeq: gen, token };
+  };
+  const settle = (t, ok) => {
+    const r = settleConsentWrite({
+      currentSeq: gen, writeSeq: t.writeSeq, ok,
+      current: 'off', prev: 'off',
+      written: ok ? 'nudge-only' : 'may-navigate', navSeq: t.token,
+      confirmed: { consent: 'off', sequence: confirmedSeq }
+    });
+    confirmedSeq = r.confirmed.sequence;
+    outstanding = Math.max(0, outstanding - 1);
+    issued = releaseIssuedNavSeq(issued, confirmedSeq, outstanding);
+    return r;
+  };
+
+  const older = begin();
+  assert.equal(older.token, 1);
+  const newer = begin();
+  assert.equal(newer.token, 2);
+  const failed = settle(newer, false);
+  assert.equal(failed.applied, true);
+  assert.equal(issued, 2, 'latest failure must not drop the issued watermark while an older write is in flight');
+  const third = begin();
+  assert.equal(third.token, 3);
+  assert.ok(third.token > older.token, 'third tap must beat the in-flight older token');
+  settle(third, false);
+  settle(older, false);
+  assert.equal(outstanding, 0);
+  assert.equal(issued, 0, 'after every write settles, the token recovers to the confirmed sequence');
+  assert.equal(nextNavSeq(confirmedSeq, issued), 1);
+  assert.equal(releaseIssuedNavSeq(7, 4, 1), 7);
+  assert.equal(releaseIssuedNavSeq(7, 4, 0), 4);
+  assert.equal(CONSENT_WRITE_TIMEOUT_MS, 10_000);
+});
+
 test('rejected attempts do not ratchet the next navSeq past the stored sequence', () => {
   // Stored sequence stays 0 while 1000 attempts fail. The token is derived from
   // the confirmed sequence (reset after each failed settle), so it stays valid.
@@ -446,7 +567,7 @@ test('rejected attempts do not ratchet the next navSeq past the stored sequence'
       confirmed: { consent: 'off', sequence: confirmedSeq }
     });
     confirmedSeq = settled.confirmed.sequence;
-    issued = confirmedSeq; // caller resets once the current write settles
+    issued = releaseIssuedNavSeq(issued, confirmedSeq, 0);
   }
   assert.equal(gen, 1000, 'local generation still counts every attempt');
   assert.equal(nextNavSeq(confirmedSeq, issued), 1, 'next token is stored + 1');
@@ -458,8 +579,30 @@ test('rejected attempts do not ratchet the next navSeq past the stored sequence'
 
 test('profile-archive assertions read the zip with Node, not an external unzip', () => {
   const src = readFileSync(new URL('./autonomy.test.mjs', import.meta.url), 'utf8');
-  assert.doesNotMatch(src, /spawnSync\(\s*['"]unzip['"]/);
-  assert.match(src, /unzipEntries\(/);
+  assert.doesNotMatch(src, /spawnSync\(\s*['\"]unzip['\"]/);
+  assert.match(src, /readZipArchive\(/);
+  assert.match(src, /crc32 mismatch/);
+});
+
+test('readZipArchive rejects a zip whose central-directory CRC does not match', () => {
+  const good = zip([{ name: 'hello.txt', data: Buffer.from('hello') }]);
+  const entries = readZipArchive(good);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].name, 'hello.txt');
+  assert.equal(entries[0].data.toString('utf8'), 'hello');
+
+  const eocd = good.length - 22;
+  assert.equal(good.readUInt32LE(eocd), 0x06054b50);
+  const cdOffset = good.readUInt32LE(eocd + 16);
+  assert.equal(good.readUInt32LE(cdOffset), 0x02014b50);
+  const badCd = Buffer.from(good);
+  badCd.writeUInt32LE((badCd.readUInt32LE(cdOffset + 16) ^ 0xffffffff) >>> 0, cdOffset + 16);
+  assert.throws(() => readZipArchive(badCd), /crc32 mismatch|does not match central directory/);
+
+  const badLocal = Buffer.from(good);
+  // Flip the stored CRC in the local header (offset 14); central stays intact.
+  badLocal.writeUInt32LE((badLocal.readUInt32LE(14) ^ 0xffffffff) >>> 0, 14);
+  assert.throws(() => readZipArchive(badLocal), /does not match central directory/);
 });
 
 test('dashboard Save allows one request in flight (no overlapping consent tokens)', () => {
@@ -499,8 +642,12 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
     'r.status === 409',
     'settled.confirmed',
     'nextNavSeq(',
+    'releaseIssuedNavSeq(',
     'confirmedSeq',
+    'consentWritesOutstanding',
+    'CONSENT_WRITE_TIMEOUT_MS',
     'appliedServerSeq',
+    'signal: ctrl.signal',
     'data-autonomy',
     'autonomyface'
   ]) {
@@ -518,7 +665,9 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
   assert.match(plugin, /r\.status === 409/);
   assert.match(plugin, /settled\.confirmed/);
   assert.match(plugin, /nextNavSeq/);
+  assert.match(plugin, /releaseIssuedNavSeq/);
   assert.match(plugin, /confirmedSeq/);
+  assert.match(plugin, /consentWritesOutstanding/);
   assert.match(plugin, /appliedServerSeq/);
   // Bounded write lifetime: one deadline over the POST and the 409 body read.
   assert.match(plugin, /CONSENT_WRITE_TIMEOUT_MS/);
@@ -526,6 +675,8 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
   assert.match(plugin, /com\.shaiss\.habit-tracker\.autonomy/);
   assert.match(plugin, /kind === 'autonomy'/);
   assert.match(plugin, /\/api\/profile/);
+  assert.match(takeover, /export function releaseIssuedNavSeq/);
+  assert.match(takeover, /export const CONSENT_WRITE_TIMEOUT_MS/);
   assert.match(takeover, /server\?\.coachNavSeq/);
 });
 
@@ -596,7 +747,7 @@ test('mini + 9 habits still places Autonomy (reserved before habit fill) (#95)',
       'overflowing habits should be the ones displaced');
 
     // Node-only ZIP read (no external `unzip` binary).
-    const entries = unzipEntries(readFileSync(outfile));
+    const entries = readZipArchive(readFileSync(outfile));
     const page0Entry = entries.find((e) => /\/Profiles\/[A-F0-9-]+\/manifest\.json$/i.test(e.name));
     assert.ok(page0Entry, 'page-0 manifest missing from profile zip');
     const actions = JSON.parse(page0Entry.data.toString('utf8')).Controllers[0].Actions || {};
@@ -659,7 +810,7 @@ test('explicit --slots on mini+pages=2 does not drop Coach or Autonomy (#95)', a
     assert.doesNotMatch(r.stderr + r.stdout, /dropped the Autonomy key/);
 
     // Node-only ZIP read (no external `unzip` binary).
-    const entries = unzipEntries(readFileSync(outfile));
+    const entries = readZipArchive(readFileSync(outfile));
     const page0Entry = entries.find((e) => /\/Profiles\/[A-F0-9-]+\/manifest\.json$/i.test(e.name));
     assert.ok(page0Entry, 'page-0 manifest missing from profile zip');
 

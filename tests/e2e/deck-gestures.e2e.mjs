@@ -61,6 +61,10 @@ before(async () => {
           res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(ok ? { ok: true, coachNav: mockCoachNav } : { ok: false }));
         };
+        if (step === 'hang' || (step && typeof step === 'object' && step.hang)) {
+          heldProfiles.push({ finish, then: 'hang' });
+          return; // never answers — the client deadline must settle it
+        }
         if (step && typeof step === 'object' && step.holdMs) {
           heldProfiles.push({ finish, then: step.then || 'ok', holdMs: step.holdMs });
           setTimeout(() => {
@@ -148,7 +152,7 @@ before(async () => {
 after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false, coachNav = 'off' } = {}) {
+async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false, coachNav = 'off', consentWriteTimeout, slotsPollMs } = {}) {
   calls = [];
   profileBodies = [];
   logStatus = 200;
@@ -159,7 +163,11 @@ async function open({ nudge = null, roster = 0, blocked = false, question = fals
   mockPicker = picker;
   mockDanger = danger;
   mockCoachNav = coachNav;
-  await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
+  const q = new URLSearchParams();
+  if (consentWriteTimeout) q.set('consentWriteTimeout', String(consentWriteTimeout));
+  if (slotsPollMs) q.set('slotsPollMs', String(slotsPollMs));
+  const qs = q.toString() ? `?${q}` : '';
+  await page.goto(`http://127.0.0.1:${port}/deck.html${qs}`, { waitUntil: slotsPollMs ? 'load' : 'networkidle' });
   await page.waitForSelector('.k[data-habit="0"]');
   return page.locator('.k[data-habit="0"]');
 }
@@ -373,6 +381,54 @@ test('Autonomy Toggle: rejected attempts do not ratchet navSeq (#94)', async () 
   }
   assert.deepEqual(profileBodies.map((b) => b.navSeq), [1, 1, 1],
     'failed attempts leave the stored sequence unchanged, so the next token is unchanged');
+  profileScript = [];
+});
+
+test('Autonomy Toggle: a third tap beats an older in-flight token after a newer failure (#94)', async () => {
+  // Older POST is held, newer POST fails, third tap must send navSeq > older's.
+  profileScript = [
+    { holdMs: 900, then: 'ok' },
+    'fail'
+  ];
+  await open({ coachNav: 'off' });
+  await page.waitForSelector('.k[data-autonomy]');
+  profileBodies = [];
+  await page.locator('.k[data-autonomy]').click(); // older, held
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only');
+  await page.locator('.k[data-autonomy]').click(); // newer, fails
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(profileBodies.length, 2);
+  await page.locator('.k[data-autonomy]').click(); // third
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(profileBodies.length >= 3);
+  assert.ok(profileBodies[2].navSeq > profileBodies[0].navSeq,
+    'third tap must use a token greater than the older in-flight write');
+  await new Promise((r) => setTimeout(r, 800)); // let the held write finish
+  profileScript = [];
+});
+
+test('Autonomy Toggle: a hung consent POST times out, rolls back, and polls resume (#94)', async () => {
+  profileScript = ['hang'];
+  await open({ coachNav: 'off', consentWriteTimeout: 400, slotsPollMs: 300 });
+  await page.waitForSelector('.k[data-autonomy]');
+  profileBodies = [];
+  await page.locator('.k[data-autonomy]').click();
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only');
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'off',
+    null, { timeout: 5000 });
+  const f = await page.$eval('.k[data-autonomy]', (el) => ({
+    label: el.querySelector('.lb')?.textContent || '', consent: el.dataset.consent || ''
+  }));
+  assert.equal(f.consent, 'off', 'expired write must restore the confirmed consent');
+  assert.equal(f.label, 'MANUAL');
+  // Pending has cleared, so the shortened poll cadence can apply stored consent.
+  mockCoachNav = 'may-navigate';
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'may-navigate',
+    null, { timeout: 5000 });
   profileScript = [];
 });
 

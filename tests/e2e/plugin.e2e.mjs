@@ -44,7 +44,7 @@ const nudgeAt = (fraction) => {
 
 let http, httpPort;
 let slots, today, pollUrls, logUrls, hangPolls, logNotFound, pollExtra;
-let profileBodies, coachNav, profileHang;
+let profileBodies, coachNav, profileHang, profileScript, heldProfiles;
 const hung = [];
 
 before(async () => {
@@ -94,9 +94,22 @@ before(async () => {
         logUrls.push(req.method + ' ' + req.url);
         // Scripted hang: the POST is received but never answered.
         if (profileHang > 0) { profileHang--; hung.push(res); return; }
-        if (parsed.coachNav !== undefined) coachNav = parsed.coachNav;
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, coachNav }));
+        const step = profileScript.length ? profileScript.shift() : 'ok';
+        const finish = (ok) => {
+          if (ok && parsed.coachNav !== undefined) coachNav = parsed.coachNav;
+          res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(ok ? { ok: true, coachNav } : { ok: false }));
+        };
+        if (step && typeof step === 'object' && step.holdMs) {
+          heldProfiles.push(res);
+          setTimeout(() => {
+            const i = heldProfiles.indexOf(res);
+            if (i >= 0) heldProfiles.splice(i, 1);
+            finish(step.then !== 'fail');
+          }, step.holdMs);
+          return;
+        }
+        finish(step !== 'fail');
       });
       return;
     }
@@ -132,6 +145,8 @@ async function boot({ entry = SRC } = {}) {
   pollExtra = {};
   profileBodies = [];
   profileHang = 0;
+  profileScript = [];
+  heldProfiles = [];
   coachNav = 'off';
 
   const wss = new WebSocketServer({ port: 0 });
@@ -635,6 +650,26 @@ test('a consent write that never answers times out, rolls back, and polls resume
     assert.equal(profileBodies[0].navSeq, 1);
     assert.equal(profileBodies[1].navSeq, 1,
       'token is derived from the server sequence, not the count of failed attempts');
+  } finally { p.done(); }
+});
+
+test('a third autonomy tap beats an older in-flight token after a newer failure (#94)', async () => {
+  const p = await boot();
+  try {
+    appearAutonomy(p);
+    await until(() => autonomySvg(p).includes('>MANUAL<'), { label: 'MANUAL face' });
+    profileBodies.length = 0;
+    profileScript = [{ holdMs: 900, then: 'ok' }, 'fail'];
+    await p.press('ctx-autonomy', 'com.shaiss.habit-tracker.autonomy');
+    await until(() => autonomySvg(p).includes('>ASSISTED<'), { label: 'optimistic ASSISTED' });
+    await p.press('ctx-autonomy', 'com.shaiss.habit-tracker.autonomy');
+    await until(() => profileBodies.length >= 2, { label: 'second write issued' });
+    await sleep(200);
+    await p.press('ctx-autonomy', 'com.shaiss.habit-tracker.autonomy');
+    await until(() => profileBodies.length >= 3, { label: 'third write issued' });
+    assert.ok(profileBodies[2].navSeq > profileBodies[0].navSeq,
+      'third tap must use a token greater than the older in-flight write');
+    await sleep(800);
   } finally { p.done(); }
 });
 

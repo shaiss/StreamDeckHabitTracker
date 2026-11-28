@@ -17892,6 +17892,11 @@ function beginConsentWrite(seq) {
 function nextNavSeq(confirmedSeq2, issuedSeq) {
   return Math.max(Number(confirmedSeq2) || 0, Number(issuedSeq) || 0, 0) + 1;
 }
+function releaseIssuedNavSeq(issued, confirmed, outstanding) {
+  if ((Number(outstanding) || 0) > 0) return Math.max(0, Number(issued) || 0);
+  return Math.max(0, Number(confirmed) || 0);
+}
+var CONSENT_WRITE_TIMEOUT_MS = 1e4;
 function asConfirmed(confirmed, prev) {
   if (confirmed && typeof confirmed === "object") {
     return {
@@ -18066,7 +18071,7 @@ var baseOf = (s) => (s && s.base || DEFAULT_BASE).replace(/\/+$/, "");
 var POLL_MS = +(process.env.HT_POLL_MS || 15e3);
 var TICK_MS = +(process.env.HT_TICK_MS || 3e3);
 var POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 1e4);
-var CONSENT_WRITE_TIMEOUT_MS = +(process.env.HT_CONSENT_WRITE_TIMEOUT_MS || 1e4);
+var CONSENT_WRITE_TIMEOUT_MS2 = +(process.env.HT_CONSENT_WRITE_TIMEOUT_MS || CONSENT_WRITE_TIMEOUT_MS);
 var RECHECK_MS = (process.env.HT_RECHECK_MS || "2000,5000,9000,15000,25000").split(",").map(Number);
 var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
@@ -18092,6 +18097,7 @@ var confirmedConsent = "off";
 var consentSeq = 0;
 var confirmedSeq = 0;
 var issuedNavSeq = 0;
+var consentWritesOutstanding = 0;
 var consentWritePending = false;
 var lastKeypressAt = 0;
 var lastPageChangeAt = 0;
@@ -18220,7 +18226,7 @@ function refreshSlots(now) {
     if (!polled.ignored) {
       confirmedConsent = polled.consent;
       confirmedSeq = Math.max(0, Number(j.coachNavSeq) || 0);
-      issuedNavSeq = confirmedSeq;
+      issuedNavSeq = releaseIssuedNavSeq(issuedNavSeq, confirmedSeq, consentWritesOutstanding);
     }
     const rosterPending = Number(j.rosterPending) || 0;
     const blocked = !!j.blocked;
@@ -18329,6 +18335,7 @@ function cycleAutonomy(k) {
   consentSeq = seq;
   const navSeq = nextNavSeq(confirmedSeq, issuedNavSeq);
   issuedNavSeq = navSeq;
+  consentWritesOutstanding += 1;
   consentWritePending = true;
   consentCache = next;
   for (const other of keys.values()) {
@@ -18356,9 +18363,23 @@ function cycleAutonomy(k) {
     });
     confirmedConsent = settled.confirmed.consent;
     confirmedSeq = settled.confirmed.sequence;
-    if (!settled.applied) return;
-    consentWritePending = settled.pending;
-    issuedNavSeq = confirmedSeq;
+    consentWritesOutstanding = Math.max(0, consentWritesOutstanding - 1);
+    issuedNavSeq = releaseIssuedNavSeq(issuedNavSeq, confirmedSeq, consentWritesOutstanding);
+    consentWritePending = consentWritesOutstanding > 0;
+    if (!settled.applied) {
+      if (!consentWritePending && confirmedConsent !== consentCache) {
+        consentCache = confirmedConsent;
+        for (const other of keys.values()) {
+          if (other.kind === "autonomy") {
+            try {
+              render(other);
+            } catch {
+            }
+          }
+        }
+      }
+      return;
+    }
     if (settled.consent !== consentCache) {
       consentCache = settled.consent;
       for (const other of keys.values()) {
@@ -18383,7 +18404,7 @@ function cycleAutonomy(k) {
       ctrl.abort();
     } catch {
     }
-  }, CONSENT_WRITE_TIMEOUT_MS);
+  }, CONSENT_WRITE_TIMEOUT_MS2);
   if (deadline.unref) deadline.unref();
   fetch(url2, keyedInit(keyOf(s), {
     method: "POST",

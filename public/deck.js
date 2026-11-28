@@ -14,7 +14,8 @@
     let confirmedConsent = 'off'; // last persisted consent — rollback target (not tap-prev)
     let consentSeq = 0;     // local write generation — stale failures must not roll back newer success
     let confirmedSeq = 0;   // server sequence of confirmedConsent (last applied)
-    let issuedNavSeq = 0;   // navSeq last sent; reset to confirmedSeq once settled
+    let issuedNavSeq = 0;   // navSeq last sent; reset to confirmedSeq once all writes settle
+    let consentWritesOutstanding = 0; // in-flight POSTs — issued watermark stays up until 0
     let consentWritePending = false; // ignore poll coachNav while a POST is in flight
     let habits = [];
     let today = {};   // habitName -> {count, goal, doneToday, streak, ringFill} (#32)
@@ -104,6 +105,10 @@
     // double-tap says "big one". Mirrors streamdeck-plugin/src/gestures.mjs —
     // tests/unit/gestures.test.mjs guards these two copies against drifting.
     const LONG_PRESS_MS = 500, DOUBLE_TAP_MS = 300, ARM_MS = 3000;
+    // Same default as lib/takeover.js; tests may set HT_CONSENT_WRITE_TIMEOUT_MS.
+    const qs = new URLSearchParams(location.search);
+    const CONSENT_WRITE_TIMEOUT_MS = Math.max(1, Number(globalThis.HT_CONSENT_WRITE_TIMEOUT_MS || qs.get('consentWriteTimeout')) || 10_000);
+    const SLOTS_POLL_MS = Math.max(250, Number(globalThis.HT_SLOTS_POLL_MS || qs.get('slotsPollMs')) || 15_000);
 
     function bindGestures(b, { onTap, onLong, onDouble }) {
       let longTimer = null, pendingTimer = null, longFired = false, ptr = null;
@@ -291,6 +296,10 @@
     }
     function nextNavSeq(confirmedSeq, issuedSeq) {
       return Math.max(Number(confirmedSeq) || 0, Number(issuedSeq) || 0, 0) + 1;
+    }
+    function releaseIssuedNavSeq(issued, confirmed, outstanding) {
+      if ((Number(outstanding) || 0) > 0) return Math.max(0, Number(issued) || 0);
+      return Math.max(0, Number(confirmed) || 0);
     }
     function asConfirmed(confirmed, prev) {
       if (confirmed && typeof confirmed === 'object') {
@@ -480,6 +489,7 @@
       // rejected attempts cannot push it past what the API accepts.
       const navSeq = nextNavSeq(confirmedSeq, issuedNavSeq);
       issuedNavSeq = navSeq;
+      consentWritesOutstanding += 1;
       consentWritePending = true;
       coachNav = next;
       paintAutonomy();
@@ -496,9 +506,17 @@
         // A success persists even when a newer tap superseded it.
         confirmedConsent = settled.confirmed.consent;
         confirmedSeq = settled.confirmed.sequence;
-        if (!settled.applied) return; // superseded by a newer tap
-        consentWritePending = settled.pending;
-        issuedNavSeq = confirmedSeq;
+        consentWritesOutstanding = Math.max(0, consentWritesOutstanding - 1);
+        issuedNavSeq = releaseIssuedNavSeq(issuedNavSeq, confirmedSeq, consentWritesOutstanding);
+        consentWritePending = consentWritesOutstanding > 0;
+        if (!settled.applied) {
+          // Last remaining write was superseded: paint the confirmed value.
+          if (!consentWritePending && confirmedConsent !== coachNav) {
+            coachNav = confirmedConsent;
+            paintAutonomy();
+          }
+          return;
+        }
         if (settled.consent !== coachNav) {
           coachNav = settled.consent;
           paintAutonomy();
@@ -510,15 +528,20 @@
             esc(snap.consent) + '.';
         }
       };
-      window.HabitKey.postJson('/api/profile', body)
+      // The deadline covers the POST and the 409 body read. Expiry settles only
+      // through applySettle(), so an older request can never settle a newer tap.
+      const ctrl = new AbortController();
+      const deadline = setTimeout(() => { try { ctrl.abort(); } catch { /* settled */ } }, CONSENT_WRITE_TIMEOUT_MS);
+      window.HabitKey.postJson('/api/profile', body, { signal: ctrl.signal })
         .then(async (r) => {
           let server;
           if (r.status === 409) {
-            try { server = await r.json(); } catch { /* no body → prev fallback */ }
+            try { server = await r.json(); } catch { /* no body → confirmed fallback */ }
           }
           applySettle(r.ok, server);
         })
-        .catch(() => applySettle(false));
+        .catch(() => applySettle(false))
+        .finally(() => clearTimeout(deadline));
     }
 
     function settleQuestionSiblings(pressedN, qid) {
@@ -666,10 +689,11 @@
         if (polled.applied) coachNav = polled.consent;
         if (!polled.ignored) {
           confirmedConsent = polled.consent;
-          // Reconcile the server watermark (and the next token) from the poll;
-          // the local write generation is left alone.
+          // Reconcile the server watermark from the poll; the local write
+          // generation is left alone. Only drop the issued token once no write
+          // is still in flight.
           confirmedSeq = Math.max(0, Number(j.coachNavSeq) || 0);
-          issuedNavSeq = confirmedSeq;
+          issuedNavSeq = releaseIssuedNavSeq(issuedNavSeq, confirmedSeq, consentWritesOutstanding);
         }
         today = j.today || {};
         if (!built && habits.length) build();
@@ -682,7 +706,7 @@
     }
 
     refresh();
-    setInterval(refresh, 15000); // same poll cadence as the hardware plugin
+    setInterval(refresh, SLOTS_POLL_MS); // same default cadence as the hardware plugin
     // A nudge's urgency changes with the clock, not with the payload, so the
     // poll alone would never escalate it. Repaint on its own beat while one is
     // live (the plugin does the same via its tick — see escalate()).

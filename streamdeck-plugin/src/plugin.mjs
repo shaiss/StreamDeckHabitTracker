@@ -44,7 +44,8 @@ import { nudgeUrgency, urgencyStep } from '../../lib/nudge.js';
 import {
   takeoverDue, RESTORE_MS, SUPPRESS_MS,
   cycleConsent, autonomyOf, normalizeConsent,
-  beginConsentWrite, nextNavSeq, settleConsentWrite, mergePolledConsent
+  beginConsentWrite, nextNavSeq, releaseIssuedNavSeq, settleConsentWrite, mergePolledConsent,
+  CONSENT_WRITE_TIMEOUT_MS as DEFAULT_CONSENT_WRITE_TIMEOUT_MS
 } from '../../lib/takeover.js';
 import { beaconOf } from '../../lib/beacon.js';
 import { questionPaint, isDetailsKey } from '../../public/glyphs.js';
@@ -62,7 +63,7 @@ const baseOf = (s) => ((s && s.base) || DEFAULT_BASE).replace(/\/+$/, '');
 const POLL_MS = +(process.env.HT_POLL_MS || 15000);
 const TICK_MS = +(process.env.HT_TICK_MS || 3000);
 const POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 10000);
-const CONSENT_WRITE_TIMEOUT_MS = +(process.env.HT_CONSENT_WRITE_TIMEOUT_MS || 10000);
+const CONSENT_WRITE_TIMEOUT_MS = +(process.env.HT_CONSENT_WRITE_TIMEOUT_MS || DEFAULT_CONSENT_WRITE_TIMEOUT_MS);
 // The coach reacts to taps in a background pass; chain rechecks so one lands
 // after the swap exists.
 const RECHECK_MS = (process.env.HT_RECHECK_MS || '2000,5000,9000,15000,25000').split(',').map(Number);
@@ -116,7 +117,8 @@ let consentCache = 'off';        // coachNav from the poll; off until told other
 let confirmedConsent = 'off';    // last persisted consent — rollback target (not tap-prev)
 let consentSeq = 0;              // local write generation (#94 race guard) — never the server's
 let confirmedSeq = 0;            // server sequence of confirmedConsent (last applied)
-let issuedNavSeq = 0;            // navSeq last sent; reset to confirmedSeq once settled
+let issuedNavSeq = 0;            // navSeq last sent; reset to confirmedSeq once all writes settle
+let consentWritesOutstanding = 0; // in-flight POSTs — issued watermark stays up until 0
 let consentWritePending = false; // ignore poll coachNav while a POST is in flight
 let lastKeypressAt = 0;          // human-priority lock: last physical keypress
 let lastPageChangeAt = 0;        // …and last page change (appeared-key churn)
@@ -268,10 +270,11 @@ function refreshSlots(now) {
       if (polled.applied) consentCache = polled.consent;
       if (!polled.ignored) {
         confirmedConsent = polled.consent;
-        // Reconcile the server watermark (and the next token) from the poll;
-        // the local write generation is left alone.
+        // Reconcile the server watermark from the poll; the local write
+        // generation is left alone. Only drop the issued token once no write
+        // is still in flight.
         confirmedSeq = Math.max(0, Number(j.coachNavSeq) || 0);
-        issuedNavSeq = confirmedSeq;
+        issuedNavSeq = releaseIssuedNavSeq(issuedNavSeq, confirmedSeq, consentWritesOutstanding);
       }
       const rosterPending = Number(j.rosterPending) || 0;
       const blocked = !!j.blocked;
@@ -400,6 +403,7 @@ function cycleAutonomy(k) {
   // so rejected attempts cannot push it past what the API accepts.
   const navSeq = nextNavSeq(confirmedSeq, issuedNavSeq);
   issuedNavSeq = navSeq;
+  consentWritesOutstanding += 1;
   consentWritePending = true;
   consentCache = next;
   for (const other of keys.values()) {
@@ -420,9 +424,20 @@ function cycleAutonomy(k) {
     // A success persists even when a newer tap superseded it.
     confirmedConsent = settled.confirmed.consent;
     confirmedSeq = settled.confirmed.sequence;
-    if (!settled.applied) return; // superseded by a newer tap
-    consentWritePending = settled.pending;
-    issuedNavSeq = confirmedSeq;
+    consentWritesOutstanding = Math.max(0, consentWritesOutstanding - 1);
+    issuedNavSeq = releaseIssuedNavSeq(issuedNavSeq, confirmedSeq, consentWritesOutstanding);
+    consentWritePending = consentWritesOutstanding > 0;
+    if (!settled.applied) {
+      if (!consentWritePending && confirmedConsent !== consentCache) {
+        consentCache = confirmedConsent;
+        for (const other of keys.values()) {
+          if (other.kind === 'autonomy') {
+            try { render(other); } catch { /* next tick */ }
+          }
+        }
+      }
+      return;
+    }
     if (settled.consent !== consentCache) {
       consentCache = settled.consent;
       for (const other of keys.values()) {
