@@ -128,23 +128,46 @@
 
   // fetch() for writes: header-only key; on 401 ask once in-page and retry
   // once (a 401 means nothing was written, so the retry is safe).
+  //
+  // Optional init.signalForAttempt(phase) supplies a fresh AbortSignal for
+  // each network attempt ('fetch') and is called with 'prompt' before the
+  // in-page key entry so a write deadline can pause during the prompt and
+  // restart for the retry. Existing init.signal is unchanged when the hook
+  // is omitted.
+  function takeAttemptSignal(init, phase) {
+    if (init && typeof init.signalForAttempt === 'function') return init.signalForAttempt(phase);
+    return init && init.signal;
+  }
+  function attemptInit(init, phase) {
+    var req = Object.assign({}, init || {});
+    var sig = takeAttemptSignal(init, phase);
+    if (sig) req.signal = sig;
+    delete req.signalForAttempt;
+    return req;
+  }
   function keyedFetch(url, init) {
     var f = root.fetch;
-    return f(url, withHeader(init, get())).then(function (r) {
+    init = init || {};
+    return f(url, withHeader(attemptInit(init, 'fetch'), get())).then(function (r) {
       if (r.status !== 401) return r;
       clear();
+      takeAttemptSignal(init, 'prompt');
       return ask().then(function (k) {
-        return k ? f(url, withHeader(init, k)) : r;
+        return k ? f(url, withHeader(attemptInit(init, 'fetch'), k)) : r;
       });
     });
   }
 
-  function postJson(url, payload) {
-    return keyedFetch(url, {
+  function postJson(url, payload, init) {
+    init = init || {};
+    var req = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
-    });
+    };
+    if (init.signal) req.signal = init.signal;
+    if (init.signalForAttempt) req.signalForAttempt = init.signalForAttempt;
+    return keyedFetch(url, req);
   }
 
   consumeHandoff();

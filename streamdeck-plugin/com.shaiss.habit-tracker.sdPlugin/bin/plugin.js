@@ -17872,6 +17872,100 @@ var CONSENT_LEVELS = ["off", "nudge-only", "may-navigate"];
 function normalizeConsent(v) {
   return CONSENT_LEVELS.includes(v) ? v : "off";
 }
+var AUTONOMY_GLYPH = "\u2699";
+var AUTONOMY_MODES = Object.freeze({
+  off: { consent: "off", mode: "MANUAL", label: "MANUAL", glyph: AUTONOMY_GLYPH },
+  "nudge-only": { consent: "nudge-only", mode: "ASSISTED", label: "ASSISTED", glyph: AUTONOMY_GLYPH },
+  "may-navigate": { consent: "may-navigate", mode: "AUTO", label: "AUTO", glyph: AUTONOMY_GLYPH }
+});
+function autonomyOf(consent) {
+  return AUTONOMY_MODES[normalizeConsent(consent)];
+}
+function cycleConsent(consent) {
+  const cur = normalizeConsent(consent);
+  const i = CONSENT_LEVELS.indexOf(cur);
+  return CONSENT_LEVELS[(i + 1) % CONSENT_LEVELS.length];
+}
+function beginConsentWrite(seq) {
+  return (Number(seq) || 0) + 1;
+}
+function nextNavSeq(confirmedSeq2, issuedSeq) {
+  return Math.max(Number(confirmedSeq2) || 0, Number(issuedSeq) || 0, 0) + 1;
+}
+function releaseIssuedNavSeq(issued, confirmed, outstanding) {
+  if ((Number(outstanding) || 0) > 0) return Math.max(0, Number(issued) || 0);
+  return Math.max(0, Number(confirmed) || 0);
+}
+var CONSENT_WRITE_TIMEOUT_MS = 1e4;
+function asConfirmed(confirmed, prev) {
+  if (confirmed && typeof confirmed === "object") {
+    return {
+      consent: normalizeConsent(confirmed.consent),
+      sequence: Math.max(0, Number(confirmed.sequence) || 0)
+    };
+  }
+  return { consent: normalizeConsent(prev), sequence: 0 };
+}
+function settleConsentWrite({
+  currentSeq,
+  writeSeq,
+  ok,
+  current,
+  prev,
+  server,
+  written,
+  navSeq,
+  confirmed
+}) {
+  let conf = asConfirmed(confirmed, prev);
+  if (ok && written !== void 0 && Number.isSafeInteger(navSeq) && navSeq > conf.sequence) {
+    conf = { consent: normalizeConsent(written), sequence: navSeq };
+  }
+  if (writeSeq !== currentSeq) {
+    return { consent: current, pending: true, applied: false, confirmed: conf };
+  }
+  if (ok) return { consent: current, pending: false, applied: true, confirmed: conf };
+  const serverSeq = Number(server?.coachNavSeq);
+  if (typeof server?.coachNav === "string" && Number.isInteger(serverSeq) && serverSeq >= conf.sequence) {
+    conf = { consent: normalizeConsent(server.coachNav), sequence: serverSeq };
+    return {
+      consent: conf.consent,
+      sequence: serverSeq,
+      pending: false,
+      applied: true,
+      confirmed: conf
+    };
+  }
+  return { consent: conf.consent, pending: false, applied: true, confirmed: conf };
+}
+function mergePolledConsent({
+  pending,
+  current,
+  polled,
+  pollSeq,
+  currentSeq,
+  pendingAtStart,
+  serverSeq,
+  appliedServerSeq
+} = {}) {
+  if (pending || pendingAtStart) {
+    return { consent: current, applied: false, ignored: true };
+  }
+  if (pollSeq !== void 0 && currentSeq !== void 0 && pollSeq !== currentSeq) {
+    return { consent: current, applied: false, ignored: true };
+  }
+  const incoming = Number(serverSeq);
+  const applied = Number(appliedServerSeq);
+  if (serverSeq !== void 0 && appliedServerSeq !== void 0 && Number.isFinite(incoming) && Number.isFinite(applied) && incoming < applied) {
+    return { consent: current, applied: false, ignored: true };
+  }
+  const next = normalizeConsent(polled);
+  return {
+    consent: next,
+    applied: next !== normalizeConsent(current),
+    ignored: false
+  };
+}
 var HUMAN_LOCK_MS = 10 * 6e4;
 var RESTORE_MS = 9e4;
 var SUPPRESS_MS = 24 * 36e5;
@@ -17977,12 +18071,13 @@ var baseOf = (s) => (s && s.base || DEFAULT_BASE).replace(/\/+$/, "");
 var POLL_MS = +(process.env.HT_POLL_MS || 15e3);
 var TICK_MS = +(process.env.HT_TICK_MS || 3e3);
 var POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 1e4);
+var CONSENT_WRITE_TIMEOUT_MS2 = +(process.env.HT_CONSENT_WRITE_TIMEOUT_MS || CONSENT_WRITE_TIMEOUT_MS);
 var RECHECK_MS = (process.env.HT_RECHECK_MS || "2000,5000,9000,15000,25000").split(",").map(Number);
 var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
 var SILVER_HUE = 222;
 var reducedMotion = () => process.env.HT_REDUCED_MOTION === "1";
-var VERSION = "2.6.0";
+var VERSION = "2.6.1";
 try {
   VERSION = plugin_default.info.plugin.version || VERSION;
 } catch {
@@ -17998,6 +18093,12 @@ var keyOf = (s) => resolveKey(globalSettings, s, baseOf(s));
 var rosterPendingCache = 0;
 var blockedCache = false;
 var consentCache = "off";
+var confirmedConsent = "off";
+var consentSeq = 0;
+var confirmedSeq = 0;
+var issuedNavSeq = 0;
+var consentWritesOutstanding = 0;
+var consentWritePending = false;
 var lastKeypressAt = 0;
 var lastPageChangeAt = 0;
 var lastTakeoverDay = "";
@@ -18100,6 +18201,8 @@ function refreshSlots(now) {
   }
   const seq = sched.pollStarted(now);
   const url2 = base.replace(/\/+$/, "") + "/api/slots?deck=" + encodeURIComponent(VERSION) + "&keys=" + keys.size + "&tz=" + (/* @__PURE__ */ new Date()).getTimezoneOffset();
+  const pollSeq = consentSeq;
+  const pendingAtStart = consentWritePending;
   inflightCtrl = new AbortController();
   fetch(url2, keyedInit(secret, { signal: inflightCtrl.signal })).then((r) => r.json()).then((j) => {
     if (!sched.pollSettled(seq)) return;
@@ -18108,7 +18211,23 @@ function refreshSlots(now) {
     const coachPage = j.coachPage || [];
     const habits = j.habits || [];
     const today = j.today || {};
-    consentCache = j.coachNav || "off";
+    const polled = mergePolledConsent({
+      pending: consentWritePending,
+      current: consentCache,
+      polled: j.coachNav,
+      pollSeq,
+      currentSeq: consentSeq,
+      pendingAtStart,
+      serverSeq: j.coachNavSeq === void 0 ? void 0 : Math.max(0, Number(j.coachNavSeq) || 0),
+      appliedServerSeq: confirmedSeq
+    });
+    const consentChanged = polled.applied;
+    if (polled.applied) consentCache = polled.consent;
+    if (!polled.ignored) {
+      confirmedConsent = polled.consent;
+      confirmedSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+      issuedNavSeq = releaseIssuedNavSeq(issuedNavSeq, confirmedSeq, consentWritesOutstanding);
+    }
     const rosterPending = Number(j.rosterPending) || 0;
     const blocked = !!j.blocked;
     const slotsChanged = !slotCache || JSON.stringify(slotCache) !== JSON.stringify(slots) || !coachCache || JSON.stringify(coachCache) !== JSON.stringify(coachPage) || rosterPendingCache !== rosterPending || blockedCache !== blocked;
@@ -18123,6 +18242,7 @@ function refreshSlots(now) {
     for (const k of keys.values()) {
       try {
         if (slotsChanged && (k.kind === "slot" || k.kind === "coach")) render(k);
+        if (consentChanged && k.kind === "autonomy") render(k);
         if (k.kind === "habit" && (habitsChanged || todayChanged)) render(k);
       } catch {
       }
@@ -18198,6 +18318,109 @@ function renderCoach(k) {
   k.frame = snap.frame;
   k.beaconSig = snap.frame + ":" + snap.pending;
   k.action.setImage(face("\u{1F9ED}", "Coach", VIOLET_HUE, snap.badge, 72, withFrame(k, null, now)));
+}
+function renderAutonomy(k) {
+  const now = Date.now();
+  setKeyFrame(k, "idle");
+  const snap = autonomyOf(consentCache);
+  k.action.setImage(face(snap.glyph, snap.label, VIOLET_HUE, "", 72, withFrame(k, {
+    grammar: true,
+    mono: true
+  }, now)));
+}
+function cycleAutonomy(k) {
+  const prev = confirmedConsent;
+  const next = cycleConsent(consentCache);
+  const seq = beginConsentWrite(consentSeq);
+  consentSeq = seq;
+  const navSeq = nextNavSeq(confirmedSeq, issuedNavSeq);
+  issuedNavSeq = navSeq;
+  consentWritesOutstanding += 1;
+  consentWritePending = true;
+  consentCache = next;
+  for (const other of keys.values()) {
+    if (other.kind === "autonomy") {
+      try {
+        render(other);
+      } catch {
+      }
+    }
+  }
+  const s = k.settings;
+  const url2 = baseOf(s) + "/api/profile";
+  const body = { coachNav: next, navSeq };
+  const applySettle = (ok, server) => {
+    const settled = settleConsentWrite({
+      currentSeq: consentSeq,
+      writeSeq: seq,
+      ok,
+      current: consentCache,
+      prev,
+      server,
+      written: next,
+      navSeq,
+      confirmed: { consent: confirmedConsent, sequence: confirmedSeq }
+    });
+    confirmedConsent = settled.confirmed.consent;
+    confirmedSeq = settled.confirmed.sequence;
+    consentWritesOutstanding = Math.max(0, consentWritesOutstanding - 1);
+    issuedNavSeq = releaseIssuedNavSeq(issuedNavSeq, confirmedSeq, consentWritesOutstanding);
+    consentWritePending = consentWritesOutstanding > 0;
+    if (!settled.applied) {
+      if (!consentWritePending && confirmedConsent !== consentCache) {
+        consentCache = confirmedConsent;
+        for (const other of keys.values()) {
+          if (other.kind === "autonomy") {
+            try {
+              render(other);
+            } catch {
+            }
+          }
+        }
+      }
+      return;
+    }
+    if (settled.consent !== consentCache) {
+      consentCache = settled.consent;
+      for (const other of keys.values()) {
+        if (other.kind === "autonomy") {
+          try {
+            render(other);
+          } catch {
+          }
+        }
+      }
+    }
+    if (ok) k.action.showOk();
+    else {
+      k.action.showAlert();
+      sched.forcePoll();
+      pump();
+    }
+  };
+  const ctrl = new AbortController();
+  const deadline = setTimeout(() => {
+    try {
+      ctrl.abort();
+    } catch {
+    }
+  }, CONSENT_WRITE_TIMEOUT_MS2);
+  if (deadline.unref) deadline.unref();
+  fetch(url2, keyedInit(keyOf(s), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: ctrl.signal
+  })).then(async (r) => {
+    let server;
+    if (r.status === 409) {
+      try {
+        server = await r.json();
+      } catch {
+      }
+    }
+    applySettle(r.ok, server);
+  }).catch(() => applySettle(false)).finally(() => clearTimeout(deadline));
 }
 function coachNavigate(k) {
   const raw = parseInt(k.settings.coachPage, 10);
@@ -18329,6 +18552,10 @@ function render(k) {
   const s = k.settings;
   if (k.kind === "coach") {
     renderCoach(k);
+    return;
+  }
+  if (k.kind === "autonomy") {
+    renderAutonomy(k);
     return;
   }
   if (k.kind === "habit") {
@@ -18469,6 +18696,10 @@ function dispatch({ id, gesture }) {
     else coachNavigate(k);
     return;
   }
+  if (k.kind === "autonomy") {
+    if (gesture === "tap" || gesture === "commit") cycleAutonomy(k);
+    return;
+  }
   if (gesture === "arm") {
     k.armed = true;
     try {
@@ -18538,7 +18769,7 @@ function defineAction(uuid3, kind) {
       // switchToProfile needs the device (#53); the SDK stamps it on the action.
       deviceId: ev.action.device && ev.action.device.id || void 0
     });
-    gest.register(ev.action.id, { doubleTap: kind !== "coach" });
+    gest.register(ev.action.id, { doubleTap: kind !== "coach" && kind !== "autonomy" });
     lastPageChangeAt = Date.now();
     render(keys.get(ev.action.id));
     startClock();
@@ -18578,6 +18809,7 @@ function defineAction(uuid3, kind) {
 plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.habit", "habit"));
 plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.slot", "slot"));
 plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.coach", "coach"));
+plugin_default.actions.registerAction(defineAction("com.shaiss.habit-tracker.autonomy", "autonomy"));
 try {
   plugin_default.system.onSystemDidWakeUp(() => {
     sched.forcePoll();

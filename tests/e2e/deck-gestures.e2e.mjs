@@ -17,7 +17,8 @@ const ROOT = fileURLToPath(new URL('../../public', import.meta.url));
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.gif': 'image/gif', '.png': 'image/png' };
 
 let server, browser, context, page, port;
-let calls = [];        // every /api/log + /api/nudge request, as "METHOD url"
+let calls = [];        // every /api/log + /api/nudge + /api/profile request, as "METHOD url"
+let profileBodies = []; // parsed JSON bodies posted to /api/profile
 let logStatus = 200;
 let nudgeFraction = null;   // null = slot 1 holds a plain suggestion
 let mockRosterPending = 0;
@@ -25,6 +26,13 @@ let mockBlocked = false;
 let mockQuestion = false;
 let mockPicker = false;
 let mockDanger = false;
+let mockCoachNav = 'off';
+// Autonomy write-race harness (#94): each /api/profile POST consumes one
+// scripted outcome. 'ok' | 'fail' | { holdMs, then: 'ok'|'fail' }.
+let profileScript = [];
+let heldProfiles = [];
+let profileRequireKey = false;
+const PROFILE_KEY = 'test-placeholder-value';
 
 before(async () => {
   server = createServer((req, res) => {
@@ -39,6 +47,42 @@ before(async () => {
       calls.push(req.method + ' ' + req.url);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ dismissed: true }));
+      return;
+    }
+    if (url === '/api/profile') {
+      calls.push(req.method + ' ' + req.url);
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        let parsed = {};
+        try { parsed = body ? JSON.parse(body) : {}; } catch { /* empty */ }
+        profileBodies.push(parsed);
+        if (profileRequireKey && req.headers['x-habit-key'] !== PROFILE_KEY) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
+        const step = profileScript.length ? profileScript.shift() : 'ok';
+        const finish = (ok) => {
+          if (ok && parsed.coachNav !== undefined) mockCoachNav = parsed.coachNav;
+          res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(ok ? { ok: true, coachNav: mockCoachNav } : { ok: false }));
+        };
+        if (step === 'hang' || (step && typeof step === 'object' && step.hang)) {
+          heldProfiles.push({ finish, then: 'hang' });
+          return; // never answers — the client deadline must settle it
+        }
+        if (step && typeof step === 'object' && step.holdMs) {
+          heldProfiles.push({ finish, then: step.then || 'ok', holdMs: step.holdMs });
+          setTimeout(() => {
+            const i = heldProfiles.findIndex((h) => h.finish === finish);
+            if (i >= 0) heldProfiles.splice(i, 1);
+            finish(step.then !== 'fail');
+          }, step.holdMs);
+          return;
+        }
+        finish(step !== 'fail');
+      });
       return;
     }
     if (url === '/api/slots') {
@@ -90,6 +134,7 @@ before(async () => {
         ],
         rosterPending: mockRosterPending,
         blocked: mockBlocked,
+        coachNav: mockCoachNav,
         today: {}
       }));
       return;
@@ -114,16 +159,23 @@ before(async () => {
 after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false } = {}) {
+async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false, coachNav = 'off', consentWriteTimeout, slotsPollMs, requireProfileKey = false } = {}) {
   calls = [];
+  profileBodies = [];
   logStatus = 200;
+  profileRequireKey = requireProfileKey;
   nudgeFraction = nudge;
   mockRosterPending = roster;
   mockBlocked = blocked;
   mockQuestion = question;
   mockPicker = picker;
   mockDanger = danger;
-  await page.goto(`http://127.0.0.1:${port}/deck.html`, { waitUntil: 'networkidle' });
+  mockCoachNav = coachNav;
+  const q = new URLSearchParams();
+  if (consentWriteTimeout) q.set('consentWriteTimeout', String(consentWriteTimeout));
+  if (slotsPollMs) q.set('slotsPollMs', String(slotsPollMs));
+  const qs = q.toString() ? `?${q}` : '';
+  await page.goto(`http://127.0.0.1:${port}/deck.html${qs}`, { waitUntil: slotsPollMs ? 'load' : 'networkidle' });
   await page.waitForSelector('.k[data-habit="0"]');
   return page.locator('.k[data-habit="0"]');
 }
@@ -217,6 +269,201 @@ test('the Stats key still opens the dashboard on a plain tap', async () => {
   const p = await popup;
   assert.match(p.url(), /\/$/);
   await p.close();
+});
+
+test('Autonomy Toggle: press cycles MANUAL → ASSISTED → AUTO and posts profile (#94)', async () => {
+  profileScript = [];
+  await open({ coachNav: 'off' });
+  await page.waitForSelector('.k[data-autonomy]');
+  const faceOf = () => page.$eval('.k[data-autonomy]', (el) => ({
+    cls: el.querySelector('.facecss')?.className || '',
+    frame: el.querySelector('.stateframe')?.className || '',
+    label: el.querySelector('.lb')?.textContent || '',
+    glyph: el.querySelector('.em')?.textContent || '',
+    consent: el.dataset.consent || '',
+    mode: el.dataset.mode || ''
+  }));
+  let f = await faceOf();
+  assert.match(f.cls, /autonomyface/);
+  assert.match(f.frame, /frame-idle/);
+  assert.equal(f.glyph, '⚙');
+  assert.equal(f.label, 'MANUAL');
+  assert.equal(f.consent, 'off');
+  assert.equal(f.mode, 'MANUAL');
+
+  calls = [];
+  profileBodies = [];
+  await page.locator('.k[data-autonomy]').click();
+  await settle();
+  assert.ok(calls.some((c) => c.startsWith('POST /api/profile')), 'persists via /api/profile');
+  assert.ok(!calls.some((c) => c.includes('/api/log')), 'never logs a habit');
+  assert.equal(profileBodies.at(-1)?.coachNav, 'nudge-only');
+  f = await faceOf();
+  assert.equal(f.label, 'ASSISTED');
+  assert.equal(f.consent, 'nudge-only');
+  assert.equal(f.mode, 'ASSISTED');
+  assert.match(f.frame, /frame-idle/, 'sticky key stays calm');
+
+  await page.locator('.k[data-autonomy]').click();
+  await settle();
+  assert.equal(profileBodies.at(-1)?.coachNav, 'may-navigate');
+  f = await faceOf();
+  assert.equal(f.label, 'AUTO');
+  assert.equal(f.mode, 'AUTO');
+
+  await page.locator('.k[data-autonomy]').click();
+  await settle();
+  assert.equal(profileBodies.at(-1)?.coachNav, 'off');
+  f = await faceOf();
+  assert.equal(f.label, 'MANUAL');
+  assert.equal(f.mode, 'MANUAL');
+});
+
+test('Autonomy Toggle: stale failed POST does not roll back a newer success (#94)', async () => {
+  // First POST held then fails; second POST succeeds quickly. Face must stay AUTO.
+  profileScript = [
+    { holdMs: 400, then: 'fail' },
+    'ok'
+  ];
+  await open({ coachNav: 'off' });
+  await page.waitForSelector('.k[data-autonomy]');
+  const faceOf = () => page.$eval('.k[data-autonomy]', (el) => ({
+    label: el.querySelector('.lb')?.textContent || '',
+    consent: el.dataset.consent || '',
+    mode: el.dataset.mode || ''
+  }));
+
+  calls = [];
+  profileBodies = [];
+  await page.locator('.k[data-autonomy]').click(); // → ASSISTED (held)
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only');
+  await page.locator('.k[data-autonomy]').click(); // → AUTO (ok)
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'may-navigate');
+  // Wait out the held failure settle.
+  await new Promise((r) => setTimeout(r, 550));
+  await settle();
+  const f = await faceOf();
+  assert.equal(f.label, 'AUTO', 'stale failure must not restore MANUAL/ASSISTED');
+  assert.equal(f.consent, 'may-navigate');
+  assert.equal(f.mode, 'AUTO');
+  assert.equal(mockCoachNav, 'may-navigate', 'server kept the newer success');
+  profileScript = [];
+});
+
+test('Autonomy Toggle: a superseded success is kept; a later failure restores it (#94)', async () => {
+  // Tap 1 persists ASSISTED but its response arrives after tap 2 was issued;
+  // tap 2 then fails. The face must restore ASSISTED (what the server holds), not MANUAL.
+  profileScript = [
+    { holdMs: 300, then: 'ok' },
+    { holdMs: 500, then: 'fail' }
+  ];
+  await open({ coachNav: 'off' });
+  await page.waitForSelector('.k[data-autonomy]');
+  profileBodies = [];
+  await page.locator('.k[data-autonomy]').click(); // → ASSISTED (persists)
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only');
+  await page.locator('.k[data-autonomy]').click(); // → AUTO (fails)
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'may-navigate');
+  await new Promise((r) => setTimeout(r, 750));
+  const f = await page.$eval('.k[data-autonomy]', (el) => ({
+    label: el.querySelector('.lb')?.textContent || '', consent: el.dataset.consent || ''
+  }));
+  assert.equal(f.label, 'ASSISTED', 'failure restores the confirmed success, not the tap-time snapshot');
+  assert.equal(f.consent, 'nudge-only');
+  assert.equal(mockCoachNav, 'nudge-only');
+  profileScript = [];
+});
+
+test('Autonomy Toggle: rejected attempts do not ratchet navSeq (#94)', async () => {
+  profileScript = ['fail', 'fail', 'ok'];
+  await open({ coachNav: 'off' });
+  await page.waitForSelector('.k[data-autonomy]');
+  profileBodies = [];
+  for (let i = 0; i < 3; i++) {
+    await page.locator('.k[data-autonomy]').click();
+    await new Promise((r) => setTimeout(r, 250)); // let the response settle
+  }
+  assert.deepEqual(profileBodies.map((b) => b.navSeq), [1, 1, 1],
+    'failed attempts leave the stored sequence unchanged, so the next token is unchanged');
+  profileScript = [];
+});
+
+test('Autonomy Toggle: a third tap beats an older in-flight token after a newer failure (#94)', async () => {
+  // Older POST is held, newer POST fails, third tap must send navSeq > older's.
+  profileScript = [
+    { holdMs: 900, then: 'ok' },
+    'fail'
+  ];
+  await open({ coachNav: 'off' });
+  await page.waitForSelector('.k[data-autonomy]');
+  profileBodies = [];
+  await page.locator('.k[data-autonomy]').click(); // older, held
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only');
+  await page.locator('.k[data-autonomy]').click(); // newer, fails
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(profileBodies.length, 2);
+  await page.locator('.k[data-autonomy]').click(); // third
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(profileBodies.length >= 3);
+  assert.ok(profileBodies[2].navSeq > profileBodies[0].navSeq,
+    'third tap must use a token greater than the older in-flight write');
+  await new Promise((r) => setTimeout(r, 800)); // let the held write finish
+  profileScript = [];
+});
+
+test('Autonomy Toggle: a hung consent POST times out, rolls back, and polls resume (#94)', async () => {
+  profileScript = ['hang'];
+  await open({ coachNav: 'off', consentWriteTimeout: 400, slotsPollMs: 300 });
+  await page.waitForSelector('.k[data-autonomy]');
+  profileBodies = [];
+  await page.locator('.k[data-autonomy]').click();
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only');
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'off',
+    null, { timeout: 5000 });
+  const f = await page.$eval('.k[data-autonomy]', (el) => ({
+    label: el.querySelector('.lb')?.textContent || '', consent: el.dataset.consent || ''
+  }));
+  assert.equal(f.consent, 'off', 'expired write must restore the confirmed consent');
+  assert.equal(f.label, 'MANUAL');
+  // Pending has cleared, so the shortened poll cadence can apply stored consent.
+  mockCoachNav = 'may-navigate';
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'may-navigate',
+    null, { timeout: 5000 });
+  profileScript = [];
+});
+
+test('Autonomy Toggle: a slow key prompt does not abort the valid-key retry (#94)', async () => {
+  // Server requires a key. The first POST 401s, the prompt is answered after
+  // the 400ms write deadline, and the retry must still persist ASSISTED.
+  await open({ coachNav: 'off', consentWriteTimeout: 400, requireProfileKey: true });
+  await page.waitForSelector('.k[data-autonomy]');
+  profileBodies = [];
+  calls = [];
+  await page.locator('.k[data-autonomy]').click();
+  await page.waitForSelector('[role="dialog"] input[aria-label="HabitDeck key"]');
+  await new Promise((r) => setTimeout(r, 700)); // longer than the 400ms deadline
+  await page.locator('[role="dialog"] input[aria-label="HabitDeck key"]').fill(PROFILE_KEY);
+  await page.locator('[role="dialog"] button[type="submit"]').click();
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only' &&
+    !document.querySelector('[role="dialog"]'),
+    null, { timeout: 5000 });
+  const f = await page.$eval('.k[data-autonomy]', (el) => ({
+    label: el.querySelector('.lb')?.textContent || '', consent: el.dataset.consent || ''
+  }));
+  assert.equal(f.consent, 'nudge-only', 'retry after a slow prompt must keep the new consent');
+  assert.equal(f.label, 'ASSISTED');
+  assert.equal(mockCoachNav, 'nudge-only');
+  assert.ok(calls.filter((c) => c.startsWith('POST /api/profile')).length >= 2,
+    'first attempt 401s, then a retry with the entered key');
 });
 
 test('Attention Beacon: idle / wait+count / blocked faces; tap never logs (#75)', async () => {

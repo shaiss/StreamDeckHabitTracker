@@ -10,6 +10,13 @@
     let coachPage = [];
     let rosterPending = 0;
     let beaconBlocked = false;
+    let coachNav = 'off';   // Autonomy Toggle (#94) — off | nudge-only | may-navigate
+    let confirmedConsent = 'off'; // last persisted consent — rollback target (not tap-prev)
+    let consentSeq = 0;     // local write generation — stale failures must not roll back newer success
+    let confirmedSeq = 0;   // server sequence of confirmedConsent (last applied)
+    let issuedNavSeq = 0;   // navSeq last sent; reset to confirmedSeq once all writes settle
+    let consentWritesOutstanding = 0; // in-flight POSTs — issued watermark stays up until 0
+    let consentWritePending = false; // ignore poll coachNav while a POST is in flight
     let habits = [];
     let today = {};   // habitName -> {count, goal, doneToday, streak, ringFill} (#32)
     let built = false;
@@ -75,7 +82,15 @@
       });
       beacon.dataset.beacon = '1';
       face.appendChild(beacon);
-      const used = habits.length + 1 + 4 + 1; // habits + stats + AI slots + beacon
+      // Autonomy Toggle (#94 / §3.5): sticky mode dial. Tap cycles consent
+      // through /api/profile; never logs. Does not steal the beacon key.
+      const autonomy = keyEl({
+        title: 'Autonomy — tap to cycle MANUAL → ASSISTED → AUTO',
+        onTap: (e2) => cycleAutonomy(e2)
+      });
+      autonomy.dataset.autonomy = '1';
+      face.appendChild(autonomy);
+      const used = habits.length + 1 + 4 + 1 + 1; // habits + stats + AI slots + beacon + autonomy
       for (let i = 0; i < Math.max(0, 15 - used); i++) {
         const off = document.createElement('button');
         off.className = 'k off'; off.disabled = true; off.tabIndex = -1;
@@ -90,6 +105,22 @@
     // double-tap says "big one". Mirrors streamdeck-plugin/src/gestures.mjs —
     // tests/unit/gestures.test.mjs guards these two copies against drifting.
     const LONG_PRESS_MS = 500, DOUBLE_TAP_MS = 300, ARM_MS = 3000;
+    // Optional duration overrides (query or globalThis) are clamped: invalid,
+    // negative, zero, or whitespace-only values use the default; accepted
+    // values stay in 250ms–120s.
+    const qs = new URLSearchParams(location.search);
+    const CLIENT_OPTION_MS_MIN = 250;
+    const CLIENT_OPTION_MS_MAX = 120_000;
+    function clampClientMs(raw, fallback, min = CLIENT_OPTION_MS_MIN, max = CLIENT_OPTION_MS_MAX) {
+      if (raw == null || (typeof raw === 'string' && raw.trim() === '')) return fallback;
+      const n = Number(typeof raw === 'string' ? raw.trim() : raw);
+      if (!Number.isFinite(n) || n <= 0) return fallback;
+      return Math.min(max, Math.max(min, n));
+    }
+    const CONSENT_WRITE_TIMEOUT_MS = clampClientMs(
+      globalThis.HT_CONSENT_WRITE_TIMEOUT_MS || qs.get('consentWriteTimeout'), 10_000);
+    const SLOTS_POLL_MS = clampClientMs(
+      globalThis.HT_SLOTS_POLL_MS || qs.get('slotsPollMs'), 15_000);
 
     function bindGestures(b, { onTap, onLong, onDouble }) {
       let longTimer = null, pendingTimer = null, longFired = false, ptr = null;
@@ -251,6 +282,100 @@
       return { pending, blocked, frame, badge: pending > 0 ? String(pending) : '' };
     }
 
+    // Autonomy Toggle (#94 / §3.5). Same mapping as lib/takeover.js —
+    // drift-guarded in tests/unit/autonomy.test.mjs.
+    const CONSENT_LEVELS = ['off', 'nudge-only', 'may-navigate'];
+    const AUTONOMY_GLYPH = '⚙';
+    const AUTONOMY_MODES = {
+      off: { consent: 'off', mode: 'MANUAL', label: 'MANUAL', glyph: AUTONOMY_GLYPH },
+      'nudge-only': { consent: 'nudge-only', mode: 'ASSISTED', label: 'ASSISTED', glyph: AUTONOMY_GLYPH },
+      'may-navigate': { consent: 'may-navigate', mode: 'AUTO', label: 'AUTO', glyph: AUTONOMY_GLYPH }
+    };
+    function normalizeConsent(v) {
+      return CONSENT_LEVELS.includes(v) ? v : 'off';
+    }
+    function autonomyOf(consent) {
+      return AUTONOMY_MODES[normalizeConsent(consent)];
+    }
+    function cycleConsent(consent) {
+      const cur = normalizeConsent(consent);
+      const i = CONSENT_LEVELS.indexOf(cur);
+      return CONSENT_LEVELS[(i + 1) % CONSENT_LEVELS.length];
+    }
+    // Same race helpers as lib/takeover.js (drift-guarded in autonomy.test.mjs).
+    function beginConsentWrite(seq) {
+      return (Number(seq) || 0) + 1;
+    }
+    function nextNavSeq(confirmedSeq, issuedSeq) {
+      return Math.max(Number(confirmedSeq) || 0, Number(issuedSeq) || 0, 0) + 1;
+    }
+    function releaseIssuedNavSeq(issued, confirmed, outstanding) {
+      if ((Number(outstanding) || 0) > 0) return Math.max(0, Number(issued) || 0);
+      return Math.max(0, Number(confirmed) || 0);
+    }
+    function asConfirmed(confirmed, prev) {
+      if (confirmed && typeof confirmed === 'object') {
+        return {
+          consent: normalizeConsent(confirmed.consent),
+          sequence: Math.max(0, Number(confirmed.sequence) || 0)
+        };
+      }
+      return { consent: normalizeConsent(prev), sequence: 0 };
+    }
+    function settleConsentWrite({
+      currentSeq, writeSeq, ok, current, prev, server, written, navSeq, confirmed
+    }) {
+      let conf = asConfirmed(confirmed, prev);
+      // A success is durable no matter which tap it belonged to — keep it, but
+      // never let an older success overwrite a newer confirmed one.
+      if (ok && written !== undefined && Number.isSafeInteger(navSeq) && navSeq > conf.sequence) {
+        conf = { consent: normalizeConsent(written), sequence: navSeq };
+      }
+      if (writeSeq !== currentSeq) {
+        return { consent: current, pending: true, applied: false, confirmed: conf };
+      }
+      if (ok) return { consent: current, pending: false, applied: true, confirmed: conf };
+      const serverSeq = Number(server?.coachNavSeq);
+      if (typeof server?.coachNav === 'string' &&
+          Number.isInteger(serverSeq) && serverSeq >= conf.sequence) {
+        conf = { consent: normalizeConsent(server.coachNav), sequence: serverSeq };
+        return {
+          consent: conf.consent,
+          sequence: serverSeq,
+          pending: false,
+          applied: true,
+          confirmed: conf
+        };
+      }
+      return { consent: conf.consent, pending: false, applied: true, confirmed: conf };
+    }
+    function mergePolledConsent({
+      pending, current, polled, pollSeq, currentSeq, pendingAtStart,
+      serverSeq, appliedServerSeq
+    } = {}) {
+      if (pending || pendingAtStart) {
+        return { consent: current, applied: false, ignored: true };
+      }
+      if (pollSeq !== undefined && currentSeq !== undefined && pollSeq !== currentSeq) {
+        return { consent: current, applied: false, ignored: true };
+      }
+      // Two polls can start at the same write generation and finish out of order;
+      // the one carrying the older server sequence must not win. The watermark
+      // starts at 0, so nothing is rejected before a higher sequence was applied.
+      const incoming = Number(serverSeq);
+      const applied = Number(appliedServerSeq);
+      if (serverSeq !== undefined && appliedServerSeq !== undefined &&
+          Number.isFinite(incoming) && Number.isFinite(applied) && incoming < applied) {
+        return { consent: current, applied: false, ignored: true };
+      }
+      const next = normalizeConsent(polled);
+      return {
+        consent: next,
+        applied: next !== normalizeConsent(current),
+        ignored: false
+      };
+    }
+
     // Opt-in turn-state frame (#74). Same alias as faces.mjs resolveFrame
     // (`frame` or `frameState`). Absent / unknown → no element, same as today.
     function resolveFrame(src) {
@@ -335,6 +460,7 @@
           : ('AI slot ' + n + ' — empty');
       });
       paintBeacon();
+      paintAutonomy();
     }
 
     function paintBeacon() {
@@ -349,6 +475,97 @@
       el.title = b.blocked
         ? 'Coach blocked — tap for context (does not decide)'
         : (b.pending ? b.pending + ' pending — tap for context (does not decide)' : 'Coach quiet');
+    }
+
+    function paintAutonomy() {
+      const el = document.querySelector('.k[data-autonomy]');
+      if (!el) return;
+      const snap = autonomyOf(coachNav);
+      // Sticky key: idle frame always; violet interior; ⚙ + short mode label.
+      el.innerHTML = '<span class="facecss autonomyface">' + stateFrameHtml('idle') +
+        '<span class="em">' + esc(snap.glyph) + '</span>' +
+        '<span class="lb mono">' + esc(snap.label) + '</span></span>' +
+        '<span class="glass"></span><span class="flash"></span>';
+      el.title = 'Autonomy ' + snap.mode + ' — tap to cycle (never logs)';
+      el.dataset.consent = snap.consent;
+      el.dataset.mode = snap.mode;
+    }
+
+    function cycleAutonomy(el) {
+      // Roll back to last persisted consent, not the prior tap's optimistic value.
+      const prev = confirmedConsent;
+      const next = cycleConsent(coachNav);
+      const seq = beginConsentWrite(consentSeq);
+      consentSeq = seq;
+      // Token derives from the server's sequence, not the local generation, so
+      // rejected attempts cannot push it past what the API accepts.
+      const navSeq = nextNavSeq(confirmedSeq, issuedNavSeq);
+      issuedNavSeq = navSeq;
+      consentWritesOutstanding += 1;
+      consentWritePending = true;
+      coachNav = next;
+      paintAutonomy();
+      el.classList.add('pressed');
+      setTimeout(() => el.classList.remove('pressed'), 120);
+      const body = { coachNav: next, navSeq };
+      const applySettle = (ok, server) => {
+        const settled = settleConsentWrite({
+          currentSeq: consentSeq, writeSeq: seq, ok,
+          current: coachNav, prev, server,
+          written: next, navSeq,
+          confirmed: { consent: confirmedConsent, sequence: confirmedSeq }
+        });
+        // A success persists even when a newer tap superseded it.
+        confirmedConsent = settled.confirmed.consent;
+        confirmedSeq = settled.confirmed.sequence;
+        consentWritesOutstanding = Math.max(0, consentWritesOutstanding - 1);
+        issuedNavSeq = releaseIssuedNavSeq(issuedNavSeq, confirmedSeq, consentWritesOutstanding);
+        consentWritePending = consentWritesOutstanding > 0;
+        if (!settled.applied) {
+          // Last remaining write was superseded: paint the confirmed value.
+          if (!consentWritePending && confirmedConsent !== coachNav) {
+            coachNav = confirmedConsent;
+            paintAutonomy();
+          }
+          return;
+        }
+        if (settled.consent !== coachNav) {
+          coachNav = settled.consent;
+          paintAutonomy();
+        }
+        flash(el, ok);
+        if (ok) {
+          const snap = autonomyOf(coachNav);
+          hint.innerHTML = '<b>Autonomy → ' + esc(snap.mode) + '</b> — coach leash is now ' +
+            esc(snap.consent) + '.';
+        }
+      };
+      // The deadline covers each network attempt (the fetch itself), not the
+      // in-page key prompt. Once a response has arrived, aborting that signal
+      // does not cancel a 409 body read. A fresh signal is armed per attempt
+      // so a slow key entry cannot abort the valid-key retry.
+      let deadline;
+      const signalForAttempt = (phase) => {
+        if (phase === 'prompt') {
+          clearTimeout(deadline);
+          deadline = undefined;
+          return;
+        }
+        const ctrl = new AbortController();
+        clearTimeout(deadline);
+        deadline = setTimeout(() => { try { ctrl.abort(); } catch { /* settled */ } }, CONSENT_WRITE_TIMEOUT_MS);
+        return ctrl.signal;
+      };
+      window.HabitKey.postJson('/api/profile', body, { signalForAttempt })
+        .then(async (r) => {
+          let server;
+          if (r.status === 409) {
+            try { server = await r.json(); } catch { /* no body → confirmed fallback */ }
+          }
+          applySettle(r.ok, server);
+        })
+        .catch(() => applySettle(false))
+        .finally(() => clearTimeout(deadline));
     }
 
     function settleQuestionSiblings(pressedN, qid) {
@@ -477,12 +694,31 @@
       // ?tz= lets the server bucket "today" in the viewer's timezone (matches
       // the dashboard), so living key faces read the right day (#32).
       const tz = new Date().getTimezoneOffset(); // minutes; UTC-5 → 300
+      // Capture write state at poll *start* — a slots response that raced a
+      // completed /api/profile write must not clobber the new consent.
+      const pollSeq = consentSeq;
+      const pendingAtStart = consentWritePending;
       fetch('/api/slots?tz=' + tz).then((r) => r.json()).then((j) => {
         habits = j.habits || habits;
         slots = j.slots || slots;
         coachPage = j.coachPage || [];
         rosterPending = Number(j.rosterPending) || 0;
         beaconBlocked = !!j.blocked;
+        const polled = mergePolledConsent({
+          pending: consentWritePending, current: coachNav, polled: j.coachNav,
+          pollSeq, currentSeq: consentSeq, pendingAtStart,
+          serverSeq: j.coachNavSeq === undefined ? undefined : Math.max(0, Number(j.coachNavSeq) || 0),
+          appliedServerSeq: confirmedSeq
+        });
+        if (polled.applied) coachNav = polled.consent;
+        if (!polled.ignored) {
+          confirmedConsent = polled.consent;
+          // Reconcile the server watermark from the poll; the local write
+          // generation is left alone. Only drop the issued token once no write
+          // is still in flight.
+          confirmedSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+          issuedNavSeq = releaseIssuedNavSeq(issuedNavSeq, confirmedSeq, consentWritesOutstanding);
+        }
         today = j.today || {};
         if (!built && habits.length) build();
         paintSlots();
@@ -494,7 +730,7 @@
     }
 
     refresh();
-    setInterval(refresh, 15000); // same poll cadence as the hardware plugin
+    setInterval(refresh, SLOTS_POLL_MS); // same default cadence as the hardware plugin
     // A nudge's urgency changes with the clock, not with the payload, so the
     // poll alone would never escalate it. Repaint on its own beat while one is
     // live (the plugin does the same via its tick — see escalate()).

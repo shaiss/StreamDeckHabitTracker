@@ -179,7 +179,7 @@ test('PI reports a save only after the socket accepts it', () => {
 });
 
 // ---- web helper -----------------------------------------------------------
-function loadHelper({ href = 'https://h.test/deck.html', session = true, responses = [] } = {}) {
+function loadHelper({ href = 'https://h.test/deck.html', session = true, responses = [], ask } = {}) {
   const ss = new Map();
   const ls = new Map();
   const calls = [];
@@ -196,8 +196,49 @@ function loadHelper({ href = 'https://h.test/deck.html', session = true, respons
       const status = responses.length ? responses.shift() : 200;
       return Promise.resolve({ status, ok: status < 400 });
     },
-    URL
+    URL, Promise, setTimeout, clearTimeout, AbortController
   };
+  if (ask) {
+    // Minimal document so HabitKey can show its in-page prompt. The test
+    // fills the input after ask.delayMs and submits the form.
+    const el = () => {
+      const node = {
+        style: { cssText: '' }, type: '', autocomplete: '', value: '', textContent: '',
+        listeners: {}, children: [],
+        setAttribute() {},
+        addEventListener(ev, fn) { (node.listeners[ev] ??= []).push(fn); },
+        appendChild(c) { node.children.push(c); return c; },
+        remove() {},
+        focus() {}
+      };
+      return node;
+    };
+    const body = {
+      children: [],
+      appendChild(c) {
+        body.children.push(c);
+        const walk = (n, acc = []) => { acc.push(n); (n.children || []).forEach((k) => walk(k, acc)); return acc; };
+        const all = walk(c);
+        const form = all.find((n) => n.listeners && n.listeners.submit);
+        const input = all.find((n) => n.type === 'password' || (n.autocomplete === 'off' && 'value' in n && n !== form));
+        // The password input is created with type=password before append.
+        const pass = all.find((n) => n.type === 'password') || input;
+        const submit = () => {
+          if (pass) pass.value = ask.value;
+          (form?.listeners.submit || []).forEach((fn) => fn({ preventDefault() {} }));
+        };
+        if (ask.delayMs) setTimeout(submit, ask.delayMs);
+        else queueMicrotask(submit);
+        return c;
+      }
+    };
+    win.document = { body, createElement(tag) {
+      const n = el();
+      if (tag === 'input') n.type = 'password';
+      if (tag === 'button') n.type = 'submit';
+      return n;
+    } };
+  }
   win.globalThis = win;
   vm.runInNewContext(read('public/habit-key.js'), win);
   return { HK: win.HabitKey, ss, ls, calls, replaced, win };
@@ -248,6 +289,41 @@ test('web: a 401 clears the stale key; a dismissed prompt returns the 401', asyn
   assert.equal(r.status, 401);
   assert.equal(calls.length, 1, 'no document → no prompt → no retry');
   assert.equal(HK.get(), '');
+});
+
+test('web: a slow 401 key prompt does not consume the POST deadline', async () => {
+  // First attempt 401s; the operator takes longer than the deadline to enter
+  // a key; the retry must still run on a fresh, non-aborted signal.
+  const entered = 'entered-key';
+  const { HK, calls } = loadHelper({
+    responses: [401, 200],
+    ask: { value: entered, delayMs: 80 }
+  });
+  const timeoutMs = 20;
+  let armed = 0, paused = 0, aborted = 0, deadline, ctrl;
+  const signalForAttempt = (phase) => {
+    if (phase === 'prompt') {
+      paused++;
+      clearTimeout(deadline);
+      return;
+    }
+    armed++;
+    ctrl = new AbortController();
+    clearTimeout(deadline);
+    deadline = setTimeout(() => { aborted++; try { ctrl.abort(); } catch { /* settled */ } }, timeoutMs);
+    return ctrl.signal;
+  };
+  const r = await HK.postJson('/api/profile', { coachNav: 'nudge-only' }, { signalForAttempt });
+  clearTimeout(deadline);
+  assert.equal(r.status, 200);
+  assert.equal(r.ok, true);
+  assert.equal(armed, 2, 'first attempt and retry each arm a deadline');
+  assert.equal(paused, 1, 'deadline pauses during the prompt');
+  assert.equal(aborted, 0, 'a slow prompt must not abort the retry signal');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].init.headers['x-habit-key'], entered);
+  assert.equal(calls[1].init.signal.aborted, false);
+  assert.notEqual(calls[0].init.signal, calls[1].init.signal, 'retry uses a fresh signal');
 });
 
 test('web pages load the helper and drop the old ?key= plumbing', () => {

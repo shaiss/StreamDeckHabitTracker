@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  takeoverDue, normalizeConsent, CONSENT_LEVELS,
+  takeoverDue, normalizeConsent, CONSENT_LEVELS, cycleConsent, autonomyOf,
   HUMAN_LOCK_MS, RESTORE_MS, SUPPRESS_MS, TAKEOVER_BUDGET_PER_DAY
 } from '../../lib/takeover.js';
 import { MIN_GAP_MS, QUIET_START_HOUR, QUIET_END_HOUR } from '../../lib/nudge.js';
@@ -47,6 +47,15 @@ test('consent is default-off and unknown values normalize to off', () => {
   assert.equal(takeoverDue({ ...OK, consent: 'nudge-only' }).reason, 'consent withheld',
     'nudge-only means today\'s repaint behaviour, never navigation');
   assert.equal(takeoverDue({ ...OK, consent: 'yes' }).reason, 'consent withheld');
+});
+
+test('Autonomy Toggle cycles the three consent levels without inventing new ones (#94)', () => {
+  assert.equal(cycleConsent('off'), 'nudge-only');
+  assert.equal(cycleConsent('nudge-only'), 'may-navigate');
+  assert.equal(cycleConsent('may-navigate'), 'off');
+  assert.equal(autonomyOf('off').mode, 'MANUAL');
+  assert.equal(autonomyOf('nudge-only').mode, 'ASSISTED');
+  assert.equal(autonomyOf('may-navigate').mode, 'AUTO');
 });
 
 test('a takeover only ever amplifies a LIVE nudge', () => {

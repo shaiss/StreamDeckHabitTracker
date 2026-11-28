@@ -69,7 +69,9 @@ const assets = [
   { file: 'habit_key.png', size: 144, emoji: '✅', hue: SILVER, label: 'Habit', sat: 26 },
   { file: 'slot_key.png', size: 144, emoji: '✨', hue: VIOLET, label: 'AI Slot' },
   { file: 'coach_action.png', size: 40, emoji: '🧭', hue: VIOLET, label: '' },
-  { file: 'coach_key.png', size: 144, emoji: '🧭', hue: VIOLET, label: 'Coach' }
+  { file: 'coach_key.png', size: 144, emoji: '🧭', hue: VIOLET, label: 'Coach' },
+  { file: 'autonomy_action.png', size: 40, emoji: '⚙', hue: VIOLET, label: '' },
+  { file: 'autonomy_key.png', size: 144, emoji: '⚙', hue: VIOLET, label: 'MANUAL' }
 ];
 
 // --no-images: bundle + repackage WITHOUT re-rendering the manifest art.
