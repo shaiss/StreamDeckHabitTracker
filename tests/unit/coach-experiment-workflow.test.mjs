@@ -329,16 +329,282 @@ function requestCommandText(bodies) {
     .join('\n');
 }
 
+/**
+ * Tokenize a shell script: join backslash-newline continuations, skip
+ * comments and heredoc bodies, and keep quote style on each word.
+ */
+function tokenizeShell(script) {
+  const s = String(script);
+  const tokens = [];
+  let i = 0;
+  const n = s.length;
+
+  function skipContinuations() {
+    let skipped = false;
+    while (i < n && s[i] === '\\') {
+      const nl = s[i + 1] === '\n' || (s[i + 1] === '\r' && s[i + 2] === '\n');
+      if (!nl) break;
+      i++;
+      if (s[i] === '\r') i++;
+      if (s[i] === '\n') i++;
+      skipped = true;
+    }
+    return skipped;
+  }
+
+  function skipHeredocBody(terminator, stripTabs) {
+    while (i < n && s[i] !== '\n' && s[i] !== '\r') i++;
+    if (s[i] === '\r') i++;
+    if (s[i] === '\n') i++;
+    while (i < n) {
+      const start = i;
+      while (i < n && s[i] !== '\n' && s[i] !== '\r') i++;
+      let line = s.slice(start, i);
+      if (stripTabs) line = line.replace(/^\t+/, '');
+      if (s[i] === '\r') i++;
+      if (s[i] === '\n') i++;
+      if (line === terminator) break;
+    }
+  }
+
+  function readWord() {
+    let value = '';
+    let sawSingle = false;
+    let sawDouble = false;
+    let sawUnquoted = false;
+    while (i < n) {
+      if (skipContinuations()) continue;
+      const c = s[i];
+      if (c === "'") {
+        sawSingle = true;
+        i++;
+        while (i < n && s[i] !== "'") value += s[i++];
+        if (s[i] === "'") i++;
+        continue;
+      }
+      if (c === '"') {
+        sawDouble = true;
+        i++;
+        while (i < n && s[i] !== '"') {
+          if (s[i] === '\\' && i + 1 < n) {
+            const nxt = s[i + 1];
+            if (nxt === '\r' && s[i + 2] === '\n') {
+              i += 3;
+              continue;
+            }
+            if (nxt === '\n') {
+              i += 2;
+              continue;
+            }
+            if ('"$\\`'.includes(nxt)) {
+              value += nxt;
+              i += 2;
+              continue;
+            }
+          }
+          value += s[i++];
+        }
+        if (s[i] === '"') i++;
+        continue;
+      }
+      if (c === '$' && s[i + 1] === '(') break;
+      if (c === '#' && value === '' && !sawSingle && !sawDouble) break;
+      if (/[\s;|&(){}<>`]/.test(c)) break;
+      if (c === '\\') {
+        i++;
+        if (i < n) value += s[i++];
+        sawUnquoted = true;
+        continue;
+      }
+      value += c;
+      sawUnquoted = true;
+      i++;
+    }
+    let quote = null;
+    if (sawSingle && !sawDouble && !sawUnquoted) quote = "'";
+    else if (sawDouble && !sawSingle && !sawUnquoted) quote = '"';
+    return { type: 'word', value, quote };
+  }
+
+  while (i < n) {
+    if (s[i] === ' ' || s[i] === '\t') {
+      i++;
+      continue;
+    }
+    if (skipContinuations()) continue;
+    if (s[i] === '\r') i++;
+    if (s[i] === '\n') {
+      tokens.push({ type: 'op', value: '\n' });
+      i++;
+      continue;
+    }
+    if (s[i] === '#') {
+      while (i < n && s[i] !== '\n' && s[i] !== '\r') i++;
+      continue;
+    }
+    if (s[i] === '$' && s[i + 1] === '(') {
+      tokens.push({ type: 'op', value: '$(' });
+      i += 2;
+      continue;
+    }
+    if (s[i] === '<' && s[i + 1] === '<') {
+      i += 2;
+      const stripTabs = s[i] === '-';
+      if (stripTabs) i++;
+      while (s[i] === ' ' || s[i] === '\t') i++;
+      const term = readWord();
+      tokens.push({ type: 'op', value: '<<' });
+      skipHeredocBody(term.value, stripTabs);
+      continue;
+    }
+    if ((s[i] === '&' || s[i] === '|') && s[i + 1] === s[i]) {
+      tokens.push({ type: 'op', value: s[i] + s[i] });
+      i += 2;
+      continue;
+    }
+    if (/[;|&(){}<>`]/.test(s[i])) {
+      tokens.push({ type: 'op', value: s[i] });
+      i++;
+      continue;
+    }
+    const word = readWord();
+    if (word.value !== '' || word.quote) tokens.push(word);
+    else i++;
+  }
+  return tokens;
+}
+
+function isCurlCommand(token) {
+  return token.type === 'word' && /(?:^|\/)curl$/.test(token.value);
+}
+
+function isCommandPosition(tokens, index) {
+  if (index === 0) return true;
+  const prev = tokens[index - 1];
+  if (prev.type !== 'op') return false;
+  return prev.value !== '<' && prev.value !== '>' && prev.value !== '>>';
+}
+
+function parseCurlInvocations(script) {
+  const tokens = tokenizeShell(script);
+  const curls = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (!isCurlCommand(tokens[i]) || !isCommandPosition(tokens, i)) continue;
+    const argv = [tokens[i]];
+    let j = i + 1;
+    while (j < tokens.length) {
+      const t = tokens[j];
+      if (t.type === 'op') {
+        if (t.value === '<<' || t.value === '<' || t.value === '>' || t.value === '>>') {
+          j++;
+          if (t.value !== '<<' && tokens[j] && tokens[j].type === 'word') j++;
+          continue;
+        }
+        break;
+      }
+      argv.push(t);
+      j++;
+    }
+    curls.push(argv);
+    i = j - 1;
+  }
+  return curls;
+}
+
+function isExperimentUrlArg(token) {
+  if (!token || token.type !== 'word') return false;
+  if (/^\$\{?URL\}?$/.test(token.value)) return true;
+  return /\/api\/experiment(?=$|[?&#])/.test(token.value);
+}
+
+function experimentCurlInvocations(script) {
+  return parseCurlInvocations(script).filter((argv) =>
+    argv.slice(1).some(isExperimentUrlArg)
+  );
+}
+
+const HABIT_HEADER_VALUE_RE = new RegExp(
+  '^' + HABIT_HEADER_NAME + ':\\s*' + HABIT_HEADER_VALUE + '$'
+);
+const HABIT_HEADER_VALUE_UNQUOTED_RE = new RegExp(
+  '^' + HABIT_HEADER_NAME + ':' + HABIT_HEADER_VALUE + '$'
+);
+
+function isHabitKeyHeaderValue(token) {
+  if (!token || token.type !== 'word') return false;
+  if (token.quote === "'") return false;
+  if (token.quote == null) return HABIT_HEADER_VALUE_UNQUOTED_RE.test(token.value);
+  return HABIT_HEADER_VALUE_RE.test(token.value);
+}
+
+function curlHasHabitKeyHeader(argv) {
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.type !== 'word') continue;
+    if (a.value === '-H' || a.value === '--header') {
+      if (isHabitKeyHeaderValue(argv[i + 1])) return true;
+      continue;
+    }
+    const eq = a.value.match(/^--header=(.*)$/);
+    if (eq) {
+      // `--header="x-habit-key: $HABIT_KEY"` is one mixed word (quote null)
+      // with a space after the colon; allow that attached double-quoted form.
+      if (a.quote === "'") continue;
+      if (
+        HABIT_HEADER_VALUE_RE.test(eq[1]) ||
+        HABIT_HEADER_VALUE_UNQUOTED_RE.test(eq[1])
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function assertExperimentCurlSendsHabitKey(script) {
+  const curls = experimentCurlInvocations(script);
+  assert.ok(
+    curls.length > 0,
+    'expected a curl that requests $URL or /api/experiment'
+  );
+  for (const argv of curls) {
+    assert.ok(
+      curlHasHabitKeyHeader(argv),
+      'curl/request must send the x-habit-key header with $HABIT_KEY'
+    );
+  }
+}
+
 function assertHabitKeyHeaderOnExperimentSteps(steps) {
   const exp = experimentSteps(steps);
   assert.ok(exp.length > 0, 'expected a step whose run calls /api/experiment');
   for (const s of exp) {
-    assert.match(
-      requestCommandText([s.run]),
-      HABIT_KEY_HEADER_RE,
-      'curl/request must send the x-habit-key header with $HABIT_KEY'
-    );
+    assertExperimentCurlSendsHabitKey(s.run);
   }
+}
+
+/** Build a one-step experiment workflow with a URL assignment and the given run lines. */
+function experimentStepYaml(runLines) {
+  return [
+    'jobs:',
+    '  experiment:',
+    '    steps:',
+    '      - name: experiment',
+    '        env:',
+    '          HABIT_KEY: ${{ secrets.HABIT_KEY }}',
+    '        run: |',
+    '          URL="$BASE/api/experiment?run=1"',
+    ...runLines.map((l) => '          ' + l),
+  ].join('\n');
+}
+
+function assertHeaderRejected(runLines) {
+  const steps = parseWorkflowSteps(experimentStepYaml(runLines));
+  assert.throws(
+    () => assertHabitKeyHeaderOnExperimentSteps(steps),
+    /x-habit-key|experiment URL|\$URL/,
+    'experiment curl must carry the header as an argument'
+  );
 }
 
 test('coach-experiment.yml exists and is non-empty', () => {
@@ -678,4 +944,61 @@ test('x-habit-key assertion rejects an unquoted header with a space after the co
       ),
     /x-habit-key/
   );
+});
+
+test('x-habit-key header in an echo does not satisfy the experiment curl', () => {
+  assertHeaderRejected([
+    'echo \'-H "x-habit-key: $HABIT_KEY"\'',
+    'RESP=$(curl -sS --max-time 120 "$URL")',
+  ]);
+});
+
+test('x-habit-key header is accepted on a continued experiment curl', () => {
+  const steps = parseWorkflowSteps(
+    experimentStepYaml([
+      'RESP=$(curl -sS --max-time 120 \\',
+      '  -H "x-habit-key: $HABIT_KEY" \\',
+      '  "$URL")',
+    ])
+  );
+  assertHabitKeyHeaderOnExperimentSteps(steps);
+});
+
+test('x-habit-key header is required on a continued experiment curl', () => {
+  assertHeaderRejected([
+    'RESP=$(curl -sS --max-time 120 \\',
+    '  "$URL")',
+    'echo \'-H "x-habit-key: $HABIT_KEY"\'',
+  ]);
+});
+
+test('x-habit-key header on a different curl in the same step does not satisfy the experiment curl', () => {
+  assertHeaderRejected([
+    'curl -sS -H "x-habit-key: $HABIT_KEY" "$BASE/api/other"',
+    'RESP=$(curl -sS --max-time 120 "$URL")',
+  ]);
+});
+
+test('a commented-out x-habit-key header does not satisfy the experiment curl', () => {
+  assertHeaderRejected([
+    '# -H "x-habit-key: $HABIT_KEY"',
+    'RESP=$(curl -sS --max-time 120 "$URL")',
+  ]);
+});
+
+test('x-habit-key header inside a heredoc does not satisfy the experiment curl', () => {
+  assertHeaderRejected([
+    'cat <<EOF',
+    '-H "x-habit-key: $HABIT_KEY"',
+    'EOF',
+    'RESP=$(curl -sS --max-time 120 "$URL")',
+  ]);
+});
+
+test('x-habit-key header in a curl heredoc body does not satisfy the experiment curl', () => {
+  assertHeaderRejected([
+    'curl -sS --max-time 120 "$URL" <<EOF',
+    '-H "x-habit-key: $HABIT_KEY"',
+    'EOF',
+  ]);
 });
