@@ -13,7 +13,8 @@ import {
   CONSENT_LEVELS, normalizeConsent, cycleConsent, autonomyOf,
   AUTONOMY_GLYPH, AUTONOMY_MODES,
   beginConsentWrite, nextNavSeq, releaseIssuedNavSeq, settleConsentWrite, mergePolledConsent,
-  acceptCoachNavSeq, CONSENT_WRITE_TIMEOUT_MS
+  acceptCoachNavSeq, CONSENT_WRITE_TIMEOUT_MS,
+  clampClientMs, CLIENT_OPTION_MS_MIN, CLIENT_OPTION_MS_MAX
 } from '../../lib/takeover.js';
 import { zip } from '../../tools/lib-zip.mjs';
 import { inflateRawSync, crc32 as zlibCrc32 } from 'node:zlib';
@@ -551,6 +552,26 @@ test('issued navSeq stays monotonic while an older write is in flight', () => {
   assert.equal(CONSENT_WRITE_TIMEOUT_MS, 10_000);
 });
 
+test('clampClientMs uses defaults for invalid or negative values and clamps the rest', () => {
+  assert.equal(CLIENT_OPTION_MS_MIN, 250);
+  assert.equal(CLIENT_OPTION_MS_MAX, 120_000);
+  assert.equal(clampClientMs(undefined, 10_000), 10_000);
+  assert.equal(clampClientMs(null, 10_000), 10_000);
+  assert.equal(clampClientMs('', 10_000), 10_000);
+  assert.equal(clampClientMs('foo', 10_000), 10_000);
+  assert.equal(clampClientMs(-1, 10_000), 10_000);
+  assert.equal(clampClientMs('-50', 15_000), 15_000);
+  assert.equal(clampClientMs(Infinity, 10_000), 10_000);
+  assert.equal(clampClientMs(0, 10_000), 250, 'zero is below the floor');
+  assert.equal(clampClientMs(100, 10_000), 250);
+  assert.equal(clampClientMs(400, 10_000), 400, 'e2e 400ms timeout stays accepted');
+  assert.equal(clampClientMs(300, 15_000), 300, 'e2e 300ms poll stays accepted');
+  assert.equal(clampClientMs(250, 10_000), 250);
+  assert.equal(clampClientMs(120_000, 10_000), 120_000);
+  assert.equal(clampClientMs(120_001, 10_000), 120_000);
+  assert.equal(clampClientMs('200000', 15_000), 120_000);
+});
+
 test('rejected attempts do not ratchet the next navSeq past the stored sequence', () => {
   // Stored sequence stays 0 while 1000 attempts fail. The token is derived from
   // the confirmed sequence (reset after each failed settle), so it stays valid.
@@ -647,7 +668,10 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
     'consentWritesOutstanding',
     'CONSENT_WRITE_TIMEOUT_MS',
     'appliedServerSeq',
-    'signal: ctrl.signal',
+    'signalForAttempt',
+    'clampClientMs(',
+    'CLIENT_OPTION_MS_MIN',
+    'CLIENT_OPTION_MS_MAX',
     'data-autonomy',
     'autonomyface'
   ]) {
@@ -677,6 +701,7 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
   assert.match(plugin, /\/api\/profile/);
   assert.match(takeover, /export function releaseIssuedNavSeq/);
   assert.match(takeover, /export const CONSENT_WRITE_TIMEOUT_MS/);
+  assert.match(takeover, /export function clampClientMs/);
   assert.match(takeover, /server\?\.coachNavSeq/);
 });
 

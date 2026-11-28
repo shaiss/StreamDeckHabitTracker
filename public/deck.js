@@ -105,10 +105,21 @@
     // double-tap says "big one". Mirrors streamdeck-plugin/src/gestures.mjs —
     // tests/unit/gestures.test.mjs guards these two copies against drifting.
     const LONG_PRESS_MS = 500, DOUBLE_TAP_MS = 300, ARM_MS = 3000;
-    // Same default as lib/takeover.js; tests may set HT_CONSENT_WRITE_TIMEOUT_MS.
+    // Optional duration overrides (query or globalThis) are clamped: invalid
+    // or negative values use the default; accepted values stay in 250ms–120s.
     const qs = new URLSearchParams(location.search);
-    const CONSENT_WRITE_TIMEOUT_MS = Math.max(1, Number(globalThis.HT_CONSENT_WRITE_TIMEOUT_MS || qs.get('consentWriteTimeout')) || 10_000);
-    const SLOTS_POLL_MS = Math.max(250, Number(globalThis.HT_SLOTS_POLL_MS || qs.get('slotsPollMs')) || 15_000);
+    const CLIENT_OPTION_MS_MIN = 250;
+    const CLIENT_OPTION_MS_MAX = 120_000;
+    function clampClientMs(raw, fallback, min = CLIENT_OPTION_MS_MIN, max = CLIENT_OPTION_MS_MAX) {
+      if (raw == null || raw === '') return fallback;
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) return fallback;
+      return Math.min(max, Math.max(min, n));
+    }
+    const CONSENT_WRITE_TIMEOUT_MS = clampClientMs(
+      globalThis.HT_CONSENT_WRITE_TIMEOUT_MS || qs.get('consentWriteTimeout'), 10_000);
+    const SLOTS_POLL_MS = clampClientMs(
+      globalThis.HT_SLOTS_POLL_MS || qs.get('slotsPollMs'), 15_000);
 
     function bindGestures(b, { onTap, onLong, onDouble }) {
       let longTimer = null, pendingTimer = null, longFired = false, ptr = null;
@@ -528,11 +539,22 @@
             esc(snap.consent) + '.';
         }
       };
-      // The deadline covers the POST and the 409 body read. Expiry settles only
-      // through applySettle(), so an older request can never settle a newer tap.
-      const ctrl = new AbortController();
-      const deadline = setTimeout(() => { try { ctrl.abort(); } catch { /* settled */ } }, CONSENT_WRITE_TIMEOUT_MS);
-      window.HabitKey.postJson('/api/profile', body, { signal: ctrl.signal })
+      // The deadline covers each network attempt and the 409 body read, but
+      // not the in-page key prompt. A fresh signal is armed per attempt so a
+      // slow key entry cannot abort the valid-key retry.
+      let deadline;
+      const signalForAttempt = (phase) => {
+        if (phase === 'prompt') {
+          clearTimeout(deadline);
+          deadline = undefined;
+          return;
+        }
+        const ctrl = new AbortController();
+        clearTimeout(deadline);
+        deadline = setTimeout(() => { try { ctrl.abort(); } catch { /* settled */ } }, CONSENT_WRITE_TIMEOUT_MS);
+        return ctrl.signal;
+      };
+      window.HabitKey.postJson('/api/profile', body, { signalForAttempt })
         .then(async (r) => {
           let server;
           if (r.status === 409) {

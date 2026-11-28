@@ -31,6 +31,8 @@ let mockCoachNav = 'off';
 // scripted outcome. 'ok' | 'fail' | { holdMs, then: 'ok'|'fail' }.
 let profileScript = [];
 let heldProfiles = [];
+let profileRequireKey = false;
+const PROFILE_KEY = 'test-placeholder-value';
 
 before(async () => {
   server = createServer((req, res) => {
@@ -55,6 +57,11 @@ before(async () => {
         let parsed = {};
         try { parsed = body ? JSON.parse(body) : {}; } catch { /* empty */ }
         profileBodies.push(parsed);
+        if (profileRequireKey && req.headers['x-habit-key'] !== PROFILE_KEY) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'unauthorized' }));
+          return;
+        }
         const step = profileScript.length ? profileScript.shift() : 'ok';
         const finish = (ok) => {
           if (ok && parsed.coachNav !== undefined) mockCoachNav = parsed.coachNav;
@@ -152,10 +159,11 @@ before(async () => {
 after(async () => { await context?.close(); await browser?.close(); server?.close(); });
 
 // Fresh page per test: gesture state lives on the DOM nodes.
-async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false, coachNav = 'off', consentWriteTimeout, slotsPollMs } = {}) {
+async function open({ nudge = null, roster = 0, blocked = false, question = false, picker = false, danger = false, coachNav = 'off', consentWriteTimeout, slotsPollMs, requireProfileKey = false } = {}) {
   calls = [];
   profileBodies = [];
   logStatus = 200;
+  profileRequireKey = requireProfileKey;
   nudgeFraction = nudge;
   mockRosterPending = roster;
   mockBlocked = blocked;
@@ -430,6 +438,32 @@ test('Autonomy Toggle: a hung consent POST times out, rolls back, and polls resu
     document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'may-navigate',
     null, { timeout: 5000 });
   profileScript = [];
+});
+
+test('Autonomy Toggle: a slow key prompt does not abort the valid-key retry (#94)', async () => {
+  // Server requires a key. The first POST 401s, the prompt is answered after
+  // the 400ms write deadline, and the retry must still persist ASSISTED.
+  await open({ coachNav: 'off', consentWriteTimeout: 400, requireProfileKey: true });
+  await page.waitForSelector('.k[data-autonomy]');
+  profileBodies = [];
+  calls = [];
+  await page.locator('.k[data-autonomy]').click();
+  await page.waitForSelector('[role="dialog"] input[aria-label="HabitDeck key"]');
+  await new Promise((r) => setTimeout(r, 700)); // longer than the 400ms deadline
+  await page.locator('[role="dialog"] input[aria-label="HabitDeck key"]').fill(PROFILE_KEY);
+  await page.locator('[role="dialog"] button[type="submit"]').click();
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only' &&
+    !document.querySelector('[role="dialog"]'),
+    null, { timeout: 5000 });
+  const f = await page.$eval('.k[data-autonomy]', (el) => ({
+    label: el.querySelector('.lb')?.textContent || '', consent: el.dataset.consent || ''
+  }));
+  assert.equal(f.consent, 'nudge-only', 'retry after a slow prompt must keep the new consent');
+  assert.equal(f.label, 'ASSISTED');
+  assert.equal(mockCoachNav, 'nudge-only');
+  assert.ok(calls.filter((c) => c.startsWith('POST /api/profile')).length >= 2,
+    'first attempt 401s, then a retry with the entered key');
 });
 
 test('Attention Beacon: idle / wait+count / blocked faces; tap never logs (#75)', async () => {
