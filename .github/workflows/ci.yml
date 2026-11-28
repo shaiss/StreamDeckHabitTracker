@@ -20,12 +20,15 @@ jobs:
     # Recent runs finish in ~10s; 5m is comfortable headroom.
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          # v5+ can auto-cache when package.json has packageManager; keep
+          # v4 behavior (no cache) — unit job never runs npm ci.
+          package-manager-cache: false
       # Unit tests are zero-dependency by design — no npm install.
       # Prompt/sanitizer/shape tests import lib/coach-shape.js only (not
       # lib/agent.js / ai). Do not add framework packages (e.g. @mastra/*) here.
@@ -49,12 +52,14 @@ jobs:
     # Recent runs finish in ~10s; 5m is comfortable headroom.
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          # Neutralize v5+ automatic package-manager caching (see unit job).
+          package-manager-cache: false
       - name: HABIT_KEY value scan
         env:
           HABIT_KEY: ${{ secrets.HABIT_KEY }}
@@ -72,12 +77,15 @@ jobs:
     # Recent runs finish in ~1m (npm ci + Chromium + suite); 10m headroom.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          # Keep explicit no-auto-cache: e2e already uses npm ci; v5+ would
+          # only auto-cache if package.json gained a packageManager field.
+          package-manager-cache: false
       - run: npm ci
       - name: Install Chromium
         run: npx playwright-core install --with-deps chromium
