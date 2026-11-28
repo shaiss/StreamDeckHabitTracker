@@ -15,8 +15,9 @@ import {
   getProfile, getProfileRaw, setProfileIfNavSeq, setProfileIfRaw, isConfigured
 } from '../lib/store.js';
 import { HOME_TZ, isValidTz } from '../lib/tz.js';
-import { normalizeConsent } from '../lib/takeover.js';
 import { buildProfileNext, parseProfileRaw } from '../lib/profile-write.js';
+import { requireKeyStrict } from '../lib/habit-key-strict.js';
+import { normalizeConsent } from '../lib/takeover.js';
 import { keyOk } from '../lib/habit-key.js';
 
 export default async function handler(req, res) {
@@ -30,6 +31,9 @@ export default async function handler(req, res) {
     }
     const q = req.query || {};
     const writing = req.method === 'POST' || q.set === '1';
+    // Writes require HABIT_KEY: 503 in production when it is unset, 401 on a
+    // wrong or missing key. Reads stay open (below).
+    if (writing && requireKeyStrict(req, res, req.method === 'POST' ? req.body : q)) return;
 
     if (!writing) {
       const p = (await getProfile()) || {};
