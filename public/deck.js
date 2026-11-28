@@ -105,15 +105,16 @@
     // double-tap says "big one". Mirrors streamdeck-plugin/src/gestures.mjs —
     // tests/unit/gestures.test.mjs guards these two copies against drifting.
     const LONG_PRESS_MS = 500, DOUBLE_TAP_MS = 300, ARM_MS = 3000;
-    // Optional duration overrides (query or globalThis) are clamped: invalid
-    // or negative values use the default; accepted values stay in 250ms–120s.
+    // Optional duration overrides (query or globalThis) are clamped: invalid,
+    // negative, zero, or whitespace-only values use the default; accepted
+    // values stay in 250ms–120s.
     const qs = new URLSearchParams(location.search);
     const CLIENT_OPTION_MS_MIN = 250;
     const CLIENT_OPTION_MS_MAX = 120_000;
     function clampClientMs(raw, fallback, min = CLIENT_OPTION_MS_MIN, max = CLIENT_OPTION_MS_MAX) {
-      if (raw == null || raw === '') return fallback;
-      const n = Number(raw);
-      if (!Number.isFinite(n) || n < 0) return fallback;
+      if (raw == null || (typeof raw === 'string' && raw.trim() === '')) return fallback;
+      const n = Number(typeof raw === 'string' ? raw.trim() : raw);
+      if (!Number.isFinite(n) || n <= 0) return fallback;
       return Math.min(max, Math.max(min, n));
     }
     const CONSENT_WRITE_TIMEOUT_MS = clampClientMs(
@@ -539,9 +540,10 @@
             esc(snap.consent) + '.';
         }
       };
-      // The deadline covers each network attempt and the 409 body read, but
-      // not the in-page key prompt. A fresh signal is armed per attempt so a
-      // slow key entry cannot abort the valid-key retry.
+      // The deadline covers each network attempt (the fetch itself), not the
+      // in-page key prompt. Once a response has arrived, aborting that signal
+      // does not cancel a 409 body read. A fresh signal is armed per attempt
+      // so a slow key entry cannot abort the valid-key retry.
       let deadline;
       const signalForAttempt = (phase) => {
         if (phase === 'prompt') {

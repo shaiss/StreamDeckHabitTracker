@@ -552,20 +552,25 @@ test('issued navSeq stays monotonic while an older write is in flight', () => {
   assert.equal(CONSENT_WRITE_TIMEOUT_MS, 10_000);
 });
 
-test('clampClientMs uses defaults for invalid or negative values and clamps the rest', () => {
+test('clampClientMs uses defaults for invalid, zero, or whitespace values and clamps the rest', () => {
   assert.equal(CLIENT_OPTION_MS_MIN, 250);
   assert.equal(CLIENT_OPTION_MS_MAX, 120_000);
   assert.equal(clampClientMs(undefined, 10_000), 10_000);
   assert.equal(clampClientMs(null, 10_000), 10_000);
   assert.equal(clampClientMs('', 10_000), 10_000);
+  assert.equal(clampClientMs('   ', 15_000), 15_000, 'whitespace-only falls back to the default');
+  assert.equal(clampClientMs('\t\n', 10_000), 10_000);
   assert.equal(clampClientMs('foo', 10_000), 10_000);
   assert.equal(clampClientMs(-1, 10_000), 10_000);
   assert.equal(clampClientMs('-50', 15_000), 15_000);
   assert.equal(clampClientMs(Infinity, 10_000), 10_000);
-  assert.equal(clampClientMs(0, 10_000), 250, 'zero is below the floor');
-  assert.equal(clampClientMs(100, 10_000), 250);
+  assert.equal(clampClientMs(0, 10_000), 10_000, 'zero falls back to the default');
+  assert.equal(clampClientMs('0', 10_000), 10_000);
+  assert.equal(clampClientMs('0.0', 15_000), 15_000);
+  assert.equal(clampClientMs(100, 10_000), 250, 'positive values below the floor are clamped');
   assert.equal(clampClientMs(400, 10_000), 400, 'e2e 400ms timeout stays accepted');
   assert.equal(clampClientMs(300, 15_000), 300, 'e2e 300ms poll stays accepted');
+  assert.equal(clampClientMs('  400  ', 10_000), 400, 'surrounding whitespace is trimmed');
   assert.equal(clampClientMs(250, 10_000), 250);
   assert.equal(clampClientMs(120_000, 10_000), 120_000);
   assert.equal(clampClientMs(120_001, 10_000), 120_000);
@@ -668,8 +673,6 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
     'consentWritesOutstanding',
     'CONSENT_WRITE_TIMEOUT_MS',
     'appliedServerSeq',
-    'signalForAttempt',
-    'clampClientMs(',
     'CLIENT_OPTION_MS_MIN',
     'CLIENT_OPTION_MS_MAX',
     'data-autonomy',
@@ -677,6 +680,37 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
   ]) {
     assert.ok(deckJs.includes(marker), 'deck.js missing autonomy marker: ' + marker);
   }
+  // Wiring, not just name occurrence: the consent POST must pass the hook,
+  // and both duration overrides must go through clampClientMs.
+  assert.match(deckJs,
+    /HabitKey\.postJson\(\s*['"]\/api\/profile['"]\s*,\s*\w+\s*,\s*\{[^}]*\bsignalForAttempt\b/,
+    'consent postJson must pass signalForAttempt in its options');
+  assert.match(deckJs,
+    /const CONSENT_WRITE_TIMEOUT_MS\s*=\s*clampClientMs\(\s*(?:globalThis\.)?HT_CONSENT_WRITE_TIMEOUT_MS\s*\|\|\s*qs\.get\(\s*['"]consentWriteTimeout['"]\s*\)/,
+    'consent write timeout must be assigned from clampClientMs of consentWriteTimeout');
+  assert.match(deckJs,
+    /const SLOTS_POLL_MS\s*=\s*clampClientMs\(\s*(?:globalThis\.)?HT_SLOTS_POLL_MS\s*\|\|\s*qs\.get\(\s*['"]slotsPollMs['"]\s*\)/,
+    'slots poll interval must be assigned from clampClientMs of slotsPollMs');
+  // The virtual-deck clamp helper must stay in lockstep with lib/takeover.js.
+  const extractFn = (src, name) => {
+    const start = src.indexOf('function ' + name + '(');
+    assert.ok(start >= 0, name + ' missing');
+    const open = src.indexOf('{', start);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') {
+        depth--;
+        if (depth === 0) return src.slice(start, i + 1).replace(/^\s+/gm, '');
+      }
+    }
+    assert.fail('unclosed ' + name);
+  };
+  assert.equal(
+    extractFn(deckJs, 'clampClientMs'),
+    extractFn(takeover, 'clampClientMs'),
+    'deck.js clampClientMs must stay in sync with lib/takeover.js'
+  );
   assert.match(plugin, /cycleConsent/);
   assert.match(plugin, /autonomyOf/);
   assert.match(plugin, /beginConsentWrite/);
@@ -693,7 +727,7 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
   assert.match(plugin, /confirmedSeq/);
   assert.match(plugin, /consentWritesOutstanding/);
   assert.match(plugin, /appliedServerSeq/);
-  // Bounded write lifetime: one deadline over the POST and the 409 body read.
+  // Bounded write lifetime: one deadline over the POST itself.
   assert.match(plugin, /CONSENT_WRITE_TIMEOUT_MS/);
   assert.match(plugin, /signal: ctrl\.signal/);
   assert.match(plugin, /com\.shaiss\.habit-tracker\.autonomy/);
