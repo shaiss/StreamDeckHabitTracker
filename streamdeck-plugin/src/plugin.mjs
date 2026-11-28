@@ -44,7 +44,7 @@ import { nudgeUrgency, urgencyStep } from '../../lib/nudge.js';
 import {
   takeoverDue, RESTORE_MS, SUPPRESS_MS,
   cycleConsent, autonomyOf, normalizeConsent,
-  beginConsentWrite, settleConsentWrite, mergePolledConsent
+  beginConsentWrite, nextNavSeq, settleConsentWrite, mergePolledConsent
 } from '../../lib/takeover.js';
 import { beaconOf } from '../../lib/beacon.js';
 import { questionPaint, isDetailsKey } from '../../public/glyphs.js';
@@ -62,6 +62,7 @@ const baseOf = (s) => ((s && s.base) || DEFAULT_BASE).replace(/\/+$/, '');
 const POLL_MS = +(process.env.HT_POLL_MS || 15000);
 const TICK_MS = +(process.env.HT_TICK_MS || 3000);
 const POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 10000);
+const CONSENT_WRITE_TIMEOUT_MS = +(process.env.HT_CONSENT_WRITE_TIMEOUT_MS || 10000);
 // The coach reacts to taps in a background pass; chain rechecks so one lands
 // after the swap exists.
 const RECHECK_MS = (process.env.HT_RECHECK_MS || '2000,5000,9000,15000,25000').split(',').map(Number);
@@ -113,7 +114,9 @@ let rosterPendingCache = 0;      // queued roster proposals (#75 beacon count)
 let blockedCache = false;        // poll-level hard-stop (#75 blocked frame)
 let consentCache = 'off';        // coachNav from the poll; off until told otherwise
 let confirmedConsent = 'off';    // last persisted consent — rollback target (not tap-prev)
-let consentSeq = 0;              // Autonomy write sequence (#94 race guard)
+let consentSeq = 0;              // local write generation (#94 race guard) — never the server's
+let confirmedSeq = 0;            // server sequence of confirmedConsent (last applied)
+let issuedNavSeq = 0;            // navSeq last sent; reset to confirmedSeq once settled
 let consentWritePending = false; // ignore poll coachNav while a POST is in flight
 let lastKeypressAt = 0;          // human-priority lock: last physical keypress
 let lastPageChangeAt = 0;        // …and last page change (appeared-key churn)
@@ -257,14 +260,18 @@ function refreshSlots(now) {
       // #54 / #94 — never let a stale poll overwrite an in-flight optimistic cycle.
       const polled = mergePolledConsent({
         pending: consentWritePending, current: consentCache, polled: j.coachNav,
-        pollSeq, currentSeq: consentSeq, pendingAtStart
+        pollSeq, currentSeq: consentSeq, pendingAtStart,
+        serverSeq: j.coachNavSeq === undefined ? undefined : Math.max(0, Number(j.coachNavSeq) || 0),
+        appliedServerSeq: confirmedSeq
       });
       const consentChanged = polled.applied;
       if (polled.applied) consentCache = polled.consent;
       if (!polled.ignored) {
         confirmedConsent = polled.consent;
-        const serverSeq = Math.max(0, Number(j.coachNavSeq) || 0);
-        if (serverSeq > consentSeq) consentSeq = serverSeq;
+        // Reconcile the server watermark (and the next token) from the poll;
+        // the local write generation is left alone.
+        confirmedSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+        issuedNavSeq = confirmedSeq;
       }
       const rosterPending = Number(j.rosterPending) || 0;
       const blocked = !!j.blocked;
@@ -389,6 +396,10 @@ function cycleAutonomy(k) {
   const next = cycleConsent(consentCache);
   const seq = beginConsentWrite(consentSeq);
   consentSeq = seq;
+  // The token is derived from the server's sequence, not the local generation,
+  // so rejected attempts cannot push it past what the API accepts.
+  const navSeq = nextNavSeq(confirmedSeq, issuedNavSeq);
+  issuedNavSeq = navSeq;
   consentWritePending = true;
   consentCache = next;
   for (const other of keys.values()) {
@@ -398,18 +409,20 @@ function cycleAutonomy(k) {
   }
   const s = k.settings;
   const url = baseOf(s) + '/api/profile';
-  const body = { coachNav: next, navSeq: seq };
+  const body = { coachNav: next, navSeq };
   const applySettle = (ok, server) => {
     const settled = settleConsentWrite({
       currentSeq: consentSeq, writeSeq: seq, ok,
-      current: consentCache, prev, server
+      current: consentCache, prev, server,
+      written: next, navSeq,
+      confirmed: { consent: confirmedConsent, sequence: confirmedSeq }
     });
+    // A success persists even when a newer tap superseded it.
+    confirmedConsent = settled.confirmed.consent;
+    confirmedSeq = settled.confirmed.sequence;
     if (!settled.applied) return; // superseded by a newer tap
     consentWritePending = settled.pending;
-    confirmedConsent = settled.consent;
-    if (typeof settled.sequence === 'number' && settled.sequence > consentSeq) {
-      consentSeq = settled.sequence;
-    }
+    issuedNavSeq = confirmedSeq;
     if (settled.consent !== consentCache) {
       consentCache = settled.consent;
       for (const other of keys.values()) {
@@ -419,21 +432,32 @@ function cycleAutonomy(k) {
       }
     }
     if (ok) k.action.showOk();
-    else k.action.showAlert();
+    else {
+      k.action.showAlert();
+      sched.forcePoll();   // re-read the stored consent on this pump
+      pump();
+    }
   };
+  // The deadline covers the POST and the 409 body read. Expiry settles only
+  // through applySettle(), so an older request can never settle a newer tap.
+  const ctrl = new AbortController();
+  const deadline = setTimeout(() => { try { ctrl.abort(); } catch { /* settled */ } }, CONSENT_WRITE_TIMEOUT_MS);
+  if (deadline.unref) deadline.unref();
   fetch(url, keyedInit(keyOf(s), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: ctrl.signal
   }))
     .then(async (r) => {
       let server;
       if (r.status === 409) {
-        try { server = await r.json(); } catch { /* no body → prev fallback */ }
+        try { server = await r.json(); } catch { /* no body → confirmed fallback */ }
       }
       applySettle(r.ok, server);
     })
-    .catch(() => applySettle(false));
+    .catch(() => applySettle(false))
+    .finally(() => clearTimeout(deadline));
 }
 
 // Tap on the coach key: jump to the Coach page of the bundled profile. Only

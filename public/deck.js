@@ -12,7 +12,9 @@
     let beaconBlocked = false;
     let coachNav = 'off';   // Autonomy Toggle (#94) — off | nudge-only | may-navigate
     let confirmedConsent = 'off'; // last persisted consent — rollback target (not tap-prev)
-    let consentSeq = 0;     // write sequence — stale failures must not roll back newer success
+    let consentSeq = 0;     // local write generation — stale failures must not roll back newer success
+    let confirmedSeq = 0;   // server sequence of confirmedConsent (last applied)
+    let issuedNavSeq = 0;   // navSeq last sent; reset to confirmedSeq once settled
     let consentWritePending = false; // ignore poll coachNav while a POST is in flight
     let habits = [];
     let today = {};   // habitName -> {count, goal, doneToday, streak, ringFill} (#32)
@@ -284,29 +286,65 @@
       return CONSENT_LEVELS[(i + 1) % CONSENT_LEVELS.length];
     }
     // Same race helpers as lib/takeover.js (drift-guarded in autonomy.test.mjs).
-    function beginConsentWrite(seq) { return (Number(seq) || 0) + 1; }
-    function settleConsentWrite({ currentSeq, writeSeq, ok, current, prev, server }) {
-      if (writeSeq !== currentSeq) return { consent: current, pending: true, applied: false };
-      if (ok) return { consent: current, pending: false, applied: true };
-      const serverSeq = Number(server?.coachNavSeq);
-      if (typeof server?.coachNav === 'string' &&
-          Number.isInteger(serverSeq) && serverSeq >= 0) {
+    function beginConsentWrite(seq) {
+      return (Number(seq) || 0) + 1;
+    }
+    function nextNavSeq(confirmedSeq, issuedSeq) {
+      return Math.max(Number(confirmedSeq) || 0, Number(issuedSeq) || 0, 0) + 1;
+    }
+    function asConfirmed(confirmed, prev) {
+      if (confirmed && typeof confirmed === 'object') {
         return {
-          consent: normalizeConsent(server.coachNav),
-          sequence: serverSeq,
-          pending: false,
-          applied: true
+          consent: normalizeConsent(confirmed.consent),
+          sequence: Math.max(0, Number(confirmed.sequence) || 0)
         };
       }
-      return { consent: normalizeConsent(prev), pending: false, applied: true };
+      return { consent: normalizeConsent(prev), sequence: 0 };
+    }
+    function settleConsentWrite({
+      currentSeq, writeSeq, ok, current, prev, server, written, navSeq, confirmed
+    }) {
+      let conf = asConfirmed(confirmed, prev);
+      // A success is durable no matter which tap it belonged to — keep it, but
+      // never let an older success overwrite a newer confirmed one.
+      if (ok && written !== undefined && Number.isSafeInteger(navSeq) && navSeq > conf.sequence) {
+        conf = { consent: normalizeConsent(written), sequence: navSeq };
+      }
+      if (writeSeq !== currentSeq) {
+        return { consent: current, pending: true, applied: false, confirmed: conf };
+      }
+      if (ok) return { consent: current, pending: false, applied: true, confirmed: conf };
+      const serverSeq = Number(server?.coachNavSeq);
+      if (typeof server?.coachNav === 'string' &&
+          Number.isInteger(serverSeq) && serverSeq >= conf.sequence) {
+        conf = { consent: normalizeConsent(server.coachNav), sequence: serverSeq };
+        return {
+          consent: conf.consent,
+          sequence: serverSeq,
+          pending: false,
+          applied: true,
+          confirmed: conf
+        };
+      }
+      return { consent: conf.consent, pending: false, applied: true, confirmed: conf };
     }
     function mergePolledConsent({
-      pending, current, polled, pollSeq, currentSeq, pendingAtStart
-    }) {
+      pending, current, polled, pollSeq, currentSeq, pendingAtStart,
+      serverSeq, appliedServerSeq
+    } = {}) {
       if (pending || pendingAtStart) {
         return { consent: current, applied: false, ignored: true };
       }
       if (pollSeq !== undefined && currentSeq !== undefined && pollSeq !== currentSeq) {
+        return { consent: current, applied: false, ignored: true };
+      }
+      // Two polls can start at the same write generation and finish out of order;
+      // the one carrying the older server sequence must not win. The watermark
+      // starts at 0, so nothing is rejected before a higher sequence was applied.
+      const incoming = Number(serverSeq);
+      const applied = Number(appliedServerSeq);
+      if (serverSeq !== undefined && appliedServerSeq !== undefined &&
+          Number.isFinite(incoming) && Number.isFinite(applied) && incoming < applied) {
         return { consent: current, applied: false, ignored: true };
       }
       const next = normalizeConsent(polled);
@@ -438,23 +476,29 @@
       const next = cycleConsent(coachNav);
       const seq = beginConsentWrite(consentSeq);
       consentSeq = seq;
+      // Token derives from the server's sequence, not the local generation, so
+      // rejected attempts cannot push it past what the API accepts.
+      const navSeq = nextNavSeq(confirmedSeq, issuedNavSeq);
+      issuedNavSeq = navSeq;
       consentWritePending = true;
       coachNav = next;
       paintAutonomy();
       el.classList.add('pressed');
       setTimeout(() => el.classList.remove('pressed'), 120);
-      const body = { coachNav: next, navSeq: seq };
+      const body = { coachNav: next, navSeq };
       const applySettle = (ok, server) => {
         const settled = settleConsentWrite({
           currentSeq: consentSeq, writeSeq: seq, ok,
-          current: coachNav, prev, server
+          current: coachNav, prev, server,
+          written: next, navSeq,
+          confirmed: { consent: confirmedConsent, sequence: confirmedSeq }
         });
+        // A success persists even when a newer tap superseded it.
+        confirmedConsent = settled.confirmed.consent;
+        confirmedSeq = settled.confirmed.sequence;
         if (!settled.applied) return; // superseded by a newer tap
         consentWritePending = settled.pending;
-        confirmedConsent = settled.consent;
-        if (typeof settled.sequence === 'number' && settled.sequence > consentSeq) {
-          consentSeq = settled.sequence;
-        }
+        issuedNavSeq = confirmedSeq;
         if (settled.consent !== coachNav) {
           coachNav = settled.consent;
           paintAutonomy();
@@ -615,13 +659,17 @@
         beaconBlocked = !!j.blocked;
         const polled = mergePolledConsent({
           pending: consentWritePending, current: coachNav, polled: j.coachNav,
-          pollSeq, currentSeq: consentSeq, pendingAtStart
+          pollSeq, currentSeq: consentSeq, pendingAtStart,
+          serverSeq: j.coachNavSeq === undefined ? undefined : Math.max(0, Number(j.coachNavSeq) || 0),
+          appliedServerSeq: confirmedSeq
         });
         if (polled.applied) coachNav = polled.consent;
         if (!polled.ignored) {
           confirmedConsent = polled.consent;
-          const serverSeq = Math.max(0, Number(j.coachNavSeq) || 0);
-          if (serverSeq > consentSeq) consentSeq = serverSeq;
+          // Reconcile the server watermark (and the next token) from the poll;
+          // the local write generation is left alone.
+          confirmedSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+          issuedNavSeq = confirmedSeq;
         }
         today = j.today || {};
         if (!built && habits.length) build();

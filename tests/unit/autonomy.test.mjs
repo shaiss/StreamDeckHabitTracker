@@ -8,13 +8,14 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import {
   CONSENT_LEVELS, normalizeConsent, cycleConsent, autonomyOf,
   AUTONOMY_GLYPH, AUTONOMY_MODES,
-  beginConsentWrite, settleConsentWrite, mergePolledConsent, acceptCoachNavSeq
+  beginConsentWrite, nextNavSeq, settleConsentWrite, mergePolledConsent, acceptCoachNavSeq
 } from '../../lib/takeover.js';
 import { face } from '../../streamdeck-plugin/src/faces.mjs';
+import { unzipEntries } from '../../tools/lib-secret-scan.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -336,6 +337,137 @@ test('stale 409 settle is still a no-op when a newer write is in flight', () => 
   assert.equal(settled.sequence, undefined);
 });
 
+test('superseded success is kept: a later failure restores it, not the tap-time snapshot', () => {
+  // Start ASSISTED (confirmed @ seq 5). AUTO (token 6) persists but its
+  // response arrives after MANUAL (token 7) was issued; token 7 then fails.
+  let confirmed = { consent: 'nudge-only', sequence: 5 };
+  const stale = settleConsentWrite({
+    currentSeq: 2, writeSeq: 1, ok: true, current: 'off', prev: 'nudge-only',
+    written: 'may-navigate', navSeq: 6, confirmed
+  });
+  assert.equal(stale.applied, false, 'superseded settle never touches pending/optimistic state');
+  assert.equal(stale.pending, true);
+  assert.deepEqual(stale.confirmed, { consent: 'may-navigate', sequence: 6 });
+  confirmed = stale.confirmed;
+
+  const failed = settleConsentWrite({
+    currentSeq: 2, writeSeq: 2, ok: false, current: 'off', prev: 'nudge-only',
+    written: 'off', navSeq: 7, confirmed
+  });
+  assert.equal(failed.applied, true);
+  assert.equal(failed.consent, 'may-navigate', 'restores the persisted AUTO, not the tap-time ASSISTED');
+  assert.deepEqual(failed.confirmed, { consent: 'may-navigate', sequence: 6 });
+});
+
+test('an older success never overwrites a newer confirmed success', () => {
+  const r = settleConsentWrite({
+    currentSeq: 3, writeSeq: 1, ok: true, current: 'off', prev: 'off',
+    written: 'nudge-only', navSeq: 4,
+    confirmed: { consent: 'may-navigate', sequence: 6 }
+  });
+  assert.deepEqual(r.confirmed, { consent: 'may-navigate', sequence: 6 });
+});
+
+test('a failed write does not move the confirmed server sequence', () => {
+  const r = settleConsentWrite({
+    currentSeq: 1, writeSeq: 1, ok: false, current: 'nudge-only', prev: 'off',
+    written: 'nudge-only', navSeq: 1, confirmed: { consent: 'off', sequence: 0 }
+  });
+  assert.deepEqual(r.confirmed, { consent: 'off', sequence: 0 });
+  assert.equal(r.consent, 'off');
+});
+
+test('409 reconcile older than the confirmed sequence falls back to confirmed', () => {
+  const r = settleConsentWrite({
+    currentSeq: 1, writeSeq: 1, ok: false, current: 'off', prev: 'off',
+    server: { coachNav: 'nudge-only', coachNavSeq: 3 },
+    confirmed: { consent: 'may-navigate', sequence: 6 }
+  });
+  assert.equal(r.consent, 'may-navigate');
+  assert.deepEqual(r.confirmed, { consent: 'may-navigate', sequence: 6 });
+});
+
+test('poll carrying an older server sequence is ignored (overlapping refreshes)', () => {
+  // Two polls started at the same write generation; the newer one (seq 1,
+  // may-navigate) lands first, then the delayed one (seq 0, off).
+  let consent = 'off';
+  let appliedSeq = 0;
+  const newer = mergePolledConsent({
+    pending: false, current: consent, polled: 'may-navigate',
+    pollSeq: 1, currentSeq: 1, pendingAtStart: false, serverSeq: 1, appliedServerSeq: appliedSeq
+  });
+  assert.equal(newer.ignored, false);
+  consent = newer.consent;
+  appliedSeq = 1;
+  const older = mergePolledConsent({
+    pending: false, current: consent, polled: 'off',
+    pollSeq: 1, currentSeq: 1, pendingAtStart: false, serverSeq: 0, appliedServerSeq: appliedSeq
+  });
+  assert.equal(older.ignored, true);
+  assert.equal(older.consent, 'may-navigate');
+});
+
+test('poll at a lower sequence is still applied when no higher sequence was accepted', () => {
+  // A failed write leaves the local generation ahead of the server; the stored
+  // value (lower sequence than the local token) must still repaint the face.
+  const r = mergePolledConsent({
+    pending: false, current: 'off', polled: 'nudge-only',
+    pollSeq: 3, currentSeq: 3, pendingAtStart: false, serverSeq: 1, appliedServerSeq: 1
+  });
+  assert.equal(r.ignored, false);
+  assert.equal(r.consent, 'nudge-only');
+  const fromZero = mergePolledConsent({
+    pending: false, current: 'off', polled: 'nudge-only',
+    pollSeq: 9, currentSeq: 9, pendingAtStart: false, serverSeq: 0, appliedServerSeq: 0
+  });
+  assert.equal(fromZero.ignored, false);
+  // Equal sequence is idempotent, and a missing sequence never blocks a poll.
+  assert.equal(mergePolledConsent({
+    pending: false, current: 'off', polled: 'off', serverSeq: 4, appliedServerSeq: 4
+  }).ignored, false);
+  assert.equal(mergePolledConsent({
+    pending: false, current: 'off', polled: 'off', serverSeq: undefined, appliedServerSeq: 4
+  }).ignored, false);
+});
+
+test('rejected attempts do not ratchet the next navSeq past the stored sequence', () => {
+  // Stored sequence stays 0 while 1000 attempts fail. The token is derived from
+  // the confirmed sequence (reset after each failed settle), so it stays valid.
+  let confirmedSeq = 0;
+  let issued = 0;
+  let gen = 0;
+  for (let i = 0; i < 1000; i++) {
+    gen = beginConsentWrite(gen);
+    const token = nextNavSeq(confirmedSeq, issued);
+    issued = token;
+    const settled = settleConsentWrite({
+      currentSeq: gen, writeSeq: gen, ok: false, current: 'nudge-only', prev: 'off',
+      written: 'nudge-only', navSeq: token,
+      confirmed: { consent: 'off', sequence: confirmedSeq }
+    });
+    confirmedSeq = settled.confirmed.sequence;
+    issued = confirmedSeq; // caller resets once the current write settles
+  }
+  assert.equal(gen, 1000, 'local generation still counts every attempt');
+  assert.equal(nextNavSeq(confirmedSeq, issued), 1, 'next token is stored + 1');
+  // In-flight writes still get strictly increasing tokens.
+  assert.equal(nextNavSeq(5, 5), 6);
+  assert.equal(nextNavSeq(5, 6), 7);
+  assert.equal(nextNavSeq(undefined, undefined), 1);
+});
+
+test('profile-archive assertions read the zip with Node, not an external unzip', () => {
+  const src = readFileSync(new URL('./autonomy.test.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /spawnSync\(\s*['"]unzip['"]/);
+  assert.match(src, /unzipEntries\(/);
+});
+
+test('dashboard Save allows one request in flight (no overlapping consent tokens)', () => {
+  const js = readFileSync(new URL('../../public/index.js', import.meta.url), 'utf8');
+  assert.match(js, /if \(saveBtn\.disabled\) return;\s*saveBtn\.disabled = true;/);
+  assert.match(js, /\.finally\(\(\) => \{ saveBtn\.disabled = false; \}\)/);
+});
+
 test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift)', () => {
   // Logic lives in public/deck.js (extracted with habit-key); CSS class in deck.html.
   const deckJs = readFileSync(new URL('../../public/deck.js', import.meta.url), 'utf8');
@@ -365,7 +497,10 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
     'pendingAtStart',
     'navSeq',
     'r.status === 409',
-    'settled.sequence',
+    'settled.confirmed',
+    'nextNavSeq(',
+    'confirmedSeq',
+    'appliedServerSeq',
     'data-autonomy',
     'autonomyface'
   ]) {
@@ -381,7 +516,13 @@ test('virtual deck + plugin pin the same cycle/mapping + write race guard (drift
   assert.match(plugin, /pendingAtStart/);
   assert.match(plugin, /navSeq/);
   assert.match(plugin, /r\.status === 409/);
-  assert.match(plugin, /settled\.sequence/);
+  assert.match(plugin, /settled\.confirmed/);
+  assert.match(plugin, /nextNavSeq/);
+  assert.match(plugin, /confirmedSeq/);
+  assert.match(plugin, /appliedServerSeq/);
+  // Bounded write lifetime: one deadline over the POST and the 409 body read.
+  assert.match(plugin, /CONSENT_WRITE_TIMEOUT_MS/);
+  assert.match(plugin, /signal: ctrl\.signal/);
   assert.match(plugin, /com\.shaiss\.habit-tracker\.autonomy/);
   assert.match(plugin, /kind === 'autonomy'/);
   assert.match(plugin, /\/api\/profile/);
@@ -454,16 +595,11 @@ test('mini + 9 habits still places Autonomy (reserved before habit fill) (#95)',
     assert.match(r.stderr + r.stdout, /dropped habit key/,
       'overflowing habits should be the ones displaced');
 
-    const listing = spawnSync('unzip', ['-Z1', outfile], { encoding: 'utf8' });
-    assert.equal(listing.status, 0, listing.stderr);
-    const page0Path = listing.stdout
-      .split('\n')
-      .map((l) => l.trim())
-      .find((n) => /\/Profiles\/[A-F0-9-]+\/manifest\.json$/i.test(n));
-    assert.ok(page0Path, 'page-0 manifest missing from profile zip');
-    const page0 = spawnSync('unzip', ['-p', outfile, page0Path], { encoding: 'utf8' });
-    assert.equal(page0.status, 0, page0.stderr);
-    const actions = JSON.parse(page0.stdout).Controllers[0].Actions || {};
+    // Node-only ZIP read (no external `unzip` binary).
+    const entries = unzipEntries(readFileSync(outfile));
+    const page0Entry = entries.find((e) => /\/Profiles\/[A-F0-9-]+\/manifest\.json$/i.test(e.name));
+    assert.ok(page0Entry, 'page-0 manifest missing from profile zip');
+    const actions = JSON.parse(page0Entry.data.toString('utf8')).Controllers[0].Actions || {};
     const uuids = Object.values(actions).map((a) => a.UUID);
     assert.ok(uuids.includes('com.shaiss.habit-tracker.autonomy'),
       'Autonomy key must survive habit overflow on Mini');
@@ -522,17 +658,12 @@ test('explicit --slots on mini+pages=2 does not drop Coach or Autonomy (#95)', a
     assert.doesNotMatch(r.stderr + r.stdout, /dropped the Coach key/);
     assert.doesNotMatch(r.stderr + r.stdout, /dropped the Autonomy key/);
 
-    const listing = spawnSync('unzip', ['-Z1', outfile], { encoding: 'utf8' });
-    assert.equal(listing.status, 0, listing.stderr);
-    const page0Path = listing.stdout
-      .split('\n')
-      .map((l) => l.trim())
-      .find((n) => /\/Profiles\/[A-F0-9-]+\/manifest\.json$/i.test(n));
-    assert.ok(page0Path, 'page-0 manifest missing from profile zip');
+    // Node-only ZIP read (no external `unzip` binary).
+    const entries = unzipEntries(readFileSync(outfile));
+    const page0Entry = entries.find((e) => /\/Profiles\/[A-F0-9-]+\/manifest\.json$/i.test(e.name));
+    assert.ok(page0Entry, 'page-0 manifest missing from profile zip');
 
-    const page0 = spawnSync('unzip', ['-p', outfile, page0Path], { encoding: 'utf8' });
-    assert.equal(page0.status, 0, page0.stderr);
-    const actions = JSON.parse(page0.stdout).Controllers[0].Actions || {};
+    const actions = JSON.parse(page0Entry.data.toString('utf8')).Controllers[0].Actions || {};
     const uuids = Object.values(actions).map((a) => a.UUID);
     assert.ok(uuids.includes('com.shaiss.habit-tracker.coach'), 'Coach key must be placed');
     assert.ok(uuids.includes('com.shaiss.habit-tracker.autonomy'), 'Autonomy key must be placed');

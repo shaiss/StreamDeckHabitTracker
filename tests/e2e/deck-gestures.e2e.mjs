@@ -336,6 +336,46 @@ test('Autonomy Toggle: stale failed POST does not roll back a newer success (#94
   profileScript = [];
 });
 
+test('Autonomy Toggle: a superseded success is kept; a later failure restores it (#94)', async () => {
+  // Tap 1 persists ASSISTED but its response arrives after tap 2 was issued;
+  // tap 2 then fails. The face must restore ASSISTED (what the server holds), not MANUAL.
+  profileScript = [
+    { holdMs: 300, then: 'ok' },
+    { holdMs: 500, then: 'fail' }
+  ];
+  await open({ coachNav: 'off' });
+  await page.waitForSelector('.k[data-autonomy]');
+  profileBodies = [];
+  await page.locator('.k[data-autonomy]').click(); // → ASSISTED (persists)
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'nudge-only');
+  await page.locator('.k[data-autonomy]').click(); // → AUTO (fails)
+  await page.waitForFunction(() =>
+    document.querySelector('.k[data-autonomy]')?.dataset?.consent === 'may-navigate');
+  await new Promise((r) => setTimeout(r, 750));
+  const f = await page.$eval('.k[data-autonomy]', (el) => ({
+    label: el.querySelector('.lb')?.textContent || '', consent: el.dataset.consent || ''
+  }));
+  assert.equal(f.label, 'ASSISTED', 'failure restores the confirmed success, not the tap-time snapshot');
+  assert.equal(f.consent, 'nudge-only');
+  assert.equal(mockCoachNav, 'nudge-only');
+  profileScript = [];
+});
+
+test('Autonomy Toggle: rejected attempts do not ratchet navSeq (#94)', async () => {
+  profileScript = ['fail', 'fail', 'ok'];
+  await open({ coachNav: 'off' });
+  await page.waitForSelector('.k[data-autonomy]');
+  profileBodies = [];
+  for (let i = 0; i < 3; i++) {
+    await page.locator('.k[data-autonomy]').click();
+    await new Promise((r) => setTimeout(r, 250)); // let the response settle
+  }
+  assert.deepEqual(profileBodies.map((b) => b.navSeq), [1, 1, 1],
+    'failed attempts leave the stored sequence unchanged, so the next token is unchanged');
+  profileScript = [];
+});
+
 test('Attention Beacon: idle / wait+count / blocked faces; tap never logs (#75)', async () => {
   await open();
   await page.waitForSelector('.k[data-beacon]');

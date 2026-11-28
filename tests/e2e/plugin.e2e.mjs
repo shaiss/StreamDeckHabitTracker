@@ -44,7 +44,7 @@ const nudgeAt = (fraction) => {
 
 let http, httpPort;
 let slots, today, pollUrls, logUrls, hangPolls, logNotFound, pollExtra;
-let profileBodies, coachNav;
+let profileBodies, coachNav, profileHang;
 const hung = [];
 
 before(async () => {
@@ -91,8 +91,10 @@ before(async () => {
         let parsed = {};
         try { parsed = body ? JSON.parse(body) : {}; } catch { /* empty */ }
         profileBodies.push(parsed);
-        if (parsed.coachNav !== undefined) coachNav = parsed.coachNav;
         logUrls.push(req.method + ' ' + req.url);
+        // Scripted hang: the POST is received but never answered.
+        if (profileHang > 0) { profileHang--; hung.push(res); return; }
+        if (parsed.coachNav !== undefined) coachNav = parsed.coachNav;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, coachNav }));
       });
@@ -129,6 +131,7 @@ async function boot({ entry = SRC } = {}) {
   logNotFound = false;
   pollExtra = {};
   profileBodies = [];
+  profileHang = 0;
   coachNav = 'off';
 
   const wss = new WebSocketServer({ port: 0 });
@@ -170,7 +173,8 @@ async function boot({ entry = SRC } = {}) {
     env: {
       ...process.env,
       HT_POLL_MS: '800', HT_TICK_MS: '100',
-      HT_POLL_TIMEOUT_MS: '600', HT_RECHECK_MS: '150,350'
+      HT_POLL_TIMEOUT_MS: '600', HT_RECHECK_MS: '150,350',
+      HT_CONSENT_WRITE_TIMEOUT_MS: '500'
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -606,6 +610,31 @@ test('autonomy key paints MANUAL/idle; press cycles and POSTs /api/profile (#94)
       'every autonomy consent write carries an integer navSeq');
     assert.ok(consentWrites.every((b, i) => i === 0 || b.navSeq > consentWrites[i - 1].navSeq),
       'navSeq strictly increases across consent writes');
+  } finally { p.done(); }
+});
+
+test('a consent write that never answers times out, rolls back, and polls resume (#94)', async () => {
+  const p = await boot();
+  try {
+    appearAutonomy(p);
+    await until(() => autonomySvg(p).includes('>MANUAL<'), { label: 'MANUAL face' });
+    profileBodies.length = 0;
+    profileHang = 1;
+    await p.press('ctx-autonomy', 'com.shaiss.habit-tracker.autonomy');
+    await until(() => autonomySvg(p).includes('>ASSISTED<'), { label: 'optimistic ASSISTED' });
+    // Deadline expires → the current write settles as a failure, the face
+    // returns to the confirmed consent, and the stored value wins the next poll.
+    await until(() => autonomySvg(p).includes('>MANUAL<'), { label: 'rolled back after deadline' });
+    coachNav = 'may-navigate';
+    await until(() => autonomySvg(p).includes('>AUTO<'), {
+      label: 'polls apply stored consent again after the timeout'
+    });
+    // A rejected attempt must not push the next token past the stored sequence.
+    await p.press('ctx-autonomy', 'com.shaiss.habit-tracker.autonomy');
+    await until(() => profileBodies.length >= 2, { label: 'second consent write' });
+    assert.equal(profileBodies[0].navSeq, 1);
+    assert.equal(profileBodies[1].navSeq, 1,
+      'token is derived from the server sequence, not the count of failed attempts');
   } finally { p.done(); }
 });
 

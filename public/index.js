@@ -215,6 +215,11 @@ import { esc } from '/escape.js';
     window.addEventListener('toggle-settings', () => toggleSettings());
     if (new URLSearchParams(location.search).get('settings') === '1') toggleSettings(true);
     document.getElementById('saveProfile').addEventListener('click', () => {
+      const saveBtn = document.getElementById('saveProfile');
+      // One Save in flight at a time: an older response must never overwrite
+      // the consent token a newer Save already stored.
+      if (saveBtn.disabled) return;
+      saveBtn.disabled = true;
       const st = document.getElementById('profileStatus');
       st.textContent = 'Saving…';
       const coachNav = document.getElementById('setCoachNav').value;
@@ -255,7 +260,8 @@ import { esc } from '/escape.js';
         } else {
           st.textContent = j.error || 'Save failed';
         }
-      }).catch(e => { st.textContent = 'Save failed: ' + e.message; });
+      }).catch(e => { st.textContent = 'Save failed: ' + e.message; })
+        .finally(() => { saveBtn.disabled = false; });
     });
 
     let firstLoad = true;

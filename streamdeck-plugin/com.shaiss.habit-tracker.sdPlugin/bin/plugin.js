@@ -17889,21 +17889,49 @@ function cycleConsent(consent) {
 function beginConsentWrite(seq) {
   return (Number(seq) || 0) + 1;
 }
-function settleConsentWrite({ currentSeq, writeSeq, ok, current, prev, server }) {
-  if (writeSeq !== currentSeq) {
-    return { consent: current, pending: true, applied: false };
-  }
-  if (ok) return { consent: current, pending: false, applied: true };
-  const serverSeq = Number(server?.coachNavSeq);
-  if (typeof server?.coachNav === "string" && Number.isInteger(serverSeq) && serverSeq >= 0) {
+function nextNavSeq(confirmedSeq2, issuedSeq) {
+  return Math.max(Number(confirmedSeq2) || 0, Number(issuedSeq) || 0, 0) + 1;
+}
+function asConfirmed(confirmed, prev) {
+  if (confirmed && typeof confirmed === "object") {
     return {
-      consent: normalizeConsent(server.coachNav),
-      sequence: serverSeq,
-      pending: false,
-      applied: true
+      consent: normalizeConsent(confirmed.consent),
+      sequence: Math.max(0, Number(confirmed.sequence) || 0)
     };
   }
-  return { consent: normalizeConsent(prev), pending: false, applied: true };
+  return { consent: normalizeConsent(prev), sequence: 0 };
+}
+function settleConsentWrite({
+  currentSeq,
+  writeSeq,
+  ok,
+  current,
+  prev,
+  server,
+  written,
+  navSeq,
+  confirmed
+}) {
+  let conf = asConfirmed(confirmed, prev);
+  if (ok && written !== void 0 && Number.isSafeInteger(navSeq) && navSeq > conf.sequence) {
+    conf = { consent: normalizeConsent(written), sequence: navSeq };
+  }
+  if (writeSeq !== currentSeq) {
+    return { consent: current, pending: true, applied: false, confirmed: conf };
+  }
+  if (ok) return { consent: current, pending: false, applied: true, confirmed: conf };
+  const serverSeq = Number(server?.coachNavSeq);
+  if (typeof server?.coachNav === "string" && Number.isInteger(serverSeq) && serverSeq >= conf.sequence) {
+    conf = { consent: normalizeConsent(server.coachNav), sequence: serverSeq };
+    return {
+      consent: conf.consent,
+      sequence: serverSeq,
+      pending: false,
+      applied: true,
+      confirmed: conf
+    };
+  }
+  return { consent: conf.consent, pending: false, applied: true, confirmed: conf };
 }
 function mergePolledConsent({
   pending,
@@ -17911,12 +17939,19 @@ function mergePolledConsent({
   polled,
   pollSeq,
   currentSeq,
-  pendingAtStart
+  pendingAtStart,
+  serverSeq,
+  appliedServerSeq
 } = {}) {
   if (pending || pendingAtStart) {
     return { consent: current, applied: false, ignored: true };
   }
   if (pollSeq !== void 0 && currentSeq !== void 0 && pollSeq !== currentSeq) {
+    return { consent: current, applied: false, ignored: true };
+  }
+  const incoming = Number(serverSeq);
+  const applied = Number(appliedServerSeq);
+  if (serverSeq !== void 0 && appliedServerSeq !== void 0 && Number.isFinite(incoming) && Number.isFinite(applied) && incoming < applied) {
     return { consent: current, applied: false, ignored: true };
   }
   const next = normalizeConsent(polled);
@@ -18031,6 +18066,7 @@ var baseOf = (s) => (s && s.base || DEFAULT_BASE).replace(/\/+$/, "");
 var POLL_MS = +(process.env.HT_POLL_MS || 15e3);
 var TICK_MS = +(process.env.HT_TICK_MS || 3e3);
 var POLL_TIMEOUT_MS = +(process.env.HT_POLL_TIMEOUT_MS || 1e4);
+var CONSENT_WRITE_TIMEOUT_MS = +(process.env.HT_CONSENT_WRITE_TIMEOUT_MS || 1e4);
 var RECHECK_MS = (process.env.HT_RECHECK_MS || "2000,5000,9000,15000,25000").split(",").map(Number);
 var VIOLET_HUE = 262;
 var QUESTION_HUE = 300;
@@ -18054,6 +18090,8 @@ var blockedCache = false;
 var consentCache = "off";
 var confirmedConsent = "off";
 var consentSeq = 0;
+var confirmedSeq = 0;
+var issuedNavSeq = 0;
 var consentWritePending = false;
 var lastKeypressAt = 0;
 var lastPageChangeAt = 0;
@@ -18173,14 +18211,16 @@ function refreshSlots(now) {
       polled: j.coachNav,
       pollSeq,
       currentSeq: consentSeq,
-      pendingAtStart
+      pendingAtStart,
+      serverSeq: j.coachNavSeq === void 0 ? void 0 : Math.max(0, Number(j.coachNavSeq) || 0),
+      appliedServerSeq: confirmedSeq
     });
     const consentChanged = polled.applied;
     if (polled.applied) consentCache = polled.consent;
     if (!polled.ignored) {
       confirmedConsent = polled.consent;
-      const serverSeq = Math.max(0, Number(j.coachNavSeq) || 0);
-      if (serverSeq > consentSeq) consentSeq = serverSeq;
+      confirmedSeq = Math.max(0, Number(j.coachNavSeq) || 0);
+      issuedNavSeq = confirmedSeq;
     }
     const rosterPending = Number(j.rosterPending) || 0;
     const blocked = !!j.blocked;
@@ -18287,6 +18327,8 @@ function cycleAutonomy(k) {
   const next = cycleConsent(consentCache);
   const seq = beginConsentWrite(consentSeq);
   consentSeq = seq;
+  const navSeq = nextNavSeq(confirmedSeq, issuedNavSeq);
+  issuedNavSeq = navSeq;
   consentWritePending = true;
   consentCache = next;
   for (const other of keys.values()) {
@@ -18299,7 +18341,7 @@ function cycleAutonomy(k) {
   }
   const s = k.settings;
   const url2 = baseOf(s) + "/api/profile";
-  const body = { coachNav: next, navSeq: seq };
+  const body = { coachNav: next, navSeq };
   const applySettle = (ok, server) => {
     const settled = settleConsentWrite({
       currentSeq: consentSeq,
@@ -18307,14 +18349,16 @@ function cycleAutonomy(k) {
       ok,
       current: consentCache,
       prev,
-      server
+      server,
+      written: next,
+      navSeq,
+      confirmed: { consent: confirmedConsent, sequence: confirmedSeq }
     });
+    confirmedConsent = settled.confirmed.consent;
+    confirmedSeq = settled.confirmed.sequence;
     if (!settled.applied) return;
     consentWritePending = settled.pending;
-    confirmedConsent = settled.consent;
-    if (typeof settled.sequence === "number" && settled.sequence > consentSeq) {
-      consentSeq = settled.sequence;
-    }
+    issuedNavSeq = confirmedSeq;
     if (settled.consent !== consentCache) {
       consentCache = settled.consent;
       for (const other of keys.values()) {
@@ -18327,12 +18371,25 @@ function cycleAutonomy(k) {
       }
     }
     if (ok) k.action.showOk();
-    else k.action.showAlert();
+    else {
+      k.action.showAlert();
+      sched.forcePoll();
+      pump();
+    }
   };
+  const ctrl = new AbortController();
+  const deadline = setTimeout(() => {
+    try {
+      ctrl.abort();
+    } catch {
+    }
+  }, CONSENT_WRITE_TIMEOUT_MS);
+  if (deadline.unref) deadline.unref();
   fetch(url2, keyedInit(keyOf(s), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: ctrl.signal
   })).then(async (r) => {
     let server;
     if (r.status === 409) {
@@ -18342,7 +18399,7 @@ function cycleAutonomy(k) {
       }
     }
     applySettle(r.ok, server);
-  }).catch(() => applySettle(false));
+  }).catch(() => applySettle(false)).finally(() => clearTimeout(deadline));
 }
 function coachNavigate(k) {
   const raw = parseInt(k.settings.coachPage, 10);
